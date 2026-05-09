@@ -1,0 +1,56 @@
+"""
+Provider model — represents an individual practitioner (dentist, hygienist, etc.)
+within a tenant's practice.
+
+Each provider can have:
+  - Their own Google Calendar (calendar_id) or share the tenant's primary
+  - A subset of appointment types they handle (e.g. hygienists do cleanings)
+  - Custom business hours that override the tenant defaults
+  - An active/inactive flag for vacation / leave
+
+Multi-tenant: every provider belongs to one tenant via tenant_id FK.
+"""
+
+import enum
+import uuid
+from datetime import datetime, timezone
+
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String, Text
+from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.orm import relationship
+
+from backend.database import Base
+
+
+class Provider(Base):
+    __tablename__ = "providers"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True)
+
+    # Identity
+    name = Column(String(255), nullable=False)       # "Dr. Sarah Patel"
+    title = Column(String(100), nullable=True)        # "DDS", "DMD", "RDH" (Registered Dental Hygienist)
+
+    # Which appointment types this provider handles
+    # e.g. ["cleaning", "consultation"]  — empty list means ALL types
+    appointment_types = Column(JSONB, nullable=False, default=list)
+
+    # Optional Google Calendar ID for this specific provider.
+    # If null, uses the tenant's primary calendar.
+    calendar_id = Column(String(255), nullable=True)
+
+    # Optional per-provider business hours override.
+    # Same format as tenant.business_hours:
+    # {"monday": {"open": "08:00", "close": "17:00"}, "friday": null, ...}
+    # If null, the tenant's default business hours apply.
+    business_hours_override = Column(JSONB, nullable=True)
+
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    # Relationships
+    tenant = relationship("Tenant", backref="providers", lazy="selectin")
+
+    def __repr__(self) -> str:
+        return f"<Provider {self.name} ({self.title or 'N/A'})>"

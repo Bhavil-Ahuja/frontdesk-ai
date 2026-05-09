@@ -1,0 +1,229 @@
+"""
+Authentication API — login, logout, registration with password, and current user info.
+
+POST /api/auth/login        → email + password → JWT
+POST /api/auth/register     → register a new tenant (PENDING) with password
+GET  /api/auth/me           → current authenticated user
+POST /api/auth/change-password → change own password
+"""
+
+import logging
+from datetime import datetime, timezone
+from typing import Optional
+
+import re
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import select
+
+# Lightweight email regex — covers the common cases without requiring the
+# blocked email-validator package. (Good enough for login/registration.)
+_EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
+
+
+def _validate_email(value: str) -> str:
+    if not isinstance(value, str) or not _EMAIL_RE.match(value):
+        raise ValueError("invalid email address")
+    return value.lower().strip()
+
+from backend.database import async_session
+from backend.models.tenant import Tenant, TenantStatus
+from backend.services import auth_service, tenant_service
+
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/api/auth", tags=["Authentication"])
+
+
+# ── Schemas ──────────────────────────────────────────────────────────────────
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str = Field(..., min_length=1)
+
+    @field_validator("email")
+    @classmethod
+    def _v_email(cls, v: str) -> str:
+        return _validate_email(v)
+
+
+class RegisterRequest(BaseModel):
+    """New tenant registration — extends the onboarding payload with a password."""
+    slug: str = Field(..., min_length=2, max_length=100, pattern=r"^[a-z0-9_-]+$")
+    business_name: str = Field(..., min_length=2, max_length=255)
+    business_type: str = "dental"
+    owner_name: str = Field(..., min_length=2, max_length=255)
+    owner_email: str
+    owner_phone: Optional[str] = None
+    timezone: str = "America/Chicago"
+    plan: str = "starter"
+    password: str = Field(..., min_length=8, max_length=128)
+
+    @field_validator("owner_email")
+    @classmethod
+    def _v_owner_email(cls, v: str) -> str:
+        return _validate_email(v)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(..., min_length=1)
+    new_password: str = Field(..., min_length=8, max_length=128)
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: dict
+
+
+class UserResponse(BaseModel):
+    id: str
+    email: str
+    name: str
+    business_name: str
+    slug: str
+    is_admin: bool
+    status: str
+    business_type: Optional[str]
+    timezone: str
+    plan: Optional[str]
+    # Integration setup status
+    vapi_configured: bool
+    calcom_configured: bool
+    twilio_configured: bool
+
+
+def _user_to_dict(t: Tenant) -> dict:
+    return {
+        "id": str(t.id),
+        "email": t.owner_email,
+        "name": t.owner_name,
+        "business_name": t.business_name,
+        "slug": t.slug,
+        "is_admin": bool(t.is_admin),
+        "status": t.status.value if t.status else "PENDING",
+        "business_type": t.business_type.value if t.business_type else None,
+        "timezone": t.timezone or "America/Chicago",
+        "plan": t.plan.value if t.plan else None,
+        "vapi_configured": bool(t.vapi_api_key and t.vapi_assistant_id),
+        "calcom_configured": bool(t.calcom_api_key),
+        "twilio_configured": bool(t.twilio_account_sid and t.twilio_auth_token),
+    }
+
+
+# ── Routes ───────────────────────────────────────────────────────────────────
+
+
+@router.post("/login", response_model=TokenResponse)
+async def login(req: LoginRequest):
+    """Authenticate with email + password, return JWT."""
+    async with async_session() as session:
+        result = await session.execute(
+            select(Tenant).where(Tenant.owner_email == req.email.lower())
+        )
+        user = result.scalar_one_or_none()
+
+    if not user or not user.password_hash:
+        logger.info("[Auth] Failed login attempt — no user/no password: %s", req.email)
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+
+    if not auth_service.verify_password(req.password, user.password_hash):
+        logger.info("[Auth] Failed login attempt — wrong password: %s", req.email)
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+
+    # Block deactivated/suspended (admins always allowed)
+    if not user.is_admin and user.status in (TenantStatus.SUSPENDED, TenantStatus.DEACTIVATED):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Account is {user.status.value.lower()}. Contact support.",
+        )
+
+    # PENDING tenants can log in to see their pending status, but with limited access
+    # The frontend will show them a "waiting for approval" screen
+    token = auth_service.create_access_token(
+        tenant_id=user.id, email=user.owner_email, is_admin=bool(user.is_admin)
+    )
+
+    # Update last_login_at
+    async with async_session() as session:
+        result = await session.execute(select(Tenant).where(Tenant.id == user.id))
+        u = result.scalar_one_or_none()
+        if u:
+            u.last_login_at = datetime.now(timezone.utc)
+            await session.commit()
+
+    logger.info("[Auth] Login success: %s (admin=%s)", user.owner_email, user.is_admin)
+    return TokenResponse(access_token=token, user=_user_to_dict(user))
+
+
+@router.post("/register", response_model=TokenResponse, status_code=201)
+async def register(req: RegisterRequest):
+    """
+    Register a new tenant in PENDING status, with a password.
+    Returns a JWT — the user can log in immediately to track approval status.
+    """
+    email = req.owner_email.lower()
+    logger.info("[Auth] Registration: slug=%s email=%s", req.slug, email)
+
+    # Check slug collision
+    existing_slug = await tenant_service.resolve_by_slug(req.slug)
+    if existing_slug:
+        raise HTTPException(status_code=409, detail=f"URL slug '{req.slug}' is already taken.")
+
+    # Check email collision
+    async with async_session() as session:
+        result = await session.execute(
+            select(Tenant).where(Tenant.owner_email == email)
+        )
+        if result.scalar_one_or_none():
+            raise HTTPException(status_code=409, detail="An account with this email already exists.")
+
+    # Create tenant in PENDING status
+    payload = req.model_dump(exclude={"password"})
+    payload["owner_email"] = email
+    tenant = await tenant_service.create_tenant(payload)
+
+    # Set password and persist
+    async with async_session() as session:
+        result = await session.execute(select(Tenant).where(Tenant.id == tenant.id))
+        t = result.scalar_one_or_none()
+        if t:
+            t.password_hash = auth_service.hash_password(req.password)
+            await session.commit()
+            await session.refresh(t)
+            tenant = t
+
+    token = auth_service.create_access_token(
+        tenant_id=tenant.id, email=tenant.owner_email, is_admin=False
+    )
+    logger.info("[Auth] Registered tenant %s (PENDING)", tenant.slug)
+    return TokenResponse(access_token=token, user=_user_to_dict(tenant))
+
+
+@router.get("/me", response_model=UserResponse)
+async def me(current_user: Tenant = Depends(auth_service.get_current_user)):
+    """Return the currently authenticated user's profile."""
+    return UserResponse(**_user_to_dict(current_user))
+
+
+@router.post("/change-password")
+async def change_password(
+    req: ChangePasswordRequest,
+    current_user: Tenant = Depends(auth_service.get_current_user),
+):
+    """Change the current user's password."""
+    if not current_user.password_hash or not auth_service.verify_password(
+        req.current_password, current_user.password_hash
+    ):
+        raise HTTPException(status_code=401, detail="Current password is incorrect.")
+
+    async with async_session() as session:
+        result = await session.execute(select(Tenant).where(Tenant.id == current_user.id))
+        u = result.scalar_one_or_none()
+        if u:
+            u.password_hash = auth_service.hash_password(req.new_password)
+            await session.commit()
+
+    logger.info("[Auth] Password changed for %s", current_user.owner_email)
+    return {"status": "password_updated"}

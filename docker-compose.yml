@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:15
+    container_name: dental_agent_db
+    environment:
+      POSTGRES_USER: dental_user
+      POSTGRES_PASSWORD: dental_pass
+      POSTGRES_DB: dental_agent
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dental_user -d dental_agent"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:

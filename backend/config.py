@@ -1,0 +1,88 @@
+"""
+Application configuration — loads all settings from environment variables.
+"""
+
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+
+class Settings:
+    """Central configuration loaded from .env file."""
+
+    # ── Ollama / LLM ──────────────────────────────────────────────────────
+    OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
+
+    # ── Vapi ──────────────────────────────────────────────────────────────
+    VAPI_API_KEY: str = os.getenv("VAPI_API_KEY", "")
+    VAPI_PHONE_NUMBER_ID: str = os.getenv("VAPI_PHONE_NUMBER_ID", "")
+    VAPI_ASSISTANT_ID: str = os.getenv("VAPI_ASSISTANT_ID", "")
+    VAPI_WEBHOOK_SECRET: str = os.getenv("VAPI_WEBHOOK_SECRET", "")
+
+    # ── Cal.com ───────────────────────────────────────────────────────────
+    CALCOM_API_KEY: str = os.getenv("CALCOM_API_KEY", "")
+    CALCOM_EVENT_TYPE_ID_NEW_PATIENT: str = os.getenv("CALCOM_EVENT_TYPE_ID_NEW_PATIENT", "")
+    CALCOM_EVENT_TYPE_ID_CLEANING: str = os.getenv("CALCOM_EVENT_TYPE_ID_CLEANING", "")
+    CALCOM_EVENT_TYPE_ID_EMERGENCY: str = os.getenv("CALCOM_EVENT_TYPE_ID_EMERGENCY", "")
+    CALCOM_EVENT_TYPE_ID_CONSULTATION: str = os.getenv("CALCOM_EVENT_TYPE_ID_CONSULTATION", "")
+    CALCOM_USERNAME: str = os.getenv("CALCOM_USERNAME", "")
+
+    # ── Twilio ────────────────────────────────────────────────────────────
+    TWILIO_ACCOUNT_SID: str = os.getenv("TWILIO_ACCOUNT_SID", "")
+    TWILIO_AUTH_TOKEN: str = os.getenv("TWILIO_AUTH_TOKEN", "")
+    TWILIO_PHONE_NUMBER: str = os.getenv("TWILIO_PHONE_NUMBER", "")
+
+    # ── PostgreSQL ────────────────────────────────────────────────────────
+    DATABASE_URL: str = os.getenv(
+        "DATABASE_URL",
+        "postgresql+asyncpg://dental_user:dental_pass@localhost:5432/dental_agent",
+    )
+
+    # ── App ───────────────────────────────────────────────────────────────
+    # ESCALATION_PHONE_NUMBER → number that receives the SMS alert when a
+    #   caller asks for a human. Set this to the office cell / dentist's phone.
+    # ESCALATION_TRANSFER_NUMBER → if set, Vapi will live-transfer the caller
+    #   to this number via the `transferCall` predefined tool. Leave blank to
+    #   instead end the call gracefully with a "we'll call you back" message
+    #   (recommended unless you have a real receptionist on the other end).
+    ESCALATION_PHONE_NUMBER: str = os.getenv("ESCALATION_PHONE_NUMBER", "")
+    ESCALATION_TRANSFER_NUMBER: str = os.getenv("ESCALATION_TRANSFER_NUMBER", "")
+    OFFICE_TIMEZONE: str = os.getenv("OFFICE_TIMEZONE", "America/Chicago")
+    OFFICE_NAME: str = os.getenv("OFFICE_NAME", "Scheduler.ai")
+    DEMO_MODE: bool = os.getenv("DEMO_MODE", "true").lower() == "true"
+    SERVER_BASE_URL: str = os.getenv("SERVER_BASE_URL", "http://localhost:8000")
+
+    # ── Google Calendar OAuth (platform-level — ONE app for all tenants) ──
+    GOOGLE_CLIENT_ID: str = os.getenv("GOOGLE_CLIENT_ID", "")
+    GOOGLE_CLIENT_SECRET: str = os.getenv("GOOGLE_CLIENT_SECRET", "")
+    GOOGLE_REDIRECT_URI: str = os.getenv(
+        "GOOGLE_REDIRECT_URI", "http://localhost:8000/api/integrations/google/callback"
+    )
+
+    # ── Local chat mode ───────────────────────────────────────────────────
+    # When True, the frontend exposes a /chat page that talks to the same
+    # LLM + tool pipeline Vapi uses, but via text instead of voice. Useful
+    # for local dev when you don't have/want Vapi configured. Responses are
+    # streamed back as SSE so the wire format matches Vapi exactly.
+    LOCAL_CHAT_MODE: bool = os.getenv("LOCAL_CHAT_MODE", "false").lower() == "true"
+
+    # ── Derived ───────────────────────────────────────────────────────────
+    @property
+    def ollama_openai_base(self) -> str:
+        """OpenAI-compatible base URL for Ollama."""
+        return f"{self.OLLAMA_BASE_URL}/v1"
+
+    def get_event_type_id(self, appointment_type: str) -> str:
+        """Map an appointment type string to the corresponding Cal.com event type ID."""
+        mapping = {
+            "new_patient": self.CALCOM_EVENT_TYPE_ID_NEW_PATIENT,
+            "cleaning": self.CALCOM_EVENT_TYPE_ID_CLEANING,
+            "emergency": self.CALCOM_EVENT_TYPE_ID_EMERGENCY,
+            "consultation": self.CALCOM_EVENT_TYPE_ID_CONSULTATION,
+        }
+        return mapping.get(appointment_type.lower().replace(" ", "_"), self.CALCOM_EVENT_TYPE_ID_CONSULTATION)
+
+
+settings = Settings()

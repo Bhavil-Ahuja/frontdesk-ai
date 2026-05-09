@@ -1,0 +1,1425 @@
+"""
+LLM service — stateful conversation manager using Ollama
+via the OpenAI-compatible API (model configured in .env as OLLAMA_MODEL).
+
+Maintains per-call session state in an in-memory dict keyed by vapi_call_id.
+Implements tool-calling for appointment operations and escalation.
+
+Multi-tenant: when a TenantContext is provided, tool definitions are filtered
+based on what integrations the tenant has configured (e.g. hide escalation
+tools when Twilio isn't set up) and all downstream service calls receive the
+tenant context so they use the correct credentials.
+"""
+
+import json
+import logging
+import re as _re
+import time
+from datetime import datetime, timezone
+from typing import Any
+
+from openai import AsyncOpenAI, OpenAI
+
+from backend.config import settings
+from backend.services import calendar_service, sms_service, knowledge_service
+from backend.prompts.dental_agent import build_system_prompt
+
+logger = logging.getLogger(__name__)
+
+# ── In-memory session store ──────────────────────────────────────────────────
+# Keyed by vapi_call_id. Each session holds conversation state for one call.
+
+sessions: dict[str, dict[str, Any]] = {}
+
+# ── OpenAI client pointed at Ollama ──────────────────────────────────────────
+
+_client: OpenAI | None = None
+
+
+def _get_client() -> OpenAI:
+    global _client
+    if _client is None:
+        logger.info("Initializing OpenAI client → Ollama at %s (model: %s)",
+                     settings.ollama_openai_base, settings.OLLAMA_MODEL)
+        _client = OpenAI(
+            base_url=settings.ollama_openai_base,
+            api_key="ollama",  # Ollama ignores the key but the SDK requires one
+        )
+    return _client
+
+
+_async_client: AsyncOpenAI | None = None
+
+
+def _get_async_client() -> AsyncOpenAI:
+    """Async client for true token-by-token streaming from Ollama."""
+    global _async_client
+    if _async_client is None:
+        logger.info("Initializing AsyncOpenAI (streaming) → Ollama at %s",
+                     settings.ollama_openai_base)
+        _async_client = AsyncOpenAI(
+            base_url=settings.ollama_openai_base,
+            api_key="ollama",
+        )
+    return _async_client
+
+
+# ── Tool definitions (sent to the LLM for function calling) ──────────────────
+
+# Full list of all tools. Use get_tools(tenant_ctx) to get the filtered
+# subset appropriate for a given tenant's configured integrations.
+ALL_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_available_slots",
+            "description": "Look up available appointment slots for a given date and type.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "date": {
+                        "type": "string",
+                        "description": "Date to check in YYYY-MM-DD format.",
+                    },
+                    "appointment_type": {
+                        "type": "string",
+                        "description": "Type of appointment.",
+                    },
+                },
+                "required": ["date", "appointment_type"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "book_appointment",
+            "description": "Book an appointment for the patient.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "patient_name": {"type": "string"},
+                    "phone": {"type": "string"},
+                    "email": {"type": "string", "description": "Patient email (optional — system provides default if not given)."},
+                    "dob": {"type": "string", "description": "Date of birth (MM/DD/YYYY)."},
+                    "insurance": {"type": "string"},
+                    "appointment_type": {
+                        "type": "string",
+                        "description": "Type of appointment.",
+                    },
+                    "slot_time": {"type": "string", "description": "ISO datetime of the chosen slot."},
+                },
+                "required": ["patient_name", "phone", "appointment_type", "slot_time"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "reschedule_appointment",
+            "description": "Reschedule an existing appointment.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "booking_uid": {"type": "string", "description": "Booking reference ID from the original booking."},
+                    "new_slot_time": {"type": "string", "description": "New ISO datetime."},
+                },
+                "required": ["booking_uid", "new_slot_time"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "cancel_appointment",
+            "description": "Cancel an existing appointment.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "booking_uid": {"type": "string"},
+                    "reason": {"type": "string"},
+                },
+                "required": ["booking_uid"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "escalate_to_human",
+            "description": "Transfer the call to a human receptionist.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reason": {
+                        "type": "string",
+                        "description": "Why the call is being escalated.",
+                    },
+                },
+                "required": ["reason"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_callback_request",
+            "description": "Request that the office call the patient back.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "patient_name": {"type": "string"},
+                    "phone": {"type": "string"},
+                    "reason": {"type": "string"},
+                },
+                "required": ["patient_name", "phone", "reason"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_office_info",
+            "description": (
+                "Get accurate office information. ALWAYS call this tool when the patient "
+                "asks about: business hours, open hours, office location, address, phone number, "
+                "insurance accepted, services offered, pricing, FAQs, or any factual question about the office. "
+                "Do NOT answer these from memory — always call this tool to get the exact info."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {
+                        "type": "string",
+                        "enum": ["hours", "location", "insurance", "services", "faqs", "all"],
+                        "description": "What info the patient is asking about.",
+                    },
+                },
+                "required": ["topic"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "lookup_patient_appointments",
+            "description": (
+                "Look up a patient's upcoming appointments by their phone number. "
+                "Use when a returning patient wants to reschedule, cancel, or check "
+                "on an existing appointment. Returns appointment details including "
+                "booking_uid needed for reschedule/cancel."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "phone": {
+                        "type": "string",
+                        "description": "Patient's phone number.",
+                    },
+                },
+                "required": ["phone"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_to_waitlist",
+            "description": "Add a patient to the waitlist when their preferred date/time has no available slots. The patient will be automatically notified by SMS if a slot opens up due to a cancellation.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "patient_name": {"type": "string", "description": "Patient's full name."},
+                    "phone": {"type": "string", "description": "Patient's phone number."},
+                    "appointment_type": {"type": "string", "description": "Type of appointment."},
+                    "preferred_date": {"type": "string", "description": "Preferred date in YYYY-MM-DD format."},
+                },
+                "required": ["patient_name", "phone", "appointment_type", "preferred_date"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_providers",
+            "description": "Get the list of available providers (dentists, hygienists) at this practice. Call this when a patient asks to see a specific provider or when you need to offer provider choices.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "appointment_type": {
+                        "type": "string",
+                        "description": "Optional. Filter providers who handle this appointment type.",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+]
+
+# Backwards-compat alias (llm_proxy.py imports this symbol)
+TOOLS = ALL_TOOLS
+
+
+# ── Tools that require specific integrations ──────────────────────────────────
+# If the tenant hasn't configured the relevant service, these tools are hidden
+# from the LLM so it can't accidentally trigger actions the tenant can't handle.
+
+_TOOLS_REQUIRING_TWILIO = {"escalate_to_human", "send_callback_request"}
+_TOOLS_REQUIRING_CALCOM = {
+    "get_available_slots", "book_appointment", "reschedule_appointment", "cancel_appointment",
+    "add_to_waitlist",
+}
+
+
+def get_tools(tenant_ctx: Any | None = None) -> list[dict]:
+    """
+    Return the tool definitions appropriate for `tenant_ctx`.
+
+    • If tenant_ctx is None (legacy / global mode) → all tools.
+    • Otherwise, hide tools whose backing integration isn't configured,
+      and dynamically inject the tenant's appointment type enum.
+
+    Calendar tools are available if the tenant has ANY of:
+      - Google Calendar connected (OAuth refresh token), OR
+      - Cal.com API key (external calendar), OR
+      - Business hours configured (native scheduling via Postgres)
+    """
+    if tenant_ctx is None:
+        return ALL_TOOLS
+
+    has_twilio = bool(tenant_ctx.twilio_account_sid and tenant_ctx.twilio_auth_token)
+    has_google_cal = bool(tenant_ctx.google_calendar_connected and tenant_ctx.google_calendar_refresh_token)
+    has_calcom = bool(tenant_ctx.calcom_api_key)
+    has_native_scheduling = bool(tenant_ctx.business_hours)
+    has_scheduling = has_google_cal or has_calcom or has_native_scheduling
+
+    # Build dynamic appointment type enum from tenant config
+    appt_keys = None
+    if tenant_ctx.appointment_types:
+        appt_keys = [at.get("key", "consultation") for at in tenant_ctx.appointment_types]
+
+    filtered = []
+    for tool in ALL_TOOLS:
+        import copy
+        name = tool.get("function", {}).get("name") or ""
+        if name in _TOOLS_REQUIRING_TWILIO and not has_twilio:
+            continue
+        if name in _TOOLS_REQUIRING_CALCOM and not has_scheduling:
+            continue
+
+        # Inject tenant-specific appointment type enum into relevant tools
+        if appt_keys and name in ("get_available_slots", "book_appointment", "add_to_waitlist"):
+            tool = copy.deepcopy(tool)
+            props = tool["function"]["parameters"]["properties"]
+            if "appointment_type" in props:
+                props["appointment_type"]["enum"] = appt_keys
+        filtered.append(tool)
+
+    logger.info("[LLM] Tool filter: twilio=%s gcal=%s calcom=%s native_sched=%s → %d/%d tools available",
+                has_twilio, has_google_cal, has_calcom, has_native_scheduling, len(filtered), len(ALL_TOOLS))
+    return filtered
+
+
+# ── Simple-chat detection (suppress tools for greetings / small talk) ─────────
+
+def _looks_like_simple_chat(user_message: str) -> bool:
+    """
+    Heuristic: when True, suppress tool definitions for this turn so the
+    model replies conversationally instead of hallucinating a tool call on
+    a bare 'hi' or 'how are you'.
+    """
+    text = user_message.strip().lower()
+    if not text or len(text) > 80:
+        return False
+    tool_keywords = [
+        # Scheduling
+        "book", "schedule", "appointment", "slot", "available", "availability",
+        "reschedule", "cancel", "monday", "tuesday", "wednesday", "thursday",
+        "friday", "saturday", "sunday", "tomorrow", "today", "next week",
+        "this week", "morning", "afternoon", "evening", "am", "pm",
+        ":", "o'clock", "9", "10", "11", "12", "1pm", "2pm", "3pm", "4pm", "5pm",
+        # Emergency / escalation
+        "emergency", "urgent", "pain", "broken", "knocked",
+        "human", "person", "transfer", "callback", "call back",
+        # Office info (triggers get_office_info tool)
+        "hour", "hours", "open", "close", "location", "address", "where",
+        "phone", "number", "insurance", "accept", "service", "pricing",
+        "price", "cost", "how much", "faq", "question",
+        "do you", "can you", "what do", "offer",
+        # Patient lookup
+        "my appointment", "existing", "upcoming", "check on",
+    ]
+    return not any(kw in text for kw in tool_keywords)
+
+
+# ── Session management ────────────────────────────────────────────────────────
+
+
+def create_session(
+    call_id: str,
+    caller_number: str = "",
+    tenant_ctx: Any | None = None,
+) -> dict[str, Any]:
+    """Initialise a new conversation session for a call."""
+    session = {
+        "messages": [{"role": "system", "content": build_system_prompt(tenant_ctx=tenant_ctx)}],
+        "patient_info": {},
+        "current_state": "greeting",
+        "call_start_time": time.time(),
+        "caller_number": caller_number,
+        "tenant_ctx": tenant_ctx,  # stored so _execute_tool can use it
+    }
+    sessions[call_id] = session
+    logger.info("Session created for call %s (tenant=%s)",
+                call_id, tenant_ctx.slug if tenant_ctx else "global")
+    return session
+
+
+def get_session(call_id: str) -> dict[str, Any] | None:
+    return sessions.get(call_id)
+
+
+def end_session(call_id: str) -> dict[str, Any] | None:
+    """Remove and return the session for final persistence."""
+    session = sessions.pop(call_id, None)
+    if session:
+        logger.info("Session ended for call %s (duration %.0fs).",
+                     call_id, time.time() - session["call_start_time"])
+    return session
+
+
+# ── Core LLM conversation ────────────────────────────────────────────────────
+
+
+async def process_message(
+    call_id: str,
+    user_message: str,
+    tenant_ctx: Any | None = None,
+) -> str:
+    """
+    Process an inbound user message and return the agent's response.
+    Handles tool calls internally (two-step pattern).
+
+    Args:
+        tenant_ctx: If provided, tool definitions are filtered by tenant
+            capabilities and all service calls use the tenant's credentials.
+    """
+    session = get_session(call_id)
+    if session is None:
+        session = create_session(call_id, tenant_ctx=tenant_ctx)
+    # Ensure tenant_ctx is stored (e.g. if session was pre-created without it)
+    if tenant_ctx and not session.get("tenant_ctx"):
+        session["tenant_ctx"] = tenant_ctx
+
+    # Use session's tenant_ctx for consistency within the conversation
+    effective_ctx = session.get("tenant_ctx")
+
+    # Append user turn
+    session["messages"].append({
+        "role": "user",
+        "content": user_message,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
+
+    msg_count = len(session["messages"])
+    logger.info("[Call %s] Processing user message (%d chars, %d messages in history)",
+                call_id, len(user_message), msg_count)
+    logger.debug("[Call %s] User said: %s", call_id, user_message[:200])
+
+    try:
+        client = _get_client()
+
+        # ── Step 1: LLM call (may request a tool) ────────────────────────
+        logger.info("[Call %s] Sending to Ollama (model: %s, %d messages)...",
+                    call_id, settings.OLLAMA_MODEL, msg_count)
+        t0 = time.time()
+
+        # Suppress tools on greetings / small talk to prevent hallucinated
+        # tool calls (e.g. escalate_to_human on "hi")
+        suppress_tools = _looks_like_simple_chat(user_message)
+        tools_for_request = None if suppress_tools else get_tools(effective_ctx)
+        if suppress_tools:
+            logger.info("[Call %s] Simple chat detected — suppressing tools", call_id)
+
+        kwargs: dict[str, Any] = {
+            "model": settings.OLLAMA_MODEL,
+            "messages": _strip_timestamps(session["messages"]),
+            "temperature": 0.7,
+            "max_tokens": 1024,
+        }
+        if tools_for_request:
+            kwargs["tools"] = tools_for_request
+
+        response = client.chat.completions.create(**kwargs)
+
+        llm_time = (time.time() - t0) * 1000
+        choice = response.choices[0]
+        assistant_msg = choice.message
+        finish_reason = choice.finish_reason
+
+        logger.info("[Call %s] Ollama responded in %.0fms (finish_reason=%s, tool_calls=%s)",
+                    call_id, llm_time, finish_reason,
+                    bool(assistant_msg.tool_calls))
+
+        # ── Step 2: Tool call loop (up to MAX_TOOL_ROUNDS) ────────────────
+        MAX_TOOL_ROUNDS = 5
+        current_msg = assistant_msg
+        reply = ""
+
+        for tool_round in range(MAX_TOOL_ROUNDS):
+            if not current_msg.tool_calls:
+                reply = current_msg.content or ""
+                break
+
+            # Execute ALL tool calls in this round
+            for tool_call in current_msg.tool_calls:
+                fn_name = tool_call.function.name
+                fn_args = json.loads(tool_call.function.arguments)
+
+                logger.info("[Call %s] Tool call (round %d): %s(%s)",
+                            call_id, tool_round + 1, fn_name, fn_args)
+
+                tool_result = await _execute_tool(call_id, fn_name, fn_args, tenant_ctx=effective_ctx)
+
+                logger.info("=" * 60)
+                logger.info("[Call %s] TOOL RESULT for %s:", call_id, fn_name)
+                logger.info("[Call %s]   %s", call_id, json.dumps(tool_result, default=str)[:1000])
+                logger.info("=" * 60)
+
+                session["messages"].append({
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": tool_call.id,
+                            "type": "function",
+                            "function": {"name": fn_name, "arguments": tool_call.function.arguments},
+                        }
+                    ],
+                })
+                session["messages"].append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": json.dumps(tool_result),
+                })
+
+            # Call LLM again with tool results — may trigger another tool or produce text
+            logger.info("[Call %s] Generating follow-up (round %d)...", call_id, tool_round + 1)
+            t1 = time.time()
+
+            followup_kwargs: dict[str, Any] = {
+                "model": settings.OLLAMA_MODEL,
+                "messages": _strip_timestamps(session["messages"]),
+                "temperature": 0.7,
+                "max_tokens": 1024,
+            }
+            # Include tools so the LLM can chain (e.g. get_slots → book)
+            if tools_for_request:
+                followup_kwargs["tools"] = tools_for_request
+
+            followup = client.chat.completions.create(**followup_kwargs)
+            followup_time = (time.time() - t1) * 1000
+            current_msg = followup.choices[0].message
+            logger.info("[Call %s] Follow-up round %d in %.0fms (tool_calls=%s, content=%d chars)",
+                        call_id, tool_round + 1, followup_time,
+                        bool(current_msg.tool_calls), len(current_msg.content or ""))
+
+            if not current_msg.tool_calls:
+                reply = current_msg.content or ""
+                break
+        else:
+            # Exceeded max rounds — use whatever content we have
+            reply = current_msg.content or "I apologize, I'm having difficulty. Could you repeat that?"
+            logger.warning("[Call %s] Exceeded %d tool rounds", call_id, MAX_TOOL_ROUNDS)
+
+        # ── Strip Qwen3 thinking blocks if /no_think is partially honored ───
+        if "<think>" in reply:
+            reply = _re.sub(r"<think>.*?</think>\s*", "", reply, flags=_re.DOTALL).strip()
+            logger.info("[Call %s] Stripped <think> block, post-strip=%d chars", call_id, len(reply))
+
+        # Save assistant reply
+        session["messages"].append({
+            "role": "assistant",
+            "content": reply,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+
+        total_time = (time.time() - t0) * 1000
+        logger.info("=" * 60)
+        logger.info("[Call %s] FINAL LLM REPLY (%0.fms total):", call_id, total_time)
+        # Log full reply in chunks to avoid truncation
+        for i in range(0, max(len(reply), 1), 500):
+            logger.info("[Call %s]   >>> %s", call_id, reply[i:i+500])
+        logger.info("=" * 60)
+        return reply
+
+    except Exception as exc:
+        logger.error("LLM processing error for call %s: %s", call_id, exc, exc_info=True)
+        return (
+            "I apologize, I'm having a brief technical difficulty. "
+            "Could you repeat that? Or I can connect you with a team member."
+        )
+
+
+# ── Streaming variant ─────────────────────────────────────────────────────────
+
+
+async def process_message_stream(
+    call_id: str,
+    user_message: str,
+    tenant_ctx: Any | None = None,
+):
+    """
+    Async generator version of process_message(). Yields content tokens as
+    they stream from Ollama — the caller sees the first token in ~200-500ms
+    instead of waiting 3-10s for the full response.
+
+    Tool calls are handled internally: when the LLM requests a tool, token
+    streaming pauses while the tool executes, then the follow-up response
+    streams token-by-token.
+
+    Yields: str (content token fragments)
+    """
+    session = get_session(call_id)
+    if session is None:
+        session = create_session(call_id, tenant_ctx=tenant_ctx)
+    if tenant_ctx and not session.get("tenant_ctx"):
+        session["tenant_ctx"] = tenant_ctx
+
+    effective_ctx = session.get("tenant_ctx")
+
+    session["messages"].append({
+        "role": "user",
+        "content": user_message,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
+
+    msg_count = len(session["messages"])
+    logger.info("[Call %s] Streaming user message (%d chars, %d msgs)",
+                call_id, len(user_message), msg_count)
+
+    try:
+        client = _get_async_client()
+
+        suppress_tools = _looks_like_simple_chat(user_message)
+        tools_for_request = None if suppress_tools else get_tools(effective_ctx)
+        if suppress_tools:
+            logger.info("[Call %s] Simple chat — suppressing tools for stream", call_id)
+
+        full_reply = ""
+        t0 = time.time()
+
+        for tool_round in range(5):  # MAX_TOOL_ROUNDS
+            kwargs: dict[str, Any] = {
+                "model": settings.OLLAMA_MODEL,
+                "messages": _strip_timestamps(session["messages"]),
+                "temperature": 0.7,
+                "max_tokens": 1024,
+                "stream": True,
+            }
+            if tools_for_request:
+                kwargs["tools"] = tools_for_request
+
+            t_round = time.time()
+            stream = await client.chat.completions.create(**kwargs)
+
+            round_content = ""
+            tool_calls_acc: dict[int, dict] = {}
+
+            # <think> block suppression — buffer initial tokens to detect
+            # Qwen3 reasoning blocks, then flush once we know the real
+            # content is starting.
+            buf = ""
+            flushing = False
+
+            async for chunk in stream:
+                choice = chunk.choices[0] if chunk.choices else None
+                if not choice:
+                    continue
+
+                delta = choice.delta
+
+                # Accumulate streamed tool-call fragments
+                if delta.tool_calls:
+                    for tc in delta.tool_calls:
+                        idx = tc.index
+                        if idx not in tool_calls_acc:
+                            tool_calls_acc[idx] = {"id": "", "name": "", "arguments": ""}
+                        if tc.id:
+                            tool_calls_acc[idx]["id"] = tc.id
+                        if getattr(tc.function, "name", None):
+                            tool_calls_acc[idx]["name"] = tc.function.name
+                        if getattr(tc.function, "arguments", None):
+                            tool_calls_acc[idx]["arguments"] += tc.function.arguments
+
+                token = delta.content or ""
+                if not token:
+                    continue
+
+                round_content += token
+
+                # If already past the think block, yield immediately
+                if flushing:
+                    yield token
+                    full_reply += token
+                    continue
+
+                buf += token
+
+                if "<think>" in buf:
+                    # Still in think block — wait for closing tag
+                    if "</think>" in buf:
+                        after = buf.split("</think>", 1)[1].lstrip()
+                        if after:
+                            yield after
+                            full_reply += after
+                        buf = ""
+                        flushing = True
+                elif len(buf) > 20:
+                    # No <think> tag — safe to start streaming
+                    yield buf
+                    full_reply += buf
+                    buf = ""
+                    flushing = True
+
+            # Flush remaining buffer (short responses / unclosed think blocks)
+            if buf and not flushing:
+                clean = buf
+                if "<think>" in clean:
+                    clean = _re.sub(r"<think>.*?</think>\s*", "", clean, flags=_re.DOTALL).strip()
+                if clean:
+                    yield clean
+                    full_reply += clean
+
+            round_ms = (time.time() - t_round) * 1000
+            logger.info("[Call %s] Stream round %d: %.0fms, content=%d chars, tools=%d",
+                        call_id, tool_round + 1, round_ms,
+                        len(round_content), len(tool_calls_acc))
+
+            if not tool_calls_acc:
+                break  # Pure text response — done
+
+            # ── Execute tool calls, add results to session ──────────
+            for idx in sorted(tool_calls_acc.keys()):
+                tc_info = tool_calls_acc[idx]
+                fn_name = tc_info["name"]
+                try:
+                    fn_args = json.loads(tc_info["arguments"])
+                except json.JSONDecodeError:
+                    fn_args = {}
+
+                logger.info("[Call %s] Stream tool (round %d): %s(%s)",
+                            call_id, tool_round + 1, fn_name, fn_args)
+
+                tool_result = await _execute_tool(
+                    call_id, fn_name, fn_args, tenant_ctx=effective_ctx,
+                )
+                logger.info("[Call %s] Stream tool result: %s",
+                            call_id, json.dumps(tool_result, default=str)[:500])
+
+                session["messages"].append({
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{
+                        "id": tc_info["id"],
+                        "type": "function",
+                        "function": {
+                            "name": fn_name,
+                            "arguments": tc_info["arguments"],
+                        },
+                    }],
+                })
+                session["messages"].append({
+                    "role": "tool",
+                    "tool_call_id": tc_info["id"],
+                    "content": json.dumps(tool_result, default=str),
+                })
+
+        # Save complete reply to session history
+        if full_reply:
+            session["messages"].append({
+                "role": "assistant",
+                "content": full_reply,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+
+        total_ms = (time.time() - t0) * 1000
+        logger.info("[Call %s] Stream complete: %d chars in %.0fms",
+                    call_id, len(full_reply), total_ms)
+
+    except Exception as exc:
+        logger.error("LLM streaming error for call %s: %s", call_id, exc, exc_info=True)
+        yield (
+            "I apologize, I'm having a brief technical difficulty. "
+            "Could you repeat that? Or I can connect you with a team member."
+        )
+
+
+# ── Tool execution ────────────────────────────────────────────────────────────
+
+
+async def _execute_tool(
+    call_id: str,
+    name: str,
+    args: dict,
+    tenant_ctx: Any | None = None,
+) -> dict[str, Any]:
+    """Route a tool call to the appropriate service and return a result dict.
+
+    Args:
+        tenant_ctx: When set, all downstream service calls (calendar, SMS) use
+            the tenant's own credentials. When None, falls back to global .env
+            settings (legacy single-tenant mode).
+    """
+    session = get_session(call_id)
+    logger.info("[Call %s] Executing tool: %s with args: %s (tenant=%s)",
+                call_id, name, json.dumps(args)[:300],
+                tenant_ctx.slug if tenant_ctx else "global")
+    t0 = time.time()
+
+    try:
+        if name == "get_available_slots":
+            appt_type = args.get("appointment_type", "consultation")
+            if tenant_ctx:
+                event_type_id = tenant_ctx.get_event_type_id(appt_type)
+            else:
+                event_type_id = settings.get_event_type_id(appt_type)
+
+            date = args.get("date", "")
+            if not date:
+                from datetime import timedelta
+                date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+
+            # ── Date correction: resolve user's day-of-week to actual date ──
+            if session:
+                user_text = ""
+                for m in reversed(session["messages"]):
+                    if m.get("role") == "user":
+                        user_text = (m.get("content") or "").strip().lower()
+                        break
+                if user_text:
+                    resolved = _resolve_dow_to_date(user_text, tenant_ctx)
+                    if resolved and resolved != date:
+                        logger.warning("[Call %s] Date correction: LLM said %r → user implied %r",
+                                       call_id, date, resolved)
+                        date = resolved
+
+            slots = await calendar_service.get_available_slots(
+                event_type_id=event_type_id,
+                date_from=date,
+                date_to=date,
+                tenant_ctx=tenant_ctx,
+                appointment_type_key=appt_type,
+            )
+
+            # Format slots with human-readable time labels
+            formatted_slots = []
+            for s in slots:
+                try:
+                    from dateutil import parser as dt_parser
+                    dt = dt_parser.parse(s)
+                    formatted_slots.append({
+                        "time_label": dt.strftime("%I:%M %p").lstrip("0"),
+                        "exact_slot_time": s,
+                    })
+                except Exception:
+                    formatted_slots.append({"time_label": s, "exact_slot_time": s})
+
+            # Build friendly date and summary for the LLM
+            try:
+                from dateutil import parser as dt_parser
+                friendly_date = dt_parser.parse(date).strftime("%A, %B %d")
+            except Exception:
+                friendly_date = date
+
+            if not formatted_slots:
+                summary = (
+                    f"There are no available appointment slots on {friendly_date}. "
+                    f"Tell the patient politely that day is fully booked or closed, "
+                    f"and offer to check a different day. Do NOT read this message verbatim — "
+                    f"speak naturally in 1-2 sentences."
+                )
+            else:
+                top = formatted_slots[:3]
+                time_list = ", ".join(s["time_label"] for s in top)
+                summary = (
+                    f"Available times on {friendly_date}: {time_list}. "
+                    f"Offer these to the patient in natural conversation (1-2 sentences). "
+                    f"When they pick one, call book_appointment with the matching exact_slot_time. "
+                    f"Do NOT read JSON or field names aloud."
+                )
+
+            elapsed = (time.time() - t0) * 1000
+            logger.info("[Call %s] get_available_slots → %d slots in %.0fms",
+                        call_id, len(slots), elapsed)
+            return {
+                "summary_for_assistant": summary,
+                "available_slots": formatted_slots,
+                "date": date,
+                "count": len(slots),
+            }
+
+        elif name == "book_appointment":
+            # ── Validate required fields ──────────────────────────────
+            required = {
+                "patient_name": "the patient's full name",
+                "phone": "the patient's phone number",
+                "dob": "the patient's date of birth",
+                "slot_time": "a confirmed appointment time (call get_available_slots first)",
+                "appointment_type": "the appointment type",
+            }
+            missing = []
+            for field, desc in required.items():
+                val = args.get(field, "")
+                if not val or not str(val).strip():
+                    missing.append((field, desc))
+
+            if missing:
+                missing_list = "; ".join(f"{f} ({d})" for f, d in missing)
+                logger.warning("[Call %s] book_appointment rejected — missing: %s",
+                               call_id, [f for f, _ in missing])
+                return {
+                    "ok": False,
+                    "error": "missing_required_fields",
+                    "missing": [f for f, _ in missing],
+                    "summary_for_assistant": (
+                        f"Cannot book yet — missing: {missing_list}. "
+                        f"Ask the patient ONLY for the missing items above in a natural sentence."
+                    ),
+                }
+
+            appt_type = args.get("appointment_type", "consultation")
+            if tenant_ctx:
+                event_type_id = tenant_ctx.get_event_type_id(appt_type)
+            else:
+                event_type_id = settings.get_event_type_id(appt_type)
+
+            # Email: leave blank if patient didn't provide one
+            email = args.get("email", "") or ""
+
+            patient_info = {
+                "name": args.get("patient_name", ""),
+                "phone": args.get("phone", ""),
+                "email": email,
+                "dob": args.get("dob", ""),
+                "insurance": args.get("insurance", ""),
+            }
+            # Store patient info in session for later DB persistence
+            if session:
+                session["patient_info"] = patient_info
+
+            slot_time = args.get("slot_time", "")
+
+            # ── Smart slot matching ──────────────────────────────────
+            # The LLM may pass slot_time in a slightly different format
+            # than what the calendar API returned. Re-fetch available
+            # slots for that day and match by hour/minute.
+            logger.info("[Call %s] LLM provided slot_time: '%s' — attempting smart match",
+                        call_id, slot_time)
+            try:
+                from dateutil import parser as dt_parser
+                requested_dt = dt_parser.parse(slot_time)
+                target_hour = requested_dt.hour
+                target_minute = requested_dt.minute
+                correct_date = requested_dt.replace(year=datetime.now().year)
+                date_str = correct_date.strftime("%Y-%m-%d")
+
+                available = await calendar_service.get_available_slots(
+                    event_type_id=event_type_id,
+                    date_from=date_str,
+                    date_to=date_str,
+                    tenant_ctx=tenant_ctx,
+                    appointment_type_key=appt_type,
+                )
+
+                matched = False
+                for real_slot in available:
+                    slot_dt = dt_parser.parse(real_slot)
+                    if slot_dt.hour == target_hour and slot_dt.minute == target_minute:
+                        slot_time = real_slot
+                        matched = True
+                        logger.info("[Call %s] Exact slot match: %s", call_id, slot_time)
+                        break
+
+                if not matched:
+                    # Fallback: match by hour only
+                    for real_slot in available:
+                        slot_dt = dt_parser.parse(real_slot)
+                        if slot_dt.hour == target_hour:
+                            slot_time = real_slot
+                            matched = True
+                            logger.info("[Call %s] Hour-level slot match: %s", call_id, slot_time)
+                            break
+
+                if not matched:
+                    logger.warning("[Call %s] No slot match found — using original: %s",
+                                   call_id, slot_time)
+            except Exception as match_exc:
+                logger.warning("[Call %s] Slot matching failed: %s — using original",
+                               call_id, match_exc)
+
+            result = await calendar_service.book_appointment(
+                event_type_id=event_type_id,
+                patient_info=patient_info,
+                start_time=slot_time,
+                tenant_ctx=tenant_ctx,
+                appointment_type_key=appt_type,
+            )
+            if result:
+                # Send SMS confirmation (uses tenant's Twilio — will no-op if unconfigured)
+                try:
+                    scheduled_dt = datetime.fromisoformat(args.get("slot_time", slot_time))
+                    sms_service.send_confirmation(
+                        patient_name=args.get("patient_name", ""),
+                        phone=args.get("phone", ""),
+                        appointment_type=args.get("appointment_type", "").replace("_", " ").title(),
+                        scheduled_at=scheduled_dt,
+                        tenant_ctx=tenant_ctx,
+                    )
+                except Exception as sms_exc:
+                    logger.warning("[Call %s] SMS confirmation failed: %s", call_id, sms_exc)
+
+                # ── Persist appointment + patient in DB ──────────────
+                try:
+                    from backend.services import patient_service
+                    tenant_id = tenant_ctx.tenant_id if tenant_ctx else None
+                    booking_uid = result.get("uid", "") if isinstance(result, dict) else ""
+                    booking_id = result.get("id", "") if isinstance(result, dict) else ""
+                    await patient_service.record_appointment(
+                        patient_phone=args.get("phone", ""),
+                        appointment_type=args.get("appointment_type", ""),
+                        scheduled_at=datetime.fromisoformat(slot_time),
+                        cal_booking_uid=str(booking_uid),
+                        cal_booking_id=str(booking_id),
+                        patient_name=args.get("patient_name", ""),
+                        patient_email=email,
+                        dob=args.get("dob", ""),
+                        insurance=args.get("insurance", ""),
+                        tenant_id=tenant_id,
+                    )
+                    logger.info("[Call %s] ✓ Appointment recorded in DB (uid=%s)", call_id, booking_uid)
+                except Exception as db_exc:
+                    logger.warning("[Call %s] Patient/appointment DB upsert failed: %s",
+                                   call_id, db_exc)
+
+                elapsed = (time.time() - t0) * 1000
+                logger.info("[Call %s] book_appointment → SUCCESS in %.0fms: %s",
+                            call_id, elapsed, result)
+                return {"success": True, "booking": result}
+
+            elapsed = (time.time() - t0) * 1000
+            logger.error("[Call %s] book_appointment → FAILED in %.0fms", call_id, elapsed)
+            return {"success": False, "error": "Failed to create booking."}
+
+        elif name == "reschedule_appointment":
+            booking_uid = args.get("booking_uid", "")
+            new_slot_time = args.get("new_slot_time", "")
+            if not booking_uid or not new_slot_time:
+                return {
+                    "success": False,
+                    "summary_for_assistant": "Cannot reschedule — I need the booking reference and a new time. "
+                    "Ask the patient for these details.",
+                }
+            result = await calendar_service.reschedule_appointment(
+                booking_uid=booking_uid,
+                new_start_time=new_slot_time,
+                tenant_ctx=tenant_ctx,
+            )
+            if result:
+                # Send reschedule SMS
+                try:
+                    from dateutil import parser as dt_parser
+                    new_dt = dt_parser.parse(new_slot_time)
+                    sms_service.send_reschedule(
+                        patient_name=session.get("patient_info", {}).get("name", "") if session else "",
+                        phone=session.get("patient_info", {}).get("phone", "") if session else "",
+                        new_scheduled_at=new_dt,
+                        appointment_type="Appointment",
+                        tenant_ctx=tenant_ctx,
+                    )
+                except Exception as sms_exc:
+                    logger.warning("[Call %s] Reschedule SMS failed: %s", call_id, sms_exc)
+                # Update appointment in DB
+                try:
+                    from backend.database import async_session as get_async_session
+                    from sqlalchemy import select as sa_select
+                    from backend.models.appointment import Appointment as ApptModel
+                    async with get_async_session() as db_session:
+                        stmt = sa_select(ApptModel).where(ApptModel.cal_booking_uid == booking_uid)
+                        db_result = await db_session.execute(stmt)
+                        appt = db_result.scalar_one_or_none()
+                        if appt:
+                            appt.scheduled_at = datetime.fromisoformat(new_slot_time)
+                            await db_session.commit()
+                            logger.info("[Call %s] ✓ DB appointment rescheduled: %s", call_id, booking_uid)
+                except Exception as db_exc:
+                    logger.warning("[Call %s] DB reschedule update failed: %s", call_id, db_exc)
+                elapsed = (time.time() - t0) * 1000
+                logger.info("[Call %s] reschedule → SUCCESS in %.0fms", call_id, elapsed)
+                return {"success": True, "reschedule": result}
+            elapsed = (time.time() - t0) * 1000
+            logger.error("[Call %s] reschedule → FAILED in %.0fms", call_id, elapsed)
+            return {"success": False, "error": "Failed to reschedule."}
+
+        elif name == "cancel_appointment":
+            booking_uid = args.get("booking_uid", "")
+            if not booking_uid:
+                return {
+                    "success": False,
+                    "summary_for_assistant": "Cannot cancel — I need the booking reference. "
+                    "Ask the patient for their booking details or phone number to look it up.",
+                }
+            success = await calendar_service.cancel_appointment(
+                booking_uid=booking_uid,
+                reason=args.get("reason", ""),
+                tenant_ctx=tenant_ctx,
+            )
+            if success:
+                # Send cancellation SMS
+                try:
+                    patient_phone = session.get("patient_info", {}).get("phone", "") if session else ""
+                    patient_name = session.get("patient_info", {}).get("name", "") if session else ""
+                    if patient_phone:
+                        sms_service.send_cancellation(
+                            patient_name=patient_name,
+                            phone=patient_phone,
+                            scheduled_at=datetime.now(),  # approximate — we don't have original time
+                            tenant_ctx=tenant_ctx,
+                        )
+                except Exception as sms_exc:
+                    logger.warning("[Call %s] Cancel SMS failed: %s", call_id, sms_exc)
+                # Update DB
+                try:
+                    from backend.database import async_session as get_async_session
+                    from backend.models.appointment import Appointment as ApptModel, AppointmentStatus
+                    async with get_async_session() as db_session:
+                        from sqlalchemy import select as sa_select
+                        stmt = sa_select(ApptModel).where(ApptModel.cal_booking_uid == booking_uid)
+                        db_result = await db_session.execute(stmt)
+                        appt = db_result.scalar_one_or_none()
+                        if appt:
+                            appt.status = AppointmentStatus.CANCELLED
+                            await db_session.commit()
+                            logger.info("[Call %s] ✓ DB appointment cancelled: %s", call_id, booking_uid)
+                except Exception as db_exc:
+                    logger.warning("[Call %s] DB cancel update failed: %s", call_id, db_exc)
+            elapsed = (time.time() - t0) * 1000
+            logger.info("[Call %s] cancel → %s in %.0fms", call_id, success, elapsed)
+            return {"success": success}
+
+        elif name == "escalate_to_human":
+            caller = session["caller_number"] if session else "unknown"
+            sms_service.send_office_alert(
+                reason=args.get("reason", "Patient requested human assistance"),
+                caller_number=caller,
+                tenant_ctx=tenant_ctx,
+            )
+            if session:
+                session["current_state"] = "escalated"
+            esc_phone = tenant_ctx.escalation_phone if tenant_ctx else settings.ESCALATION_PHONE_NUMBER
+            return {
+                "success": True,
+                "action": "transfer",
+                "destination": esc_phone,
+            }
+
+        elif name == "send_callback_request":
+            sms_service.send_escalation_notification(
+                patient_name=args.get("patient_name", ""),
+                phone=args.get("phone", ""),
+                tenant_ctx=tenant_ctx,
+            )
+            sms_service.send_office_alert(
+                reason=f"Callback requested: {args.get('reason', 'N/A')}",
+                caller_number=args.get("phone", ""),
+                tenant_ctx=tenant_ctx,
+            )
+            return {"success": True, "message": "Callback request sent."}
+
+        elif name == "get_office_info":
+            result = _build_office_info(args.get("topic", "all"), tenant_ctx)
+            return result
+
+        elif name == "lookup_patient_appointments":
+            from backend.services import patient_service
+            phone = args.get("phone", "")
+            if not phone:
+                return {
+                    "ok": False,
+                    "summary_for_assistant": "I need the patient's phone number to look up their appointments.",
+                }
+            tenant_id = tenant_ctx.tenant_id if tenant_ctx else None
+            history = await patient_service.get_patient_history(phone, tenant_id=tenant_id)
+            if not history:
+                return {
+                    "ok": False,
+                    "summary_for_assistant": (
+                        f"No patient record found for {phone}. "
+                        "This might be a new patient. Ask if they'd like to schedule a new appointment."
+                    ),
+                }
+            upcoming = history.get("upcoming_appointments", [])
+            patient_name = history["patient"]["name"]
+            if not upcoming:
+                return {
+                    "ok": True,
+                    "summary_for_assistant": (
+                        f"{patient_name} has no upcoming appointments. "
+                        "Ask if they'd like to schedule a new one."
+                    ),
+                    "patient_name": patient_name,
+                    "upcoming": [],
+                }
+            appt_lines = [f"{a['type']} on {a['date']} at {a['time']}" for a in upcoming]
+            return {
+                "ok": True,
+                "summary_for_assistant": (
+                    f"{patient_name} has {len(upcoming)} upcoming appointment(s): "
+                    + "; ".join(appt_lines) + ". "
+                    "Tell the patient about their appointment(s) naturally. "
+                    "If they want to reschedule, use the booking_uid with reschedule_appointment."
+                ),
+                "patient_name": patient_name,
+                "upcoming": upcoming,
+            }
+
+        elif name == "add_to_waitlist":
+            from backend.services import waitlist_service
+            result = await waitlist_service.add_to_waitlist(
+                tenant_id=tenant_ctx.tenant_id if tenant_ctx else None,
+                patient_name=args.get("patient_name", ""),
+                patient_phone=args.get("phone", ""),
+                appointment_type=args.get("appointment_type", "consultation"),
+                preferred_date=args.get("preferred_date", ""),
+            )
+            elapsed = (time.time() - t0) * 1000
+            logger.info("[Call %s] add_to_waitlist → %s in %.0fms", call_id, result.get("status"), elapsed)
+            return result
+
+        elif name == "get_providers":
+            from backend.services import provider_service
+            appt_type = args.get("appointment_type", "")
+            if appt_type and tenant_ctx:
+                providers = await provider_service.get_providers_for_appointment_type(
+                    tenant_ctx.tenant_id, appt_type,
+                )
+            elif tenant_ctx:
+                providers = await provider_service.list_providers(tenant_ctx.tenant_id)
+            else:
+                providers = []
+
+            if not providers:
+                summary = "This practice doesn't have individual provider profiles configured. Any available provider can see the patient."
+            else:
+                names = ", ".join(f"{p['name']} ({p.get('title', '')})" for p in providers)
+                summary = f"Available providers: {names}. Ask the patient if they have a preference, or offer the first available."
+
+            elapsed = (time.time() - t0) * 1000
+            logger.info("[Call %s] get_providers → %d providers in %.0fms", call_id, len(providers), elapsed)
+            return {
+                "summary_for_assistant": summary,
+                "providers": providers,
+                "count": len(providers),
+            }
+
+        else:
+            logger.warning("[Call %s] Unknown tool requested: %s", call_id, name)
+            return {"error": f"Unknown tool: {name}"}
+
+    except Exception as exc:
+        elapsed = (time.time() - t0) * 1000
+        logger.error("[Call %s] Tool '%s' failed after %.0fms: %s", call_id, name, elapsed, exc, exc_info=True)
+        return {"error": str(exc)}
+
+
+# ── Office info builder (for get_office_info tool) ──────────────────────────
+
+
+def _fmt_time_12h(t: str) -> str:
+    """Convert '08:00' → '8:00 AM', '16:00' → '4:00 PM'."""
+    try:
+        parts = t.strip().split(":")
+        h, m = int(parts[0]), int(parts[1]) if len(parts) > 1 else 0
+        suffix = "AM" if h < 12 else "PM"
+        display_h = h if 1 <= h <= 12 else (h - 12 if h > 12 else 12)
+        return f"{display_h}:{m:02d} {suffix}"
+    except Exception:
+        return t
+
+
+def _build_office_info(topic: str, tenant_ctx: Any | None) -> dict[str, Any]:
+    """
+    Build pre-formatted office info that the LLM can read verbatim.
+    Returns a dict with 'summary_for_assistant' that contains the exact text
+    the LLM should say — no interpretation needed.
+    """
+    parts = []
+
+    # ── Hours ────────────────────────────────────────────────────────────
+    if topic in ("hours", "all"):
+        bh = tenant_ctx.business_hours if tenant_ctx else None
+        if bh:
+            day_order = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+            day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+            # Smart grouping: consecutive days with same hours get grouped
+            groups: list[tuple[list[str], str]] = []
+            for i, day_key in enumerate(day_order):
+                info = bh.get(day_key)
+                if info and isinstance(info, dict) and info.get("open"):
+                    label = f"{_fmt_time_12h(info['open'])} to {_fmt_time_12h(info['close'])}"
+                else:
+                    label = "Closed"
+                if groups and groups[-1][1] == label:
+                    groups[-1][0].append(day_names[i])
+                else:
+                    groups.append(([day_names[i]], label))
+
+            sentence_parts = []
+            for day_list, label in groups:
+                if len(day_list) == 1:
+                    sentence_parts.append(f"{day_list[0]} {label}")
+                elif len(day_list) == 2:
+                    sentence_parts.append(f"{day_list[0]} and {day_list[1]} {label}")
+                else:
+                    sentence_parts.append(f"{day_list[0]} through {day_list[-1]} {label}")
+
+            hours_text = "Our hours are: " + ", ".join(sentence_parts) + "."
+        else:
+            hours_text = "Business hours have not been configured yet."
+        parts.append(hours_text)
+
+    # ── Location / contact ───────────────────────────────────────────────
+    if topic in ("location", "all"):
+        contact_parts = []
+        if tenant_ctx:
+            if tenant_ctx.business_address:
+                contact_parts.append(f"We are located at {tenant_ctx.business_address}.")
+            if tenant_ctx.business_phone:
+                contact_parts.append(f"Our phone number is {tenant_ctx.business_phone}.")
+        # Also check KB for office_info
+        kb = _get_kb(tenant_ctx)
+        office_info = kb.get("office_info", {})
+        if not contact_parts:
+            if office_info.get("address"):
+                contact_parts.append(f"We are located at {office_info['address']}.")
+            if office_info.get("phone"):
+                contact_parts.append(f"Our phone number is {office_info['phone']}.")
+        if contact_parts:
+            parts.append(" ".join(contact_parts))
+        else:
+            parts.append("Office location and contact details are not configured yet.")
+
+    # ── Insurance ────────────────────────────────────────────────────────
+    if topic in ("insurance", "all"):
+        kb = _get_kb(tenant_ctx)
+        ins = kb.get("insurance", {})
+        if ins:
+            accepted = ins.get("accepted_providers", [])
+            if accepted:
+                parts.append(f"We accept the following insurance providers: {', '.join(accepted)}.")
+            financing = ins.get("financing")
+            if financing:
+                parts.append(f"Financing: {financing}")
+            note = ins.get("note")
+            if note:
+                parts.append(note)
+        else:
+            parts.append("Insurance information is not configured yet. I can have someone from our team follow up with you about insurance.")
+
+    # ── Services & pricing ───────────────────────────────────────────────
+    if topic in ("services", "all"):
+        kb = _get_kb(tenant_ctx)
+        services = kb.get("services", [])
+        if services:
+            svc_lines = ["Here are our services and approximate pricing:"]
+            for svc in services:
+                name = svc.get("name", "Service")
+                low = svc.get("price_min", "?")
+                high = svc.get("price_max", "?")
+                svc_lines.append(f"  - {name}: ${low} to ${high}")
+            parts.append("\n".join(svc_lines))
+
+    # ── FAQs ─────────────────────────────────────────────────────────────
+    if topic in ("faqs", "all"):
+        kb = _get_kb(tenant_ctx)
+        faqs = kb.get("faqs", [])
+        if faqs:
+            faq_lines = ["Frequently asked questions:"]
+            for faq in faqs:
+                faq_lines.append(f"  Q: {faq.get('question', '')}")
+                faq_lines.append(f"  A: {faq.get('answer', '')}")
+            parts.append("\n".join(faq_lines))
+
+    summary = " ".join(parts) if parts else "I don't have that information available right now."
+
+    return {
+        "summary_for_assistant": (
+            f"{summary}\n\n"
+            f"Read the information above to the patient naturally in 1-2 sentences. "
+            f"Use the EXACT numbers and details — do NOT round, guess, or paraphrase the hours/prices."
+        ),
+    }
+
+
+def _get_kb(tenant_ctx: Any | None) -> dict:
+    """Get the knowledge base for a tenant (lazy import to avoid circular deps)."""
+    from backend.services.knowledge_service import get_tenant_kb
+    return get_tenant_kb(tenant_ctx)
+
+
+# ── Date resolution helper ──────────────────────────────────────────────────
+
+_DOW_MAP = {
+    "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+    "friday": 4, "saturday": 5, "sunday": 6,
+}
+
+
+def _resolve_dow_to_date(user_text: str, tenant_ctx: Any | None = None) -> str | None:
+    """
+    If the user's message mentions a day-of-week or 'tomorrow'/'today',
+    return the corresponding YYYY-MM-DD in the tenant's timezone.
+    """
+    from datetime import timedelta
+    from zoneinfo import ZoneInfo
+
+    tz_name = "America/Chicago"
+    if tenant_ctx and getattr(tenant_ctx, "timezone", None):
+        tz_name = tenant_ctx.timezone
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = ZoneInfo("America/Chicago")
+
+    today = datetime.now(tz)
+    text = user_text.lower()
+
+    if "today" in text:
+        return today.strftime("%Y-%m-%d")
+    if "tomorrow" in text:
+        return (today + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    for dow_name, dow_idx in _DOW_MAP.items():
+        if dow_name in text:
+            today_idx = today.weekday()
+            delta = (dow_idx - today_idx) % 7
+            if "next" in text:
+                delta = delta + 7 if delta != 0 else 7
+            target = today + timedelta(days=delta)
+            return target.strftime("%Y-%m-%d")
+
+    return None
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+def _strip_timestamps(messages: list[dict]) -> list[dict]:
+    """Remove the 'timestamp' key from messages before sending to the LLM."""
+    clean = []
+    for msg in messages:
+        m = {k: v for k, v in msg.items() if k != "timestamp"}
+        clean.append(m)
+    return clean

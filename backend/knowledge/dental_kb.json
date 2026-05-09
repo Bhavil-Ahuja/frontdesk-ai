@@ -1,0 +1,143 @@
+{
+  "office_info": {
+    "name": "SmileCare Dental",
+    "address": "123 Oak Street, Austin, TX 78701",
+    "phone": "(512) 555-0100",
+    "hours": "Monday–Friday 8am–6pm, Saturday 9am–2pm, Closed Sunday",
+    "emergency_info": "24/7 emergency line available for existing patients with severe pain",
+    "website": "https://smilecaredental.com",
+    "parking": "Free parking available in the building lot. Street parking also available."
+  },
+  "insurance": {
+    "accepted_providers": [
+      "Delta Dental",
+      "Cigna",
+      "Aetna",
+      "BlueCross BlueShield",
+      "Humana",
+      "MetLife"
+    ],
+    "financing": "CareCredit accepted for financing",
+    "note": "Always confirm with patient's specific plan as coverage varies"
+  },
+  "services": [
+    {
+      "name": "Routine cleaning + exam",
+      "price_min": 150,
+      "price_max": 200,
+      "duration_minutes": 60,
+      "notes": "Recommended every 6 months"
+    },
+    {
+      "name": "X-rays (full set)",
+      "price_min": 150,
+      "price_max": 300,
+      "duration_minutes": 30,
+      "notes": "Digital X-rays with minimal radiation"
+    },
+    {
+      "name": "Tooth filling",
+      "price_min": 150,
+      "price_max": 300,
+      "duration_minutes": 60,
+      "notes": "Per tooth, composite or amalgam"
+    },
+    {
+      "name": "Root canal (front tooth)",
+      "price_min": 700,
+      "price_max": 900,
+      "duration_minutes": 90,
+      "notes": ""
+    },
+    {
+      "name": "Root canal (molar)",
+      "price_min": 1000,
+      "price_max": 1400,
+      "duration_minutes": 120,
+      "notes": ""
+    },
+    {
+      "name": "Crown",
+      "price_min": 1000,
+      "price_max": 1700,
+      "duration_minutes": 90,
+      "notes": "Porcelain, ceramic, or metal"
+    },
+    {
+      "name": "Simple extraction",
+      "price_min": 150,
+      "price_max": 300,
+      "duration_minutes": 30,
+      "notes": ""
+    },
+    {
+      "name": "Surgical/wisdom tooth extraction",
+      "price_min": 300,
+      "price_max": 600,
+      "duration_minutes": 60,
+      "notes": "Per tooth"
+    },
+    {
+      "name": "In-office teeth whitening",
+      "price_min": 500,
+      "price_max": 700,
+      "duration_minutes": 90,
+      "notes": "Professional-grade results in one visit"
+    },
+    {
+      "name": "Invisalign",
+      "price_min": 3000,
+      "price_max": 8000,
+      "duration_minutes": 45,
+      "notes": "Consultation appointment, total treatment 12–18 months"
+    },
+    {
+      "name": "Dental implant",
+      "price_min": 3000,
+      "price_max": 5000,
+      "duration_minutes": 90,
+      "notes": "Per implant, includes crown"
+    },
+    {
+      "name": "Emergency exam",
+      "price_min": 100,
+      "price_max": 150,
+      "duration_minutes": 30,
+      "notes": "Same-day appointments prioritized"
+    }
+  ],
+  "faqs": [
+    {
+      "question": "How often should I get a cleaning?",
+      "answer": "Every 6 months for most patients. Every 3–4 months for patients with gum disease."
+    },
+    {
+      "question": "Do you see children?",
+      "answer": "Yes, all ages. First visit recommended when first tooth appears or by age one."
+    },
+    {
+      "question": "Is whitening safe?",
+      "answer": "Yes when done professionally. Some temporary sensitivity is normal and expected."
+    },
+    {
+      "question": "What if I have dental anxiety?",
+      "answer": "Very common. We offer nitrous oxide sedation, can take breaks, use hand signals. Please let us know and we will make you comfortable."
+    },
+    {
+      "question": "How long do fillings last?",
+      "answer": "Composite fillings 7–10 years. Silver amalgam 10–15 years."
+    },
+    {
+      "question": "Do I need to arrive early for my first visit?",
+      "answer": "Yes, please arrive 15 minutes early to complete new patient paperwork. You can also fill it out online beforehand."
+    },
+    {
+      "question": "What payment methods do you accept?",
+      "answer": "We accept all major credit cards, HSA/FSA cards, cash, and CareCredit financing."
+    },
+    {
+      "question": "What should I do if I have a dental emergency after hours?",
+      "answer": "Call our main number — you will be connected to our 24/7 emergency line for existing patients with severe pain."
+    }
+  ]
+}
