@@ -16,6 +16,8 @@ import {
   Calendar,
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
+import { useAuth } from '../contexts/AuthContext';
+import { formatDate } from '../lib/timezone';
 
 const STATUS_CONFIG = {
   WAITING: {
@@ -61,6 +63,8 @@ const STATUS_CONFIG = {
 };
 
 export default function WaitlistView() {
+  const { user } = useAuth();
+  const tz = user?.timezone || 'America/Chicago';
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -109,7 +113,7 @@ export default function WaitlistView() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-dental-500"></div>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500"></div>
       </div>
     );
   }
@@ -120,7 +124,7 @@ export default function WaitlistView() {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-            <ClipboardList className="w-7 h-7 text-dental-500" />
+            <ClipboardList className="w-7 h-7 text-primary-500" />
             Waitlist
           </h2>
           <p className="text-gray-500 mt-1">
@@ -157,7 +161,7 @@ export default function WaitlistView() {
               onClick={() => setFilterStatus(isActive ? '' : key)}
               className={`rounded-xl border p-3 text-left transition-all ${
                 isActive
-                  ? `${cfg.bg} ${cfg.border} ring-2 ring-offset-1 ring-dental-300`
+                  ? `${cfg.bg} ${cfg.border} ring-2 ring-offset-1 ring-primary-300`
                   : 'bg-white border-gray-200 hover:border-gray-300'
               }`}
             >
@@ -262,13 +266,13 @@ export default function WaitlistView() {
 
                     {/* Timeline details */}
                     <div className="flex items-center gap-4 mt-1 text-xs text-gray-400">
-                      <span>Added {new Date(entry.created_at).toLocaleDateString()}</span>
+                      <span>Added {formatDate(entry.created_at, tz)}</span>
                       {entry.notified_at && (
-                        <span>Notified {new Date(entry.notified_at).toLocaleDateString()}</span>
+                        <span>Notified {formatDate(entry.notified_at, tz)}</span>
                       )}
                       {entry.booked_at && (
                         <span className="text-green-600">
-                          Booked {new Date(entry.booked_at).toLocaleDateString()}
+                          Booked {formatDate(entry.booked_at, tz)}
                         </span>
                       )}
                     </div>

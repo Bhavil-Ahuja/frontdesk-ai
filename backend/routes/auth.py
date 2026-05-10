@@ -52,7 +52,7 @@ class RegisterRequest(BaseModel):
     """New tenant registration — extends the onboarding payload with a password."""
     slug: str = Field(..., min_length=2, max_length=100, pattern=r"^[a-z0-9_-]+$")
     business_name: str = Field(..., min_length=2, max_length=255)
-    business_type: str = "dental"
+    business_type: str = "custom"
     owner_name: str = Field(..., min_length=2, max_length=255)
     owner_email: str
     owner_phone: Optional[str] = None

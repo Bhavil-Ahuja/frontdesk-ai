@@ -44,9 +44,9 @@ TENANT_2_ID = uuid.UUID("22222222-2222-2222-2222-222222222222")
 
 def _make_mock_tenant(
     tenant_id=TENANT_1_ID,
-    slug="smilecare",
-    business_name="SmileCare Dental",
-    business_type_val="dental",
+    slug="acme-clinic",
+    business_name="Acme Clinic",
+    business_type_val="custom",
     vapi_assistant_id="asst_abc123",
     status_val="ACTIVE",
     calcom_api_key="cal_key_abc",
@@ -55,14 +55,14 @@ def _make_mock_tenant(
     twilio_phone_number="+15551234567",
     timezone_val="America/Chicago",
     demo_mode=True,
-    agent_name="Sarah",
+    agent_name="Alex",
     escalation_phone="+15559990000",
     escalation_transfer_number="",
     calcom_event_types=None,
     appointment_types=None,
     knowledge_base=None,
     emergency_guidance="",
-    greeting_message="Thank you for calling SmileCare Dental.",
+    greeting_message="Thank you for calling Acme Clinic.",
 ):
     """Create a mock Tenant ORM object."""
     from unittest.mock import MagicMock
@@ -85,22 +85,22 @@ def _make_mock_tenant(
     t.vapi_phone_number_id = "phone_id_test"
     t.vapi_webhook_secret = "secret_test"
     t.calcom_api_key = calcom_api_key
-    t.calcom_username = "smilecare"
-    t.calcom_event_types = calcom_event_types or {"cleaning": "5560055", "consultation": "5560050"}
+    t.calcom_username = "acme-clinic"
+    t.calcom_event_types = calcom_event_types or {"consultation": "5560050", "follow_up": "5560055"}
     t.twilio_account_sid = twilio_account_sid
     t.twilio_auth_token = twilio_auth_token
     t.twilio_phone_number = twilio_phone_number
     t.escalation_phone = escalation_phone
     t.escalation_transfer_number = escalation_transfer_number
     t.appointment_types = appointment_types or [
-        {"key": "cleaning", "label": "Routine Cleaning", "duration_minutes": 60},
         {"key": "consultation", "label": "Consultation", "duration_minutes": 45},
+        {"key": "follow_up", "label": "Follow-up Visit", "duration_minutes": 30},
     ]
     t.business_hours = None
     t.knowledge_base = knowledge_base or {}
     t.emergency_guidance = emergency_guidance
     t.owner_name = "Dr. Smith"
-    t.owner_email = "dr.smith@smilecare.com"
+    t.owner_email = "dr.smith@acme-clinic.com"
     t.owner_phone = "+15551111111"
     t.plan = MagicMock(value="starter")
     t.status = MagicMock(value=status_val)
@@ -129,16 +129,16 @@ def test_tenant_context_creation():
     ctx = _make_tenant_context()
 
     _assert(str(ctx.tenant_id) == str(TENANT_1_ID), "tenant_id matches")
-    _assert(ctx.slug == "smilecare", "slug matches")
-    _assert(ctx.business_name == "SmileCare Dental", "business_name matches")
-    _assert(ctx.business_type == "dental", "business_type matches")
+    _assert(ctx.slug == "acme-clinic", "slug matches")
+    _assert(ctx.business_name == "Acme Clinic", "business_name matches")
+    _assert(ctx.business_type == "custom", "business_type matches")
     _assert(ctx.timezone == "America/Chicago", "timezone matches")
     _assert(ctx.demo_mode is True, "demo_mode matches")
-    _assert(ctx.agent_name == "Sarah", "agent_name matches")
+    _assert(ctx.agent_name == "Alex", "agent_name matches")
     _assert(ctx.vapi_assistant_id == "asst_abc123", "vapi_assistant_id matches")
     _assert(ctx.calcom_api_key == "cal_key_abc", "calcom_api_key matches")
     _assert(ctx.twilio_account_sid == "AC_test123", "twilio_account_sid matches")
-    _assert(ctx.noemail_address == "noemail@smilecare.scheduler.ai", "noemail_address generated correctly")
+    _assert(ctx.noemail_address == "noemail@acme-clinic.scheduler.ai", "noemail_address generated correctly")
 
     # Immutability (frozen dataclass)
     try:
@@ -157,13 +157,13 @@ def test_event_type_mapping():
 
     ctx = _make_tenant_context()
 
-    _assert(ctx.get_event_type_id("cleaning") == "5560055", "cleaning → correct event type")
     _assert(ctx.get_event_type_id("consultation") == "5560050", "consultation → correct event type")
+    _assert(ctx.get_event_type_id("follow_up") == "5560055", "follow_up → correct event type")
     _assert(ctx.get_event_type_id("unknown_type") == "5560050", "unknown falls back to consultation")
-    # "Routine Cleaning" → "routine_cleaning" key (not in mock), falls back to "consultation"
-    _assert(ctx.get_event_type_id("Routine Cleaning") == "5560050", "unknown title-case falls back to consultation")
-    # Direct key match
-    _assert(ctx.get_event_type_id("Cleaning") == "5560055", "single-word title case normalised to key")
+    # "Follow Up" → "follow_up" key (direct match)
+    _assert(ctx.get_event_type_id("Follow Up") == "5560055", "title-case normalised to key")
+    # Unknown title-case falls back to consultation
+    _assert(ctx.get_event_type_id("Some Unknown Type") == "5560050", "unknown title-case falls back to consultation")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -184,7 +184,7 @@ def test_cache():
     _cache_set("test_key", ctx)
     cached = _cache_get("test_key")
     _assert(cached is not None, "cache hit after set")
-    _assert(cached.slug == "smilecare", "cached value correct")
+    _assert(cached.slug == "acme-clinic", "cached value correct")
 
     # Miss
     _assert(_cache_get("nonexistent") is None, "cache miss returns None")
@@ -256,8 +256,8 @@ def test_sms_service_tenant_params():
 
     ctx = _make_tenant_context()
 
-    _assert(_business_name(ctx) == "SmileCare Dental", "business name from tenant")
-    _assert(_business_name(None) == "SmileCare Dental", "business name falls back to settings.OFFICE_NAME")
+    _assert(_business_name(ctx) == "Acme Clinic", "business name from tenant")
+    _assert(_business_name(None) != "", "business name falls back to settings.OFFICE_NAME")
 
     sid, token, from_num = _resolve_twilio(ctx)
     _assert(sid == "AC_test123", "Twilio SID from tenant")
@@ -334,7 +334,7 @@ def test_calendar_service_tenant_config():
 def test_system_prompt_uses_tenant():
     print("\n── Test 10: System prompt is parameterised by tenant config ──")
 
-    from backend.prompts.dental_agent import build_system_prompt
+    from backend.prompts.agent_prompt import build_system_prompt
 
     ctx = _make_tenant_context(
         agent_name="Emily",
@@ -361,12 +361,12 @@ def test_system_prompt_uses_tenant():
 def test_system_prompt_default_fallback():
     print("\n── Test 11: System prompt falls back to defaults without tenant ──")
 
-    from backend.prompts.dental_agent import build_system_prompt
+    from backend.prompts.agent_prompt import build_system_prompt
 
     prompt = build_system_prompt(tenant_ctx=None)
 
-    _assert("Sarah" in prompt, "default agent name 'Sarah'")
-    _assert("SmileCare Dental" in prompt, "default business name")
+    _assert("Alex" in prompt, "default agent name 'Alex'")
+    _assert("Our Office" in prompt, "default business name")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -376,7 +376,7 @@ def test_system_prompt_default_fallback():
 def test_patient_context_with_tenant():
     print("\n── Test 12: Patient context in prompt uses tenant business name ──")
 
-    from backend.prompts.dental_agent import build_system_prompt
+    from backend.prompts.agent_prompt import build_system_prompt
 
     ctx = _make_tenant_context(business_name="City Hospital")
 
@@ -452,8 +452,8 @@ def test_tenant_isolation_concept():
 
     ctx1 = _make_tenant_context(
         tenant_id=TENANT_1_ID,
-        slug="smilecare",
-        business_name="SmileCare Dental",
+        slug="acme-clinic",
+        business_name="Acme Clinic",
         vapi_assistant_id="asst_1",
         calcom_api_key="cal_key_1",
     )
@@ -593,7 +593,7 @@ def test_noemail_address():
 def test_prompt_dental_emergency_default():
     print("\n── Test 22: Dental business type gets dental emergency guidance ──")
 
-    from backend.prompts.dental_agent import build_system_prompt
+    from backend.prompts.agent_prompt import build_system_prompt
 
     ctx = _make_tenant_context(business_type_val="dental", emergency_guidance="")
 
@@ -605,7 +605,7 @@ def test_prompt_dental_emergency_default():
 def test_prompt_custom_emergency():
     print("\n── Test 23: Custom emergency guidance overrides default ──")
 
-    from backend.prompts.dental_agent import build_system_prompt
+    from backend.prompts.agent_prompt import build_system_prompt
 
     ctx = _make_tenant_context(
         business_type_val="veterinary",
@@ -718,12 +718,12 @@ def test_calendar_demo_slots_with_tenant():
 def test_different_tenants_different_prompts():
     print("\n── Test 28: Different tenants produce different system prompts ──")
 
-    from backend.prompts.dental_agent import build_system_prompt
+    from backend.prompts.agent_prompt import build_system_prompt
 
-    ctx_dental = _make_tenant_context(
+    ctx_clinic = _make_tenant_context(
         agent_name="Sarah",
-        business_name="SmileCare Dental",
-        business_type_val="dental",
+        business_name="Downtown Clinic",
+        business_type_val="clinic",
     )
     ctx_vet = _make_tenant_context(
         agent_name="Max",
@@ -732,11 +732,11 @@ def test_different_tenants_different_prompts():
         emergency_guidance="For pet emergencies, call the animal ER.",
     )
 
-    prompt_dental = build_system_prompt(tenant_ctx=ctx_dental)
+    prompt_clinic = build_system_prompt(tenant_ctx=ctx_clinic)
     prompt_vet = build_system_prompt(tenant_ctx=ctx_vet)
 
-    _assert(prompt_dental != prompt_vet, "prompts are different for different tenants")
-    _assert("SmileCare Dental" in prompt_dental, "dental prompt mentions correct business")
+    _assert(prompt_clinic != prompt_vet, "prompts are different for different tenants")
+    _assert("Downtown Clinic" in prompt_clinic, "clinic prompt mentions correct business")
     _assert("Happy Paws Vet" in prompt_vet, "vet prompt mentions correct business")
     _assert("Max" in prompt_vet, "vet prompt uses correct agent name")
     _assert("animal ER" in prompt_vet, "vet prompt has custom emergency guidance")

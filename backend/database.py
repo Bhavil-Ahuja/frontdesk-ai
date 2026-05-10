@@ -41,6 +41,19 @@ _MIGRATIONS: list[str] = [
     "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS reminder_settings JSONB DEFAULT '{\"24h_enabled\": true, \"2h_enabled\": true, \"confirmation_reply_enabled\": true}'::jsonb",
     "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS review_settings JSONB DEFAULT '{\"enabled\": false, \"google_review_link\": \"\", \"delay_hours\": 24, \"appointment_types\": []}'::jsonb",
 
+    # ── tenants table — test caller phone for Test Agent chat
+    "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS test_caller_phone VARCHAR(20)",
+    # Backfill existing tenants with a random +155501XXX test phone
+    "UPDATE tenants SET test_caller_phone = '+155501' || (100 + floor(random() * 100))::int::text WHERE test_caller_phone IS NULL",
+
+    # ── tenants table — multiple test caller phones (JSONB array)
+    "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS test_caller_phones JSONB DEFAULT '[]'::jsonb",
+    # Backfill: seed array from existing single test_caller_phone if not yet populated
+    """UPDATE tenants
+       SET test_caller_phones = jsonb_build_array(test_caller_phone)
+       WHERE test_caller_phone IS NOT NULL
+         AND (test_caller_phones IS NULL OR test_caller_phones = '[]'::jsonb)""",
+
     # ── appointments table — provider, extra reminders, patient confirmation
     "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS provider_id UUID REFERENCES providers(id)",
     "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS reminder_2h_sent_at TIMESTAMPTZ",

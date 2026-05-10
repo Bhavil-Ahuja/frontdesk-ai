@@ -14,6 +14,7 @@ import {
   Users,
   ClipboardList,
   MessagesSquare,
+  Contact,
 } from 'lucide-react';
 
 import Dashboard from './components/Dashboard';
@@ -32,6 +33,7 @@ import ProtectedRoute from './components/ProtectedRoute';
 import ProviderManager from './components/ProviderManager';
 import WaitlistView from './components/WaitlistView';
 import SMSConversations from './components/SMSConversations';
+import PatientCRM from './components/PatientCRM';
 import { useAuth } from './contexts/AuthContext';
 
 // ── Tenant nav (always visible to logged-in tenants) ─────────────────────────
@@ -41,6 +43,7 @@ const TENANT_NAV = [
   { to: '/setup', icon: Rocket, label: 'Setup Guide' },
   { to: '/chat', icon: MessageSquare, label: 'Test Agent', chatOnly: true },
   { to: '/calls', icon: Phone, label: 'Call Logs' },
+  { to: '/patients', icon: Contact, label: 'Patients' },
   { to: '/appointments', icon: CalendarDays, label: 'Appointments' },
   { to: '/providers', icon: Users, label: 'Providers' },
   { to: '/waitlist', icon: ClipboardList, label: 'Waitlist' },
@@ -75,7 +78,7 @@ export default function App() {
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-dental-500"></div>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500"></div>
       </div>
     );
   }
@@ -136,7 +139,7 @@ function AppShell() {
         {/* Logo */}
         <div className="p-6 border-b border-gray-100">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-dental-500 rounded-xl flex items-center justify-center">
+            <div className="w-10 h-10 bg-primary-500 rounded-xl flex items-center justify-center">
               <Sparkles className="w-6 h-6 text-white" />
             </div>
             <div className="min-w-0">
@@ -160,7 +163,7 @@ function AppShell() {
                 className={({ isActive }) =>
                   `flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors ${
                     isActive
-                      ? 'bg-dental-50 text-dental-700'
+                      ? 'bg-primary-50 text-primary-700'
                       : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
                   }`
                 }
@@ -216,7 +219,7 @@ function AppShell() {
         {/* User card + logout */}
         <div className="p-4 border-t border-gray-100">
           <div className="flex items-center gap-3 px-2 py-2 mb-2">
-            <div className="w-8 h-8 bg-dental-100 text-dental-700 rounded-full flex items-center justify-center text-xs font-semibold shrink-0">
+            <div className="w-8 h-8 bg-primary-100 text-primary-700 rounded-full flex items-center justify-center text-xs font-semibold shrink-0">
               {(user?.owner_name || user?.email || '?').charAt(0).toUpperCase()}
             </div>
             <div className="min-w-0 flex-1">
@@ -273,6 +276,14 @@ function AppShell() {
             element={
               <ProtectedRoute>
                 <CallLogs />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/patients"
+            element={
+              <ProtectedRoute>
+                <PatientCRM />
               </ProtectedRoute>
             }
           />

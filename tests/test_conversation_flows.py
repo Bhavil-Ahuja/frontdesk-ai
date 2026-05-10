@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from openai import OpenAI
 
-from backend.prompts.dental_agent import build_system_prompt
+from backend.prompts.agent_prompt import build_system_prompt
 from backend.routes import llm_proxy
 from backend.services.llm_service import TOOLS
 
@@ -159,13 +159,13 @@ async def mock_execute_tool(name, args, tenant_ctx=None):
             return {
                 "ok": True,
                 "summary_for_assistant": (
-                    "Sarah Johnson has 1 upcoming appointment: Cleaning on Monday, May 11, 2026 at 10:00 AM. "
+                    "Sarah Johnson has 1 upcoming appointment: Follow-up Visit on Monday, May 11, 2026 at 10:00 AM. "
                     "Tell the patient about their appointment naturally. "
                     "If they want to reschedule, use the booking_uid with reschedule_appointment."
                 ),
                 "patient_name": "Sarah Johnson",
                 "upcoming": [{
-                    "type": "Cleaning",
+                    "type": "Follow-up Visit",
                     "date": "Monday, May 11, 2026",
                     "time": "10:00 AM",
                     "booking_uid": "MOCK-UID-789",
@@ -221,7 +221,7 @@ async def run_flow(name, turns, system_prompt, model="llama3.2:latest", patient_
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "assistant",
-         "content": "Thank you for calling SmileCare Dental. This is Sarah. How can I help you today?"},
+         "content": "Thank you for calling. This is your AI assistant. How can I help you today?"},
     ]
 
     for turn in turns:
@@ -279,26 +279,26 @@ MOCK_RETURNING_PATIENT = {
         "name": "Sarah Johnson",
         "phone": "+15125551234",
         "dob": "03/15/1985",
-        "insurance": "Delta Dental",
+        "insurance": "BlueCross",
         "is_new_patient": False,
         "visit_count": 4,
-        "preferred_type": "cleaning",
+        "preferred_type": "follow_up",
         "allergies": None,
         "notes": None,
     },
     "upcoming_appointments": [
         {
-            "type": "Cleaning",
+            "type": "Follow-up Visit",
             "date": "Monday, May 11, 2026",
             "time": "10:00 AM",
             "booking_uid": "MOCK-UID-789",
         }
     ],
     "past_appointments": [
-        {"type": "Cleaning", "date": "November 10, 2025", "status": "COMPLETED"},
+        {"type": "Follow-up Visit", "date": "November 10, 2025", "status": "COMPLETED"},
         {"type": "Consultation", "date": "May 5, 2025", "status": "COMPLETED"},
     ],
-    "last_visit": {"type": "Cleaning", "date": "November 10, 2025"},
+    "last_visit": {"type": "Follow-up Visit", "date": "November 10, 2025"},
     "months_since_last_visit": 6,
 }
 
@@ -310,15 +310,15 @@ MOCK_RETURNING_PATIENT_NO_UPCOMING = {
         "insurance": "Aetna",
         "is_new_patient": False,
         "visit_count": 2,
-        "preferred_type": "cleaning",
+        "preferred_type": "consultation",
         "allergies": "Penicillin",
         "notes": "Prefers morning appointments",
     },
     "upcoming_appointments": [],
     "past_appointments": [
-        {"type": "Cleaning", "date": "December 15, 2025", "status": "COMPLETED"},
+        {"type": "Consultation", "date": "December 15, 2025", "status": "COMPLETED"},
     ],
-    "last_visit": {"type": "Cleaning", "date": "December 15, 2025"},
+    "last_visit": {"type": "Consultation", "date": "December 15, 2025"},
     "months_since_last_visit": 5,
 }
 
@@ -377,28 +377,28 @@ def all_flows():
 
         # Flow 3: pricing question
         ("Pricing", [
-            {"user": "How much is a cleaning?",
+            {"user": "How much is a consultation?",
              "checks": [
                  ("natural_reply", is_natural),
-                 ("mentions_price", lambda r: mentions_any(r, ["150", "200", "$"])),
+                 ("mentions_price", lambda r: mentions_any(r, ["50", "100", "$"])),
              ]},
         ]),
 
         # Flow 4: insurance
         ("Insurance", [
-            {"user": "Do you accept Delta Dental?",
+            {"user": "Do you accept BlueCross?",
              "checks": [
                  ("natural_reply", is_natural),
-                 ("mentions_yes", lambda r: mentions_any(r, ["yes", "accept", "delta"])),
+                 ("mentions_yes", lambda r: mentions_any(r, ["yes", "accept", "blue"])),
              ]},
         ]),
 
-        # Flow 5: dental anxiety — empathetic answer
+        # Flow 5: anxiety — empathetic answer
         ("Anxiety", [
             {"user": "I'm really nervous about coming in.",
              "checks": [
                  ("natural_reply", is_natural),
-                 ("empathy", lambda r: mentions_any(r, ["common", "comfortable", "nitrous", "understand", "help", "relax", "anxiety"])),
+                 ("empathy", lambda r: mentions_any(r, ["common", "comfortable", "understand", "help", "relax", "anxiety", "gentle"])),
              ]},
         ]),
 
@@ -423,12 +423,12 @@ def all_flows():
              ]},
         ]),
 
-        # Flow 8: emergency — tooth pain
+        # Flow 8: emergency — urgent pain
         ("Emergency", [
-            {"user": "I'm in really bad pain. My tooth is killing me.",
+            {"user": "I'm in really bad pain and I need to be seen right away.",
              "checks": [
                  ("natural_reply", is_natural),
-                 ("acknowledges_pain", lambda r: mentions_any(r, ["sorry", "pain", "understand", "help", "emergency", "same day"])),
+                 ("acknowledges_pain", lambda r: mentions_any(r, ["sorry", "pain", "understand", "help", "emergency", "same day", "urgent"])),
              ]},
         ]),
 
@@ -482,12 +482,12 @@ def all_flows():
 
         # ─── TIER 1: Caller Recognition & Returning Patient Flows ────────
 
-        # Flow: returning patient — Sarah should greet by name, NOT ask for info
+        # Flow: returning patient — agent should greet by name, NOT ask for info
         ("ReturningPatient_Greeting", [
-            {"user": "Hi, I'd like to schedule a cleaning.",
+            {"user": "Hi, I'd like to schedule a follow-up.",
              "checks": [
                  ("natural_reply", is_natural),
-                 ("knows_name_or_context", lambda r: mentions_any(r, ["Sarah", "welcome back", "cleaning", "schedule", "happy to help"])),
+                 ("knows_name_or_context", lambda r: mentions_any(r, ["Sarah", "welcome back", "follow", "schedule", "happy to help"])),
                  ("doesnt_ask_name", lambda r: mentions_none(r, ["what is your name", "may I have your name", "can I get your name"])),
              ]},
         ], MOCK_RETURNING_PATIENT),
@@ -498,7 +498,7 @@ def all_flows():
              "checks": [
                  ("natural_reply", is_natural),
                  ("references_appointment", lambda r: mentions_any(r, [
-                     "cleaning", "may 11", "monday", "10", "upcoming",
+                     "follow", "may 11", "monday", "10", "upcoming",
                  ])),
              ]},
         ], MOCK_RETURNING_PATIENT),
@@ -515,18 +515,18 @@ def all_flows():
 
         # Flow: returning patient wants to reschedule
         ("ReturningPatient_Reschedule", [
-            {"user": "I need to move my cleaning appointment to a different day.",
+            {"user": "I need to move my appointment to a different day.",
              "checks": [
                  ("natural_reply", is_natural),
                  ("acknowledges_reschedule", lambda r: mentions_any(r, [
-                     "reschedule", "move", "change", "different", "may 11", "cleaning", "which day", "when",
+                     "reschedule", "move", "change", "different", "may 11", "follow", "which day", "when",
                  ])),
              ]},
         ], MOCK_RETURNING_PATIENT),
 
         # Flow: returning patient — pre-filled booking (doesn't ask for DOB/phone again)
         ("ReturningPatient_QuickBook", [
-            {"user": "Can I schedule a cleaning for Tuesday?",
+            {"user": "Can I schedule an appointment for Tuesday?",
              "checks": [
                  ("natural_reply", is_natural),
                  ("offers_times", lambda r: mentions_any(r, ["9", "11", "3", "am", "pm", "morning", "afternoon"])),
@@ -541,7 +541,7 @@ def all_flows():
         # Critical: turn 1 must NOT falsely claim a booking is confirmed
         # because no patient info or chosen slot has been provided yet.
         ("Booking_Multiturn", [
-            {"user": "I'd like to book a cleaning for Monday.",
+            {"user": "I'd like to book an appointment for Monday.",
              "checks": [
                  ("natural_reply", is_natural),
                  ("offers_times_or_asks_info",

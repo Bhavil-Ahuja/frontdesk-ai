@@ -37,12 +37,12 @@ class Settings:
     # ── PostgreSQL ────────────────────────────────────────────────────────
     DATABASE_URL: str = os.getenv(
         "DATABASE_URL",
-        "postgresql+asyncpg://dental_user:dental_pass@localhost:5432/dental_agent",
+        "postgresql+asyncpg://scheduler_user:scheduler_pass@localhost:5432/scheduler_ai",
     )
 
     # ── App ───────────────────────────────────────────────────────────────
     # ESCALATION_PHONE_NUMBER → number that receives the SMS alert when a
-    #   caller asks for a human. Set this to the office cell / dentist's phone.
+    #   caller asks for a human. Set this to the office cell / manager's phone.
     # ESCALATION_TRANSFER_NUMBER → if set, Vapi will live-transfer the caller
     #   to this number via the `transferCall` predefined tool. Leave blank to
     #   instead end the call gracefully with a "we'll call you back" message
@@ -77,8 +77,9 @@ class Settings:
     def get_event_type_id(self, appointment_type: str) -> str:
         """Map an appointment type string to the corresponding Cal.com event type ID."""
         mapping = {
+            "new_client": self.CALCOM_EVENT_TYPE_ID_NEW_PATIENT,
             "new_patient": self.CALCOM_EVENT_TYPE_ID_NEW_PATIENT,
-            "cleaning": self.CALCOM_EVENT_TYPE_ID_CLEANING,
+            "follow_up": self.CALCOM_EVENT_TYPE_ID_CLEANING,
             "emergency": self.CALCOM_EVENT_TYPE_ID_EMERGENCY,
             "consultation": self.CALCOM_EVENT_TYPE_ID_CONSULTATION,
         }

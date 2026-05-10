@@ -1,12 +1,12 @@
-# 🦷 SmileCare Dental AI Voice Agent
+# Scheduler.ai — Multi-Tenant AI Voice Agent Platform
 
-A production-demo-ready AI-powered voice agent for dental offices. Handles inbound phone calls, answers patient questions, books/reschedules/cancels appointments, sends SMS confirmations, and provides a full admin dashboard — all powered by a local LLM.
+A production-demo-ready AI-powered voice agent platform for **any business type** — clinics, dental offices, veterinary practices, salons, hospitals, physiotherapy centres, and more. Handles inbound phone calls, answers questions, books/reschedules/cancels appointments, sends SMS confirmations, and provides a full admin dashboard — all powered by a local LLM.
 
 ## Architecture
 
 ```
 ┌──────────────┐     ┌───────────────┐     ┌──────────────────────┐
-│  Patient      │     │   Vapi.ai     │     │   FastAPI Backend    │
+│  Caller       │     │   Vapi.ai     │     │   FastAPI Backend    │
 │  Phone Call   │────▶│  (STT + TTS)  │────▶│   POST /webhook/vapi │
 └──────────────┘     └───────────────┘     └──────────┬───────────┘
                                                        │
@@ -15,9 +15,8 @@ A production-demo-ready AI-powered voice agent for dental offices. Handles inbou
                           ▼                            ▼                ▼
                   ┌───────────────┐          ┌────────────────┐  ┌──────────┐
                   │  Ollama       │          │  Cal.com API   │  │  Twilio  │
-                  │  qwen2.5:7b   │          │  (Scheduling)  │  │  (SMS)   │
-                  │  (Local LLM)  │          └────────────────┘  └──────────┘
-                  └───────────────┘
+                  │  (Local LLM)  │          │  (Scheduling)  │  │  (SMS)   │
+                  └───────────────┘          └────────────────┘  └──────────┘
                           │
                           ▼
                   ┌───────────────┐          ┌────────────────────────────┐
@@ -26,15 +25,29 @@ A production-demo-ready AI-powered voice agent for dental offices. Handles inbou
                   └───────────────┘          └────────────────────────────┘
 ```
 
+## Multi-Tenant & Multi-Vertical
+
+Each tenant (business) gets:
+- **Their own AI personality** — custom agent name, greeting, voice config
+- **Business-specific knowledge base** — services, pricing, FAQs, hours
+- **Per-vertical emergency guidance** — dental, hospital, veterinary, or custom
+- **Isolated data** — calls, appointments, patients scoped per tenant
+- **Independent integrations** — Vapi, Cal.com, Twilio, Google Calendar per tenant
+
+Supported business types: `dental`, `hospital`, `clinic`, `veterinary`, `physiotherapy`, `custom`
+
 ## Features
 
-- **AI Voice Receptionist** — Natural phone conversations powered by Ollama + qwen2.5:7b
+- **AI Voice Receptionist** — Natural phone conversations powered by a local LLM (Ollama)
 - **Appointment Scheduling** — Book, reschedule, and cancel via Cal.com integration
-- **SMS Notifications** — Automated confirmations and cancellations via Twilio
-- **Emergency Triage** — Handles dental emergencies with appropriate urgency
-- **Smart Escalation** — Transfers to humans when needed (billing disputes, distressed patients)
+- **SMS Notifications** — Automated confirmations, reminders, and follow-ups via Twilio
+- **Emergency Triage** — Handles urgent situations with appropriate guidance per business type
+- **Smart Escalation** — Transfers to humans when needed (billing disputes, distressed callers)
+- **Provider Management** — Multiple practitioners per office with individual calendars
 - **Admin Dashboard** — Real-time stats, call logs with transcripts, appointment calendar
 - **Editable Knowledge Base** — Update office info, services, FAQs from the dashboard
+- **Google Review Solicitation** — Automated post-visit review requests
+- **SMS Two-Way Chat** — Patients can confirm, reschedule, or cancel via text
 - **Demo Mode** — Works fully offline with simulated SMS and calendar responses
 
 ## Prerequisites
@@ -64,7 +77,7 @@ cp .env.example .env
 ### 2. Pull the LLM model
 
 ```bash
-ollama pull qwen2.5:7b
+ollama pull qwen3:8b
 ```
 
 ### 3. Start the database
@@ -156,7 +169,7 @@ See the Deployment section below — no tunnel needed.
 1. Sign up at [cal.com](https://cal.com)
 2. Go to **Settings → Developer → API Keys**
 3. Create a key → `CALCOM_API_KEY`
-4. Create event types for each appointment type (New Patient, Cleaning, Emergency, Consultation)
+4. Create event types for each appointment type your business needs (e.g. Consultation, Follow-up, Emergency)
 5. Copy each event type ID from the URL (e.g., `/event-types/123`) into the corresponding `.env` variable
 
 ### Twilio
@@ -166,32 +179,47 @@ See the Deployment section below — no tunnel needed.
 4. Copy Auth Token → `TWILIO_AUTH_TOKEN`
 5. Buy a phone number → `TWILIO_PHONE_NUMBER` (format: `+15551234567`)
 
-## Customization for Real Dental Offices
+## Customization for Your Business
 
 ### 1. Update `.env`
-- Change `OFFICE_NAME` to the practice name
+- Change `OFFICE_NAME` to your business name
 - Set `OFFICE_TIMEZONE` to the correct timezone
-- Set `ESCALATION_PHONE_NUMBER` to the office's real number
+- Set `ESCALATION_PHONE_NUMBER` to your real reception number
 - Set `DEMO_MODE=false` for production
 
 ### 2. Edit the Knowledge Base
 Either use the dashboard UI at `/knowledge` or directly edit:
 ```
-backend/knowledge/dental_kb.json
+backend/knowledge/default_kb.json
 ```
 
 Update:
 - Office name, address, phone, hours
 - Insurance providers accepted
 - Services and pricing
-- FAQs specific to the practice
+- FAQs specific to your business
 
 ### 3. Customize the System Prompt
-Edit `backend/prompts/dental_agent.py` to:
-- Change the agent's name (default: "Sarah")
+Edit `backend/prompts/agent_prompt.py` to:
+- Change the agent's name (default: "Alex")
 - Adjust personality traits
-- Add practice-specific policies
+- Add business-specific policies
 - Modify emergency protocols
+
+### 4. Onboard via the Admin API
+For multi-tenant setups, onboard each business through the tenant API:
+```bash
+POST /api/tenants/onboard
+{
+  "slug": "my-clinic",
+  "business_name": "My Clinic",
+  "business_type": "clinic",
+  "owner_name": "Dr. Jones",
+  "owner_email": "jones@myclinic.com"
+}
+```
+
+Each tenant gets their own knowledge base, agent personality, and integrations.
 
 ## Demo Walkthrough
 
@@ -206,7 +234,7 @@ Edit `backend/prompts/dental_agent.py` to:
 ### Testing a Live Call (with Vapi)
 1. Ensure Vapi is configured and your server is publicly accessible
 2. Call the Vapi phone number
-3. Talk to "Sarah" — try booking an appointment
+3. Talk to the AI agent — try booking an appointment
 4. Watch the call appear in real-time on the dashboard
 5. Check SMS delivery (or logs in demo mode)
 
@@ -246,11 +274,15 @@ Edit `backend/prompts/dental_agent.py` to:
 | `GET` | `/api/config` | Get agent config |
 | `PUT` | `/api/config` | Update agent config |
 | `POST` | `/webhook/vapi` | Vapi webhook handler |
+| `POST` | `/webhook/sms` | Twilio SMS webhook |
+| `POST` | `/api/tenants/onboard` | Onboard new tenant |
+| `GET` | `/api/tenants` | List all tenants |
+| `GET` | `/api/providers` | List providers |
 
 ## Tech Stack
 
 - **Backend:** Python 3.11+, FastAPI, SQLAlchemy (async), Pydantic
-- **LLM:** Ollama + qwen2.5:7b (local, OpenAI-compatible API)
+- **LLM:** Ollama (local, OpenAI-compatible API)
 - **Voice:** Vapi.ai (STT, TTS, phone call orchestration)
 - **Scheduling:** Cal.com v2 API
 - **SMS:** Twilio

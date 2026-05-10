@@ -1,10 +1,10 @@
 """
-Provider model — represents an individual practitioner (dentist, hygienist, etc.)
+Provider model — represents an individual practitioner (doctor, therapist, etc.)
 within a tenant's practice.
 
 Each provider can have:
   - Their own Google Calendar (calendar_id) or share the tenant's primary
-  - A subset of appointment types they handle (e.g. hygienists do cleanings)
+  - A subset of appointment types they handle (e.g. only consultations)
   - Custom business hours that override the tenant defaults
   - An active/inactive flag for vacation / leave
 
@@ -30,10 +30,10 @@ class Provider(Base):
 
     # Identity
     name = Column(String(255), nullable=False)       # "Dr. Sarah Patel"
-    title = Column(String(100), nullable=True)        # "DDS", "DMD", "RDH" (Registered Dental Hygienist)
+    title = Column(String(100), nullable=True)        # e.g. "DDS", "MD", "LMT", or any professional credential
 
     # Which appointment types this provider handles
-    # e.g. ["cleaning", "consultation"]  — empty list means ALL types
+    # e.g. ["consultation", "follow_up"]  — empty list means ALL types
     appointment_types = Column(JSONB, nullable=False, default=list)
 
     # Optional Google Calendar ID for this specific provider.

@@ -160,7 +160,7 @@ export default function SetupGuide() {
   if (loading) {
     return (
       <div className="p-8 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-dental-500"></div>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500"></div>
       </div>
     );
   }
@@ -170,8 +170,8 @@ export default function SetupGuide() {
       {/* Header */}
       <div>
         <div className="flex items-center gap-3 mb-2">
-          <div className="w-10 h-10 bg-dental-50 rounded-xl flex items-center justify-center">
-            <Sparkles className="w-5 h-5 text-dental-500" />
+          <div className="w-10 h-10 bg-primary-50 rounded-xl flex items-center justify-center">
+            <Sparkles className="w-5 h-5 text-primary-500" />
           </div>
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Welcome, {user?.business_name}!</h1>
@@ -226,7 +226,7 @@ export default function SetupGuide() {
               {allReady && (
                 <Link
                   to="/"
-                  className="inline-flex items-center gap-2 px-4 py-2 bg-dental-500 text-white rounded-lg text-sm font-medium hover:bg-dental-600 transition-colors"
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-primary-500 text-white rounded-lg text-sm font-medium hover:bg-primary-600 transition-colors"
                 >
                   Go to Dashboard
                   <ArrowRight className="w-4 h-4" />

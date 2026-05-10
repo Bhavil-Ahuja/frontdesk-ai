@@ -13,6 +13,8 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
+import { useAuth } from '../contexts/AuthContext';
+import { formatDateTime, formatTime, isSameDay } from '../lib/timezone';
 
 const STATUS_STYLES = {
   CONFIRMED: 'bg-green-100 text-green-700 border-green-200',
@@ -32,6 +34,8 @@ const TYPE_COLORS = {
 };
 
 export default function AppointmentManager() {
+  const { user } = useAuth();
+  const tz = user?.timezone || 'America/Chicago';
   const [appointments, setAppointments] = useState([]);
   const [selectedApt, setSelectedApt] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -108,20 +112,13 @@ export default function AppointmentManager() {
   });
 
   function getAppointmentsForDay(date) {
-    return appointments.filter((a) => {
-      const aptDate = new Date(a.scheduled_at);
-      return (
-        aptDate.getFullYear() === date.getFullYear() &&
-        aptDate.getMonth() === date.getMonth() &&
-        aptDate.getDate() === date.getDate()
-      );
-    });
+    return appointments.filter((a) => isSameDay(a.scheduled_at, date, tz));
   }
 
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-dental-500"></div>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500"></div>
       </div>
     );
   }
@@ -139,7 +136,7 @@ export default function AppointmentManager() {
             onClick={handleSyncGcal}
             disabled={syncing}
             title="Sync with Google Calendar"
-            className="flex items-center gap-2 px-3 py-2 rounded-lg border border-dental-200 bg-dental-50 text-dental-700 hover:bg-dental-100 transition-colors disabled:opacity-50 text-sm font-medium"
+            className="flex items-center gap-2 px-3 py-2 rounded-lg border border-primary-200 bg-primary-50 text-primary-700 hover:bg-primary-100 transition-colors disabled:opacity-50 text-sm font-medium"
           >
             <CalendarCheck className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
             {syncing ? 'Syncing…' : 'Sync GCal'}
@@ -160,7 +157,7 @@ export default function AppointmentManager() {
           </button>
           <button
             onClick={() => setWeekOffset(0)}
-            className="px-3 py-2 text-sm font-medium text-dental-600 bg-dental-50 rounded-lg hover:bg-dental-100 transition-colors"
+            className="px-3 py-2 text-sm font-medium text-primary-600 bg-primary-50 rounded-lg hover:bg-primary-100 transition-colors"
           >
             This Week
           </button>
@@ -180,7 +177,7 @@ export default function AppointmentManager() {
       )}
 
       {syncResult && (
-        <div className="bg-dental-50 border border-dental-200 rounded-xl p-3 text-sm text-dental-700 flex items-center justify-between">
+        <div className="bg-primary-50 border border-primary-200 rounded-xl p-3 text-sm text-primary-700 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <CalendarCheck className="w-4 h-4" />
             <span>
@@ -189,7 +186,7 @@ export default function AppointmentManager() {
               {syncResult.errors > 0 && <span className="text-amber-600 ml-1">({syncResult.errors} errors)</span>}
             </span>
           </div>
-          <button onClick={() => setSyncResult(null)} className="p-1 hover:bg-dental-100 rounded">
+          <button onClick={() => setSyncResult(null)} className="p-1 hover:bg-primary-100 rounded">
             <X className="w-3 h-3" />
           </button>
         </div>
@@ -212,17 +209,17 @@ export default function AppointmentManager() {
             <div
               key={day.toISOString()}
               className={`bg-white rounded-xl border min-h-[200px] ${
-                isToday ? 'border-dental-400 ring-1 ring-dental-200' : 'border-gray-200'
+                isToday ? 'border-primary-400 ring-1 ring-primary-200' : 'border-gray-200'
               } ${isSunday ? 'opacity-50' : ''}`}
             >
               {/* Day header */}
               <div className={`px-3 py-2 border-b text-center ${
-                isToday ? 'bg-dental-50 border-dental-200' : 'bg-gray-50 border-gray-100'
+                isToday ? 'bg-primary-50 border-primary-200' : 'bg-gray-50 border-gray-100'
               }`}>
                 <p className="text-xs text-gray-500 uppercase">
                   {day.toLocaleDateString('en-US', { weekday: 'short' })}
                 </p>
-                <p className={`text-lg font-bold ${isToday ? 'text-dental-600' : 'text-gray-900'}`}>
+                <p className={`text-lg font-bold ${isToday ? 'text-primary-600' : 'text-gray-900'}`}>
                   {day.getDate()}
                 </p>
               </div>
@@ -246,10 +243,7 @@ export default function AppointmentManager() {
                         {apt.patient_name}
                       </p>
                       <p className="text-xs text-gray-500 mt-0.5">
-                        {new Date(apt.scheduled_at).toLocaleTimeString('en-US', {
-                          hour: 'numeric',
-                          minute: '2-digit',
-                        })}
+                        {formatTime(apt.scheduled_at, tz)}
                       </p>
                       <span
                         className={`inline-block mt-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${
@@ -289,7 +283,7 @@ export default function AppointmentManager() {
               <DetailRow
                 icon={Clock}
                 label="Scheduled"
-                value={new Date(selectedApt.scheduled_at).toLocaleString()}
+                value={formatDateTime(selectedApt.scheduled_at, tz)}
               />
               <DetailRow icon={Clock} label="Duration" value={`${selectedApt.duration_minutes} min`} />
 

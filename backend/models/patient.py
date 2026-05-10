@@ -33,7 +33,7 @@ class Patient(Base):
 
     # ── Clinical / preference ────────────────────────────────────────────
     insurance_provider = Column(String(255), nullable=True)
-    preferred_appointment_type = Column(String(100), nullable=True)  # e.g. "cleaning"
+    preferred_appointment_type = Column(String(100), nullable=True)  # e.g. "consultation"
     allergies = Column(Text, nullable=True)                          # free text
     notes = Column(Text, nullable=True)                              # receptionist notes
 

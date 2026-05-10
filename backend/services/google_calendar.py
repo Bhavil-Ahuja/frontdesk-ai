@@ -15,6 +15,7 @@ keep the dependency tree small (same pattern as Cal.com integration).
 """
 
 import logging
+import time
 import uuid
 from datetime import datetime, timedelta
 from typing import Any
@@ -23,6 +24,7 @@ from urllib.parse import urlencode
 import httpx
 
 from backend.config import settings
+from backend.services.http_client import http
 
 logger = logging.getLogger(__name__)
 
@@ -82,10 +84,9 @@ async def exchange_code(code: str) -> dict[str, Any]:
         "grant_type": "authorization_code",
         "redirect_uri": settings.GOOGLE_REDIRECT_URI,
     }
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.post(GOOGLE_TOKEN_URL, data=body)
-        resp.raise_for_status()
-        data = resp.json()
+    resp = await http.post(GOOGLE_TOKEN_URL, data=body)
+    resp.raise_for_status()
+    data = resp.json()
 
     logger.info("[GoogleCal] Token exchange successful (has_refresh=%s)",
                 bool(data.get("refresh_token")))
@@ -105,10 +106,9 @@ async def refresh_access_token(refresh_token: str) -> dict[str, Any]:
         "refresh_token": refresh_token,
         "grant_type": "refresh_token",
     }
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.post(GOOGLE_TOKEN_URL, data=body)
-        resp.raise_for_status()
-        data = resp.json()
+    resp = await http.post(GOOGLE_TOKEN_URL, data=body)
+    resp.raise_for_status()
+    data = resp.json()
 
     logger.debug("[GoogleCal] Token refresh successful")
     return data
@@ -116,13 +116,13 @@ async def refresh_access_token(refresh_token: str) -> dict[str, Any]:
 
 async def get_user_email(access_token: str) -> str:
     """Fetch the Google account email address for display purposes."""
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.get(
-            GOOGLE_USERINFO_URL,
-            headers={"Authorization": f"Bearer {access_token}"},
-        )
-        resp.raise_for_status()
-        return resp.json().get("email", "")
+    resp = await http.get(
+        GOOGLE_USERINFO_URL,
+        headers={"Authorization": f"Bearer {access_token}"},
+        timeout=10,
+    )
+    resp.raise_for_status()
+    return resp.json().get("email", "")
 
 
 # ── Calendar API operations ──────────────────────────────────────────────────
@@ -135,10 +135,37 @@ def _cal_headers(access_token: str) -> dict[str, str]:
     }
 
 
+# ── Access token cache ─────────────────────────────────────────────────────
+# Google access tokens are valid for ~3600 seconds. Caching avoids a 5-10
+# second round-trip to oauth2.googleapis.com on EVERY Calendar API call.
+# We expire cached tokens 5 minutes early to avoid edge-case 401s.
+
+_TOKEN_CACHE: dict[str, tuple[str, float]] = {}  # refresh_token → (access_token, expires_at)
+_TOKEN_CACHE_MARGIN = 300  # refresh 5 minutes before actual expiry
+
+
 async def _get_access_token(refresh_token: str) -> str:
-    """Convenience: refresh and return just the access_token string."""
+    """Return a valid access token, using the cache when possible.
+
+    On a cache miss (first call or expired token), refreshes from Google
+    and caches the result. This turns a 5-10 second network round-trip
+    into a ~0ms dict lookup for subsequent calls within the hour.
+    """
+    now = time.time()
+    cached = _TOKEN_CACHE.get(refresh_token)
+    if cached:
+        token, expires_at = cached
+        if now < expires_at:
+            logger.debug("[GoogleCal] Using cached access token (%.0fs remaining)",
+                         expires_at - now)
+            return token
+
     data = await refresh_access_token(refresh_token)
-    return data["access_token"]
+    access_token = data["access_token"]
+    expires_in = data.get("expires_in", 3600)
+    _TOKEN_CACHE[refresh_token] = (access_token, now + expires_in - _TOKEN_CACHE_MARGIN)
+    logger.info("[GoogleCal] Refreshed + cached access token (expires_in=%ds)", expires_in)
+    return access_token
 
 
 _DOW_KEYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
@@ -234,14 +261,13 @@ async def get_available_slots(
             "maxResults": 500,
         }
 
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(
-                f"{GOOGLE_CALENDAR_BASE}/calendars/{calendar_id}/events",
-                headers=_cal_headers(access_token),
-                params=params,
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        resp = await http.get(
+            f"{GOOGLE_CALENDAR_BASE}/calendars/{calendar_id}/events",
+            headers=_cal_headers(access_token),
+            params=params,
+        )
+        resp.raise_for_status()
+        data = resp.json()
 
         # Extract event time ranges (skip all-day events and cancelled)
         event_ranges: list[tuple[datetime, datetime]] = []
@@ -396,14 +422,13 @@ async def book_appointment(
                 patient_name, start_time, duration_minutes)
 
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.post(
-                f"{GOOGLE_CALENDAR_BASE}/calendars/{calendar_id}/events",
-                headers=_cal_headers(access_token),
-                json=event_body,
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        resp = await http.post(
+            f"{GOOGLE_CALENDAR_BASE}/calendars/{calendar_id}/events",
+            headers=_cal_headers(access_token),
+            json=event_body,
+        )
+        resp.raise_for_status()
+        data = resp.json()
 
         event_id = data.get("id", "")
         result = {
@@ -463,14 +488,13 @@ async def list_events(
                 time_min, time_max, max_results)
 
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(
-                f"{GOOGLE_CALENDAR_BASE}/calendars/{calendar_id}/events",
-                headers=_cal_headers(access_token),
-                params=params,
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        resp = await http.get(
+            f"{GOOGLE_CALENDAR_BASE}/calendars/{calendar_id}/events",
+            headers=_cal_headers(access_token),
+            params=params,
+        )
+        resp.raise_for_status()
+        data = resp.json()
 
         events = data.get("items", [])
         logger.info("[GoogleCal] Listed %d events", len(events))
@@ -510,12 +534,11 @@ async def cancel_appointment(
     logger.info("[GoogleCal] Cancelling event: %s", event_id)
 
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.delete(
-                f"{GOOGLE_CALENDAR_BASE}/calendars/{calendar_id}/events/{event_id}",
-                headers=_cal_headers(access_token),
-            )
-            resp.raise_for_status()
+        resp = await http.delete(
+            f"{GOOGLE_CALENDAR_BASE}/calendars/{calendar_id}/events/{event_id}",
+            headers=_cal_headers(access_token),
+        )
+        resp.raise_for_status()
 
         logger.info("[GoogleCal] Event cancelled: %s", event_id)
         return True
@@ -574,13 +597,12 @@ async def reschedule_appointment(
     logger.info("[GoogleCal] Rescheduling event %s → %s", event_id, new_start_time)
 
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.patch(
-                f"{GOOGLE_CALENDAR_BASE}/calendars/{calendar_id}/events/{event_id}",
-                headers=_cal_headers(access_token),
-                json=patch_body,
-            )
-            resp.raise_for_status()
+        resp = await http.patch(
+            f"{GOOGLE_CALENDAR_BASE}/calendars/{calendar_id}/events/{event_id}",
+            headers=_cal_headers(access_token),
+            json=patch_body,
+        )
+        resp.raise_for_status()
 
         result = {
             "uid": f"gcal-{event_id}",

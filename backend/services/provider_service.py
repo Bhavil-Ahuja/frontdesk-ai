@@ -1,10 +1,10 @@
 """
-Provider service — CRUD and query operations for dental clinic providers.
+Provider service — CRUD and query operations for practice providers.
 
 Multi-tenant: every function accepts a tenant_id (or provider_id that implicitly
 belongs to one tenant) so that provider lookups and writes are scoped correctly.
 
-Providers are the practitioners (dentists, hygienists, etc.) who perform
+Providers are the practitioners (doctors, therapists, specialists, etc.) who perform
 appointments. Each provider can:
   - Handle a subset of appointment types (or all types if list is empty)
   - Have their own Google Calendar or share the tenant's primary calendar
@@ -278,7 +278,7 @@ async def get_providers_for_appointment_type(
     Args:
         tenant_id: UUID of the tenant.
         appointment_type: The appointment type key to match,
-            e.g. "cleaning", "consultation", "emergency".
+            e.g. "consultation", "follow_up", "emergency".
 
     Returns:
         List of matching provider dictionaries with id, name, and title.

@@ -8,6 +8,8 @@ import {
   Search,
 } from 'lucide-react';
 import { apiFetch, getToken } from '../lib/api';
+import { useAuth } from '../contexts/AuthContext';
+import { formatDateTime } from '../lib/timezone';
 
 const OUTCOME_STYLES = {
   BOOKED: 'bg-green-100 text-green-700',
@@ -18,6 +20,8 @@ const OUTCOME_STYLES = {
 };
 
 export default function CallLogs() {
+  const { user } = useAuth();
+  const tz = user?.timezone || 'America/Chicago';
   const [calls, setCalls] = useState([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -108,7 +112,7 @@ export default function CallLogs() {
         <select
           value={outcomeFilter}
           onChange={(e) => { setOutcomeFilter(e.target.value); setPage(1); }}
-          className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-dental-500 focus:border-dental-500 outline-none"
+          className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
         >
           <option value="">All Outcomes</option>
           <option value="BOOKED">Booked</option>
@@ -168,7 +172,7 @@ export default function CallLogs() {
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-600">
                       {call.started_at
-                        ? new Date(call.started_at).toLocaleString()
+                        ? formatDateTime(call.started_at, tz)
                         : '—'}
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-600">
@@ -203,9 +207,9 @@ export default function CallLogs() {
                       <td colSpan={5} className="px-6 py-4 bg-gray-50">
                         <div className="max-w-3xl">
                           {call.summary && (
-                            <div className="mb-4 p-3 bg-dental-50 rounded-lg">
-                              <p className="text-sm font-medium text-dental-700">Summary</p>
-                              <p className="text-sm text-dental-600 mt-1">{call.summary}</p>
+                            <div className="mb-4 p-3 bg-primary-50 rounded-lg">
+                              <p className="text-sm font-medium text-primary-700">Summary</p>
+                              <p className="text-sm text-primary-600 mt-1">{call.summary}</p>
                             </div>
                           )}
                           <p className="text-sm font-medium text-gray-700 mb-3">Transcript</p>
@@ -221,7 +225,7 @@ export default function CallLogs() {
                                   className={`max-w-md p-3 rounded-lg text-sm ${
                                     msg.role === 'assistant'
                                       ? 'bg-white border border-gray-200 text-gray-700'
-                                      : 'bg-dental-500 text-white'
+                                      : 'bg-primary-500 text-white'
                                   }`}
                                 >
                                   <p className="text-xs font-medium mb-1 opacity-70">

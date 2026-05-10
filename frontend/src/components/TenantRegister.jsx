@@ -63,7 +63,7 @@ const TIMEZONES = [
 const INITIAL_FORM = {
   slug: '',
   business_name: '',
-  business_type: 'dental',
+  business_type: 'custom',
   owner_name: '',
   owner_email: '',
   owner_phone: '',
@@ -147,7 +147,7 @@ export default function TenantRegister() {
     form.password.length === 0 || form.password === form.password_confirm;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-dental-50 via-gray-50 to-blue-50 py-12 px-4">
+    <div className="min-h-screen bg-gradient-to-br from-primary-50 via-gray-50 to-blue-50 py-12 px-4">
       <div className="max-w-3xl mx-auto">
         {/* Header */}
         <div className="text-center mb-8">
@@ -157,7 +157,7 @@ export default function TenantRegister() {
           >
             ← Back to home
           </Link>
-          <div className="mx-auto w-14 h-14 bg-dental-500 rounded-2xl flex items-center justify-center mb-4 shadow-lg shadow-dental-500/30">
+          <div className="mx-auto w-14 h-14 bg-primary-500 rounded-2xl flex items-center justify-center mb-4 shadow-lg shadow-primary-500/30">
             <Sparkles className="w-7 h-7 text-white" />
           </div>
           <h1 className="text-3xl font-bold text-gray-900">Get Started with Scheduler.ai</h1>
@@ -178,7 +178,7 @@ export default function TenantRegister() {
           {/* Business Information */}
           <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 space-y-5">
             <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-              <Building2 className="w-5 h-5 text-dental-500" />
+              <Building2 className="w-5 h-5 text-primary-500" />
               Business Information
             </h3>
 
@@ -191,10 +191,10 @@ export default function TenantRegister() {
                   type="text"
                   value={form.business_name}
                   onChange={(e) => handleBusinessNameChange(e.target.value)}
-                  placeholder="SmileCare Dental"
+                  placeholder="Sunrise Clinic"
                   required
                   minLength={2}
-                  className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-dental-500 focus:border-dental-500 outline-none"
+                  className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
                 />
               </div>
 
@@ -206,12 +206,12 @@ export default function TenantRegister() {
                   type="text"
                   value={form.slug}
                   onChange={(e) => handleSlugChange(e.target.value)}
-                  placeholder="smilecare-dental"
+                  placeholder="sunrise-clinic"
                   required
                   minLength={2}
                   maxLength={100}
                   pattern="^[a-z0-9_-]+$"
-                  className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-sm font-mono focus:ring-2 focus:ring-dental-500 focus:border-dental-500 outline-none"
+                  className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-sm font-mono focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
                 />
                 <p className="text-xs text-gray-400 mt-1">
                   Lowercase letters, numbers, hyphens only
@@ -225,7 +225,7 @@ export default function TenantRegister() {
                 <select
                   value={form.business_type}
                   onChange={(e) => updateField('business_type', e.target.value)}
-                  className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-dental-500 focus:border-dental-500 outline-none"
+                  className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
                 >
                   {BUSINESS_TYPES.map((bt) => (
                     <option key={bt.value} value={bt.value}>
@@ -240,7 +240,7 @@ export default function TenantRegister() {
                 <select
                   value={form.timezone}
                   onChange={(e) => updateField('timezone', e.target.value)}
-                  className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-dental-500 focus:border-dental-500 outline-none"
+                  className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
                 >
                   {TIMEZONES.map((tz) => (
                     <option key={tz} value={tz}>
@@ -255,7 +255,7 @@ export default function TenantRegister() {
           {/* Owner Contact */}
           <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 space-y-5">
             <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-              <User className="w-5 h-5 text-dental-500" />
+              <User className="w-5 h-5 text-primary-500" />
               Owner / Contact
             </h3>
 
@@ -273,7 +273,7 @@ export default function TenantRegister() {
                     placeholder="Dr. Jane Smith"
                     required
                     minLength={2}
-                    className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-dental-500 focus:border-dental-500 outline-none"
+                    className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
                   />
                 </div>
               </div>
@@ -288,10 +288,10 @@ export default function TenantRegister() {
                     type="email"
                     value={form.owner_email}
                     onChange={(e) => updateField('owner_email', e.target.value)}
-                    placeholder="jane@smilecare.com"
+                    placeholder="jane@sunrise-clinic.com"
                     required
                     autoComplete="email"
-                    className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-dental-500 focus:border-dental-500 outline-none"
+                    className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
                   />
                 </div>
                 <p className="text-xs text-gray-400 mt-1">
@@ -310,7 +310,7 @@ export default function TenantRegister() {
                     value={form.owner_phone}
                     onChange={(e) => updateField('owner_phone', e.target.value)}
                     placeholder="+1 (512) 555-0100"
-                    className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-dental-500 focus:border-dental-500 outline-none"
+                    className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
                   />
                 </div>
               </div>
@@ -320,7 +320,7 @@ export default function TenantRegister() {
           {/* Password */}
           <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 space-y-5">
             <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-              <Lock className="w-5 h-5 text-dental-500" />
+              <Lock className="w-5 h-5 text-primary-500" />
               Create a Password
             </h3>
 
@@ -339,7 +339,7 @@ export default function TenantRegister() {
                     required
                     minLength={8}
                     autoComplete="new-password"
-                    className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-dental-500 focus:border-dental-500 outline-none"
+                    className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
                   />
                 </div>
                 <p className="text-xs text-gray-400 mt-1">Minimum 8 characters</p>
@@ -361,7 +361,7 @@ export default function TenantRegister() {
                     autoComplete="new-password"
                     className={`w-full pl-10 pr-4 py-2.5 border rounded-lg text-sm focus:ring-2 outline-none ${
                       passwordsMatch
-                        ? 'border-gray-200 focus:ring-dental-500 focus:border-dental-500'
+                        ? 'border-gray-200 focus:ring-primary-500 focus:border-primary-500'
                         : 'border-red-300 focus:ring-red-500 focus:border-red-500'
                     }`}
                   />
@@ -376,7 +376,7 @@ export default function TenantRegister() {
           {/* Plan Selection */}
           <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 space-y-5">
             <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-              <CreditCard className="w-5 h-5 text-dental-500" />
+              <CreditCard className="w-5 h-5 text-primary-500" />
               Choose a Plan
             </h3>
 
@@ -388,7 +388,7 @@ export default function TenantRegister() {
                   onClick={() => updateField('plan', plan.value)}
                   className={`text-left p-4 rounded-xl border-2 transition-all ${
                     form.plan === plan.value
-                      ? 'border-dental-500 bg-dental-50 ring-1 ring-dental-500'
+                      ? 'border-primary-500 bg-primary-50 ring-1 ring-primary-500'
                       : 'border-gray-200 hover:border-gray-300'
                   }`}
                 >
@@ -396,7 +396,7 @@ export default function TenantRegister() {
                     <span className="text-sm font-semibold text-gray-900">{plan.label}</span>
                     <span
                       className={`text-sm font-bold ${
-                        form.plan === plan.value ? 'text-dental-600' : 'text-gray-500'
+                        form.plan === plan.value ? 'text-primary-600' : 'text-gray-500'
                       }`}
                     >
                       {plan.price}
@@ -428,14 +428,14 @@ export default function TenantRegister() {
           <div className="flex items-center justify-between gap-4 pt-2">
             <p className="text-sm text-gray-500">
               Already have an account?{' '}
-              <Link to="/login" className="font-medium text-dental-600 hover:text-dental-700">
+              <Link to="/login" className="font-medium text-primary-600 hover:text-primary-700">
                 Sign in
               </Link>
             </p>
             <button
               type="submit"
               disabled={!isValid() || submitting}
-              className="flex items-center gap-2 px-6 py-3 bg-dental-500 text-white rounded-lg text-sm font-medium hover:bg-dental-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-lg shadow-dental-500/30"
+              className="flex items-center gap-2 px-6 py-3 bg-primary-500 text-white rounded-lg text-sm font-medium hover:bg-primary-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-lg shadow-primary-500/30"
             >
               {submitting ? (
                 <>

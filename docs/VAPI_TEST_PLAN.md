@@ -1,4 +1,4 @@
-# Vapi Live Test Plan — SmileCare Dental AI Voice Agent
+# Vapi Live Test Plan — Scheduler.ai Voice Agent
 
 This document lists every scenario you should exercise on a real Vapi call,
 grouped by category. It's the manual companion to the deterministic flow
@@ -10,7 +10,7 @@ suite at `tests/test_conversation_flows.py`.
 
 **You do NOT need to configure a system prompt in Vapi.** The backend's
 `llm_proxy.py` always discards whatever Vapi sends and injects our own
-~9.7 KB dental prompt from `backend/prompts/dental_agent.py`. Whatever you
+system prompt from `backend/prompts/agent_prompt.py`. Whatever you
 type in Vapi's "System Prompt" field is irrelevant.
 
 ### Recommended Vapi assistant config
@@ -18,11 +18,11 @@ type in Vapi's "System Prompt" field is irrelevant.
 | Field              | Value                                                                 |
 |--------------------|-----------------------------------------------------------------------|
 | Provider           | Custom LLM                                                            |
-| Model              | `llama3.2:latest`                                                     |
+| Model              | `qwen3:8b` (or your configured Ollama model)                         |
 | Custom LLM URL     | `<your-lhr-url>/api/llm` (no trailing `/chat/completions`)            |
-| System Prompt      | leave blank or `You are a dental receptionist.` — does not matter     |
+| System Prompt      | leave blank or `You are a receptionist.` — does not matter            |
 | First Message Mode | Assistant speaks first                                                |
-| First Message      | `Thank you for calling SmileCare Dental. This is Sarah. How can I help you today?` |
+| First Message      | `Thank you for calling. How can I help you today?`                    |
 
 ---
 
@@ -43,7 +43,7 @@ Run this once before calling — keeps the model resident in RAM:
 ```bash
 curl -s http://localhost:11434/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model":"llama3.2:latest","messages":[{"role":"user","content":"hi"}],"max_tokens":5}' >/dev/null
+  -d '{"model":"qwen3:8b","messages":[{"role":"user","content":"hi"}],"max_tokens":5}' >/dev/null
 ```
 
 After that, Ollama keeps the model loaded for ~5 minutes of inactivity.
@@ -61,21 +61,20 @@ After that, Ollama keeps the model loaded for ~5 minutes of inactivity.
 ---
 
 ## Category 1 — Information / Q&A
-**Tools expected:** none. **Latency target:** 1–2 s per reply.
+**Tools expected:** `get_office_info`. **Latency target:** 1–2 s per reply.
 
-Run all of these in one call, listening for natural responses with no awkward "let me check" pauses.
+Run all of these in one call, listening for natural responses.
 
 | Say                                  | Expect to hear (key elements)                                         | Should NOT happen                |
 |--------------------------------------|-----------------------------------------------------------------------|----------------------------------|
 | "Hi."                                | Friendly 1-line greeting, asks how to help                            | No transfer talk, no date/time   |
-| "What are your hours?"               | Mon–Fri 8–6, Sat 9–2, closed Sunday                                   | No tool call delay               |
-| "Where are you located?"             | 123 Oak Street, Austin TX 78701                                       | —                                |
-| "Do you accept Delta Dental?"        | "Yes, we accept Delta Dental" (may list other providers)              | —                                |
-| "How much is a cleaning?"            | "$150 to $200"                                                        | —                                |
-| "How much for a root canal?"         | $700–900 (front tooth) or $1000–1400 (molar)                          | —                                |
-| "Do you treat kids?"                 | "Yes, all ages…"                                                      | —                                |
-| "What payment methods do you take?"  | Credit cards, HSA/FSA, CareCredit                                     | —                                |
-| "I'm really nervous about coming in."| Empathetic; mentions nitrous oxide / hand signals / breaks            | No tool call                     |
+| "What are your hours?"               | Business hours from KB (varies per tenant)                            | No tool call delay               |
+| "Where are you located?"             | Address from KB                                                       | —                                |
+| "Do you accept my insurance?"        | Lists accepted providers or asks which plan                           | —                                |
+| "How much is a consultation?"        | Price range from KB                                                   | —                                |
+| "What services do you offer?"        | Service list from KB                                                  | —                                |
+| "What payment methods do you take?"  | Credit cards, HSA/FSA, financing options, etc.                        | —                                |
+| "I'm really nervous about coming in."| Empathetic; mentions comfort, patience, breaks                        | No tool call                     |
 
 **Pass criteria:** Each answer arrives in 1–2 seconds, sounds natural, no JSON or technical leaks.
 
@@ -88,16 +87,15 @@ Start a fresh call for clean conversation state.
 
 | Say                                | Expect to hear                                            | Backend log should show                            |
 |------------------------------------|-----------------------------------------------------------|----------------------------------------------------|
-| "Do you have any slots Tuesday?"   | "Yes, on Tuesday May 5th we have 9 AM, 11 AM, 3 PM…"      | `get_available_slots(date="2026-05-05")`           |
-| "Got any time tomorrow morning?"   | Lists Monday May 4 morning slots                          | `get_available_slots(date="2026-05-04")`           |
-| "Can I book for next Monday?"      | Lists May 11 slots                                        | `get_available_slots(date="2026-05-11")`           |
-| "Anything today?"                  | "Sorry, we're closed today / no availability — try another day?" | `get_available_slots(date="2026-05-03")` returns 0 |
+| "Do you have any slots Tuesday?"   | "Yes, on Tuesday we have 9 AM, 11 AM, 3 PM…"             | `get_available_slots(date="...")`                  |
+| "Got any time tomorrow morning?"   | Lists tomorrow's morning slots                            | `get_available_slots(date="...")`                  |
+| "Can I book for next Monday?"      | Lists Monday's slots                                      | `get_available_slots(date="...")`                  |
+| "Anything today?"                  | "Sorry, no availability — try another day?"               | `get_available_slots(date="...")` returns 0         |
 
 **Pass criteria:**
 - Real Cal.com slots are spoken naturally
 - **No JSON, no field names, no slot strings like `T09:00:00`**
 - Reply in 2–4 seconds
-- If the backend log shows a date that doesn't match the day name the patient said, the date corrector will fix it — look for a log line like `📅 Date correction: model said '2026-05-03' → user-implied '2026-05-04'`
 
 ---
 
@@ -105,28 +103,28 @@ Start a fresh call for clean conversation state.
 **Tools expected:** `get_available_slots` then `book_appointment`. **Latency target:** 3–5 s per turn. Use a **fresh call**.
 
 ### Turn 1
-**You say:** *"I'd like to book a cleaning for Monday."*
+**You say:** *"I'd like to book an appointment for Monday."*
 
 - **Hear:** 2–3 Monday times offered (e.g. "9, 10, or 2 PM")
-- **Backend log:** `get_available_slots(date="2026-05-04", appointment_type="cleaning")`
+- **Backend log:** `get_available_slots(date="...", appointment_type="...")`
 - **Watch for:** should NOT say "your appointment is booked" yet
 
 ### Turn 2
 **You say:** *"10 AM works. My name is John Smith, born May 1st 1990, phone 512-555-1234."*
 
-- **Hear:** "Booked for Monday May 4 at 10 AM. You'll get an SMS confirmation."
+- **Hear:** "Booked for Monday at 10 AM. You'll get an SMS confirmation."
 - **Backend log:** `book_appointment(...)` — then a real Cal.com booking is created
 - **Twilio SMS** arrives at the phone number you gave (use **your real cell** for this test)
 
 ### Pass criteria
 - Cal.com dashboard shows a new booking at <https://app.cal.com/bookings>
 - SMS arrives within 5 seconds of "booked" being spoken
-- Sarah does **not** ask for your email (the server fills it in automatically)
+- Agent does **not** ask for your email (the server fills it in automatically)
 - Total flow finishes in under 30 seconds wall-clock
 
 ### Failure modes to listen for
-- "Confirmed" said in Turn 1 before you gave any info (false confirm — should be impossible due to server-side validation)
-- Wrong day-of-week label ("Tuesday May 4" instead of "Monday May 4")
+- "Confirmed" said in Turn 1 before you gave any info (false confirm)
+- Wrong day-of-week label
 - "What's your email?" — should never be asked
 
 ---
@@ -151,11 +149,10 @@ Each in a fresh call:
 
 | Say                                          | Expect to hear                                                              |
 |----------------------------------------------|-----------------------------------------------------------------------------|
-| "I'm in really bad pain. My tooth is killing me." | Sympathetic; offers same-day emergency slot OR escalates                |
-| "My tooth got knocked out."                  | "Keep it moist in milk, come in within 30 minutes…"                         |
-| "I have severe swelling on my face."         | Treats as urgent; advises ER if severe; offers same-day                     |
+| "I'm in really bad pain and need to be seen." | Sympathetic; offers same-day emergency slot OR escalates                   |
+| "I'm having a severe allergic reaction."      | Treats as urgent; advises ER if severe; offers same-day                    |
 | "I have chest pain."                         | Should escalate immediately (chest pain is in the prompt's escalation triggers) |
-| "I have a really loose filling."             | Practical advice + offer to book ASAP                                       |
+| "It's an emergency, can I come in today?"     | Prioritizes urgency, checks for same-day availability                       |
 
 **Pass criteria:** Empathy first, then action. Never diagnoses. Never sounds robotic during a stressful scenario.
 
@@ -208,7 +205,7 @@ Plus optionally `escalate_to_human` if you trigger a transfer scenario.
    cd dental-voice-agent
    venv/bin/python tests/test_conversation_flows.py
    ```
-3. If the suite passes (56/56) but the live call failed → it's likely a model flake or Vapi/SSH layer issue (network, cold-start, audio transcription mishearing).
+3. If the suite passes but the live call failed → it's likely a model flake or Vapi/SSH layer issue (network, cold-start, audio transcription mishearing).
 4. If the suite fails → add a new flow that captures your scenario, find the bug at the LLM-proxy layer, fix it, then retest.
 
 ---
@@ -217,10 +214,10 @@ Plus optionally `escalate_to_human` if you trigger a transfer scenario.
 
 - **Empty/missing fields on `book_appointment`** — server rejects with a corrective message; LLM has to ask for what's missing.
 - **Wrong day-of-week → date** — server resolves "Monday" / "tomorrow" / "next Tuesday" from the user's actual message and overrides the model.
-- **Email asked of patient** — system prompt forbids it; server fills `noemail@smilecaredental.com` automatically.
+- **Email asked of patient** — system prompt forbids it; server fills `noemail@<tenant>.scheduler.ai` automatically.
 - **Wrong year in slot_time** — server forces `datetime.now().year` and matches by hour-of-day.
 - **Wrong timezone format** — smart slot matcher finds the matching real Cal.com slot ignoring the timezone the LLM emitted.
 - **Explicit human request** — server short-circuits the LLM, calls `escalate_to_human` directly.
 - **Tool-eagerness on greetings** — server suppresses tool definitions for short non-scheduling messages.
-- **Qwen3 `<think>` tag leaks** — server strips them before returning (defensive against model swap).
-- **Vapi's generic system prompt** — server always replaces with our 9.7 KB dental prompt.
+- **`<think>` tag leaks** — server strips them before returning (defensive against model swap).
+- **Vapi's generic system prompt** — server always replaces with the tenant-parameterised prompt.

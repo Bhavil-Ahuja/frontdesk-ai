@@ -19,7 +19,7 @@ export default function Landing() {
       <header className="border-b border-gray-100">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 bg-dental-500 rounded-xl flex items-center justify-center">
+            <div className="w-9 h-9 bg-primary-500 rounded-xl flex items-center justify-center">
               <Sparkles className="w-5 h-5 text-white" />
             </div>
             <span className="font-bold text-gray-900 text-lg">Scheduler.ai</span>
@@ -33,7 +33,7 @@ export default function Landing() {
             </Link>
             <Link
               to="/register"
-              className="text-sm font-medium px-4 py-2 bg-dental-500 text-white rounded-lg hover:bg-dental-600 transition-colors"
+              className="text-sm font-medium px-4 py-2 bg-primary-500 text-white rounded-lg hover:bg-primary-600 transition-colors"
             >
               Get started
             </Link>
@@ -43,12 +43,12 @@ export default function Landing() {
 
       {/* Hero */}
       <section className="max-w-6xl mx-auto px-6 py-20 text-center">
-        <div className="inline-flex items-center gap-2 px-3 py-1 bg-dental-50 text-dental-700 rounded-full text-xs font-medium mb-6">
+        <div className="inline-flex items-center gap-2 px-3 py-1 bg-primary-50 text-primary-700 rounded-full text-xs font-medium mb-6">
           <Zap className="w-3.5 h-3.5" />
           AI-Powered Voice Agents for Healthcare
         </div>
         <h1 className="text-5xl font-bold text-gray-900 leading-tight max-w-3xl mx-auto">
-          Never miss a patient call <span className="text-dental-500">again</span>
+          Never miss a patient call <span className="text-primary-500">again</span>
         </h1>
         <p className="text-lg text-gray-500 mt-6 max-w-2xl mx-auto">
           Scheduler.ai answers your front desk calls 24/7, books appointments through Cal.com,
@@ -57,7 +57,7 @@ export default function Landing() {
         <div className="mt-8 flex items-center justify-center gap-3">
           <Link
             to="/register"
-            className="inline-flex items-center gap-2 px-6 py-3 bg-dental-500 text-white rounded-lg text-sm font-medium hover:bg-dental-600 transition-colors shadow-lg shadow-dental-500/30"
+            className="inline-flex items-center gap-2 px-6 py-3 bg-primary-500 text-white rounded-lg text-sm font-medium hover:bg-primary-600 transition-colors shadow-lg shadow-primary-500/30"
           >
             Register your business
             <ArrowRight className="w-4 h-4" />
@@ -141,14 +141,14 @@ export default function Landing() {
 
       {/* CTA */}
       <section className="max-w-3xl mx-auto px-6 py-16 text-center">
-        <div className="bg-gradient-to-br from-dental-500 to-dental-600 rounded-3xl p-12 text-white">
+        <div className="bg-gradient-to-br from-primary-500 to-primary-600 rounded-3xl p-12 text-white">
           <h2 className="text-3xl font-bold mb-3">Ready to stop missing calls?</h2>
-          <p className="text-dental-50 text-lg mb-6">
+          <p className="text-primary-50 text-lg mb-6">
             Get started in minutes — no credit card required.
           </p>
           <Link
             to="/register"
-            className="inline-flex items-center gap-2 px-6 py-3 bg-white text-dental-600 rounded-lg text-sm font-semibold hover:bg-dental-50 transition-colors"
+            className="inline-flex items-center gap-2 px-6 py-3 bg-white text-primary-600 rounded-lg text-sm font-semibold hover:bg-primary-50 transition-colors"
           >
             Register now
             <ArrowRight className="w-4 h-4" />
@@ -167,8 +167,8 @@ export default function Landing() {
 
 function Feature({ icon: Icon, title, description }) {
   return (
-    <div className="p-6 rounded-2xl border border-gray-200 hover:border-dental-300 hover:shadow-lg transition-all">
-      <div className="w-10 h-10 rounded-lg bg-dental-50 text-dental-600 flex items-center justify-center mb-4">
+    <div className="p-6 rounded-2xl border border-gray-200 hover:border-primary-300 hover:shadow-lg transition-all">
+      <div className="w-10 h-10 rounded-lg bg-primary-50 text-primary-600 flex items-center justify-center mb-4">
         <Icon className="w-5 h-5" />
       </div>
       <h3 className="font-semibold text-gray-900 mb-2">{title}</h3>
@@ -180,7 +180,7 @@ function Feature({ icon: Icon, title, description }) {
 function Step({ number, title, description }) {
   return (
     <div className="flex items-start gap-4 p-5 rounded-xl border border-gray-200">
-      <div className="shrink-0 w-9 h-9 rounded-full bg-dental-500 text-white flex items-center justify-center font-bold text-sm">
+      <div className="shrink-0 w-9 h-9 rounded-full bg-primary-500 text-white flex items-center justify-center font-bold text-sm">
         {number}
       </div>
       <div>

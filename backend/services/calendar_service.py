@@ -15,6 +15,7 @@ credentials, timezone, and event type mappings for the calling tenant.
 """
 
 import logging
+import time
 from datetime import datetime
 from typing import Any
 
@@ -23,10 +24,39 @@ import httpx
 from backend.config import settings
 from backend.services import native_scheduling
 from backend.services import google_calendar as gcal
+from backend.services.http_client import http
 
 logger = logging.getLogger(__name__)
 
 CALCOM_BASE = "https://api.cal.com/v2"
+
+# ── Slot availability cache ─────────────────────────────────────────────────
+# During a single booking conversation the LLM often asks for the same date
+# range 2-3 times (e.g. confirm → re-check → book). A short TTL avoids
+# redundant Google Calendar / Cal.com API calls without risking stale data.
+_SLOT_CACHE_TTL = 30  # seconds
+_slot_cache: dict[str, tuple[float, list[str]]] = {}
+
+
+def _slot_cache_key(
+    event_type_id: str,
+    date_from: str,
+    date_to: str,
+    tenant_slug: str,
+    appointment_type_key: str,
+    provider_id: str | None,
+) -> str:
+    return f"{tenant_slug}:{event_type_id}:{date_from}:{date_to}:{appointment_type_key}:{provider_id or ''}"
+
+
+def invalidate_slot_cache(tenant_slug: str | None = None) -> None:
+    """Clear cached slots — call after a booking/cancel/reschedule."""
+    if tenant_slug:
+        keys = [k for k in _slot_cache if k.startswith(f"{tenant_slug}:")]
+        for k in keys:
+            del _slot_cache[k]
+    else:
+        _slot_cache.clear()
 
 
 def _headers(api_key: str) -> dict[str, str]:
@@ -62,7 +92,7 @@ def _resolve_appointment_config(
     """
     Resolve ``duration_minutes`` and ``max_concurrent`` from the tenant's
     appointment_types config for the given appointment type key (e.g.
-    "consultation", "cleaning").
+    "consultation", "follow_up").
 
     Falls back to (60, 1) if no match or no tenant context.
     """
@@ -136,11 +166,28 @@ async def get_available_slots(
     Returns:
         List of available slot ISO datetime strings.
     """
+    # ── Check slot cache first ─────────────────────────────────────────
+    slug = tenant_ctx.slug if tenant_ctx else "default"
+    cache_key = _slot_cache_key(event_type_id, date_from, date_to, slug, appointment_type_key, provider_id)
+    cached = _slot_cache.get(cache_key)
+    if cached:
+        ts, slots = cached
+        if (time.time() - ts) < _SLOT_CACHE_TTL:
+            logger.info("[Calendar][%s] Slot cache HIT (%d slots, %.0fs old)",
+                        slug, len(slots), time.time() - ts)
+            return slots
+        del _slot_cache[cache_key]
+
     api_key, tz = _resolve_calcom_config(tenant_ctx)
 
     # Resolve provider-specific overrides (calendar_id, business hours)
     prov_calendar_id, prov_hours = await _resolve_provider_overrides(provider_id, tenant_ctx)
     effective_hours = prov_hours or (tenant_ctx.business_hours if tenant_ctx else None)
+
+    def _cache_and_return(result: list[str]) -> list[str]:
+        """Store result in short-TTL cache before returning."""
+        _slot_cache[cache_key] = (time.time(), result)
+        return result
 
     # ── Priority 1: Google Calendar (if connected) ──────────────────────
     if tenant_ctx and tenant_ctx.google_calendar_connected and tenant_ctx.google_calendar_refresh_token:
@@ -148,7 +195,7 @@ async def get_available_slots(
         cal_id = prov_calendar_id or "primary"
         logger.info("[Calendar][%s] Using Google Calendar for availability (type=%s, duration=%d, max_concurrent=%d, calendar=%s)",
                     tenant_ctx.slug, appointment_type_key, duration, max_conc, cal_id)
-        return await gcal.get_available_slots(
+        return _cache_and_return(await gcal.get_available_slots(
             refresh_token=tenant_ctx.google_calendar_refresh_token,
             date_from=date_from,
             date_to=date_to,
@@ -157,7 +204,7 @@ async def get_available_slots(
             business_hours=effective_hours,
             max_concurrent=max_conc,
             calendar_id=cal_id,
-        )
+        ))
 
     # ── Priority 2: Cal.com (if API key is set) ─────────────────────────
     # (falls through to Cal.com HTTP calls below)
@@ -168,20 +215,20 @@ async def get_available_slots(
         logger.info("[Calendar] No Cal.com key for %s — using native scheduler (type=%s, duration=%d, max_concurrent=%d)",
                     tenant_ctx.slug, appointment_type_key, duration, max_conc)
 
-        return await native_scheduling.get_native_slots(
+        return _cache_and_return(await native_scheduling.get_native_slots(
             date_str=date_from,
             duration_minutes=duration,
             tenant_id=tenant_ctx.tenant_id,
             business_hours=effective_hours,
             tz_name=tz,
             max_concurrent=max_conc,
-        )
+        ))
 
     # ── Priority 4: Demo mode fallback (no real calendar configured) ────
     if _is_demo(tenant_ctx):
         demo_slots = _demo_slots(date_from)
         logger.info("[Cal.com DEMO] Returning %d fake slots for %s", len(demo_slots), date_from)
-        return demo_slots
+        return _cache_and_return(demo_slots)
 
     params = {
         "eventTypeId": event_type_id,
@@ -189,7 +236,6 @@ async def get_available_slots(
         "endTime": f"{date_to}T23:59:59Z",
         "timeZone": tz,
     }
-    slug = tenant_ctx.slug if tenant_ctx else "default"
     logger.info("=" * 60)
     logger.info("[Cal.com][%s] GET /slots/available", slug)
     logger.info("[Cal.com][%s]   event_type_id: %s", slug, event_type_id)
@@ -199,15 +245,14 @@ async def get_available_slots(
     logger.info("[Cal.com][%s]   full params:   %s", slug, params)
 
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(
-                f"{CALCOM_BASE}/slots/available",
-                headers=_headers(api_key),
-                params=params,
-            )
-            logger.info("[Cal.com][%s]   HTTP status:   %d", slug, resp.status_code)
-            resp.raise_for_status()
-            data = resp.json()
+        resp = await http.get(
+            f"{CALCOM_BASE}/slots/available",
+            headers=_headers(api_key),
+            params=params,
+        )
+        logger.info("[Cal.com][%s]   HTTP status:   %d", slug, resp.status_code)
+        resp.raise_for_status()
+        data = resp.json()
 
         # Log the raw API response
         import json as _json
@@ -232,7 +277,7 @@ async def get_available_slots(
 
         logger.info("[Cal.com][%s] TOTAL: %d available slots for event type %s", slug, len(slots), event_type_id)
         logger.info("=" * 60)
-        return slots
+        return _cache_and_return(slots)
 
     except httpx.HTTPStatusError as exc:
         logger.error("=" * 60)
@@ -279,6 +324,9 @@ async def book_appointment(
     """
     api_key, tz = _resolve_calcom_config(tenant_ctx)
     slug = tenant_ctx.slug if tenant_ctx else "default"
+
+    # Invalidate slot cache — the booking changes availability
+    invalidate_slot_cache(slug)
 
     # ── Priority 1: Google Calendar (if connected) ──────────────────────
     if tenant_ctx and tenant_ctx.google_calendar_connected and tenant_ctx.google_calendar_refresh_token:
@@ -338,20 +386,19 @@ async def book_appointment(
     logger.info("[Cal.com][%s]   REQUEST BODY:  %s", slug, _json.dumps(body, indent=2)[:1000])
 
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.post(
-                f"{CALCOM_BASE}/bookings",
-                headers=_headers(api_key),
-                json=body,
-            )
-            logger.info("[Cal.com][%s]   HTTP status:   %d", slug, resp.status_code)
+        resp = await http.post(
+            f"{CALCOM_BASE}/bookings",
+            headers=_headers(api_key),
+            json=body,
+        )
+        logger.info("[Cal.com][%s]   HTTP status:   %d", slug, resp.status_code)
 
-            # Log raw response even before raise_for_status
-            raw_text = resp.text[:2000]
-            logger.info("[Cal.com][%s]   RAW RESPONSE:  %s", slug, raw_text)
+        # Log raw response even before raise_for_status
+        raw_text = resp.text[:2000]
+        logger.info("[Cal.com][%s]   RAW RESPONSE:  %s", slug, raw_text)
 
-            resp.raise_for_status()
-            data = resp.json().get("data", {})
+        resp.raise_for_status()
+        data = resp.json().get("data", {})
 
         booking_result = {
             "id": str(data.get("id", "")),
@@ -393,6 +440,9 @@ async def reschedule_appointment(
     api_key, tz = _resolve_calcom_config(tenant_ctx)
     slug = tenant_ctx.slug if tenant_ctx else "default"
 
+    # Invalidate slot cache — reschedule changes availability
+    invalidate_slot_cache(slug)
+
     # ── Priority 1: Google Calendar (if the booking is a gcal event) ────
     if tenant_ctx and tenant_ctx.google_calendar_connected and tenant_ctx.google_calendar_refresh_token:
         if booking_uid.startswith("gcal-"):
@@ -426,16 +476,15 @@ async def reschedule_appointment(
     logger.info("[Cal.com][%s]   reason:    %s", slug, reason or "(none)")
 
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.post(
-                f"{CALCOM_BASE}/bookings/{booking_uid}/reschedule",
-                headers=_headers(api_key),
-                json={"rescheduledReason": reason, "start": new_start_time},
-            )
-            logger.info("[Cal.com][%s]   HTTP status: %d", slug, resp.status_code)
-            logger.info("[Cal.com][%s]   RAW RESPONSE: %s", slug, resp.text[:1000])
-            resp.raise_for_status()
-            data = resp.json().get("data", {})
+        resp = await http.post(
+            f"{CALCOM_BASE}/bookings/{booking_uid}/reschedule",
+            headers=_headers(api_key),
+            json={"rescheduledReason": reason, "start": new_start_time},
+        )
+        logger.info("[Cal.com][%s]   HTTP status: %d", slug, resp.status_code)
+        logger.info("[Cal.com][%s]   RAW RESPONSE: %s", slug, resp.text[:1000])
+        resp.raise_for_status()
+        data = resp.json().get("data", {})
 
         result = {"uid": data.get("uid", booking_uid), "new_start": new_start_time, "status": "RESCHEDULED"}
         logger.info("[Cal.com][%s] ✓ RESCHEDULED: %s → %s", slug, booking_uid, new_start_time)
@@ -464,6 +513,9 @@ async def cancel_appointment(
     api_key, _ = _resolve_calcom_config(tenant_ctx)
     slug = tenant_ctx.slug if tenant_ctx else "default"
 
+    # Invalidate slot cache — cancellation frees up availability
+    invalidate_slot_cache(slug)
+
     # ── Priority 1: Google Calendar (if the booking is a gcal event) ────
     if tenant_ctx and tenant_ctx.google_calendar_connected and tenant_ctx.google_calendar_refresh_token:
         if booking_uid.startswith("gcal-"):
@@ -488,15 +540,14 @@ async def cancel_appointment(
     logger.info("[Cal.com][%s]   reason: %s", slug, reason or "(none)")
 
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.post(
-                f"{CALCOM_BASE}/bookings/{booking_uid}/cancel",
-                headers=_headers(api_key),
-                json={"cancellationReason": reason},
-            )
-            logger.info("[Cal.com][%s]   HTTP status: %d", slug, resp.status_code)
-            logger.info("[Cal.com][%s]   RAW RESPONSE: %s", slug, resp.text[:1000])
-            resp.raise_for_status()
+        resp = await http.post(
+            f"{CALCOM_BASE}/bookings/{booking_uid}/cancel",
+            headers=_headers(api_key),
+            json={"cancellationReason": reason},
+        )
+        logger.info("[Cal.com][%s]   HTTP status: %d", slug, resp.status_code)
+        logger.info("[Cal.com][%s]   RAW RESPONSE: %s", slug, resp.text[:1000])
+        resp.raise_for_status()
 
         logger.info("[Cal.com][%s] ✓ CANCELLED booking %s", slug, booking_uid)
         logger.info("=" * 60)
@@ -546,15 +597,14 @@ async def list_bookings(
 
     logger.info("[Cal.com][%s] GET /bookings (params=%s)", slug, params)
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(
-                f"{CALCOM_BASE}/bookings",
-                headers=_headers(api_key),
-                params=params,
-            )
-            logger.info("[Cal.com][%s]   HTTP status: %d", slug, resp.status_code)
-            resp.raise_for_status()
-            data = resp.json()
+        resp = await http.get(
+            f"{CALCOM_BASE}/bookings",
+            headers=_headers(api_key),
+            params=params,
+        )
+        logger.info("[Cal.com][%s]   HTTP status: %d", slug, resp.status_code)
+        resp.raise_for_status()
+        data = resp.json()
 
         # Cal.com v2 returns { status, data: [...] }
         bookings = data.get("data") if isinstance(data, dict) else data

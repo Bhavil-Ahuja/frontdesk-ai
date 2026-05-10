@@ -3,8 +3,8 @@ System prompt builder for the AI voice agent.
 
 Multi-tenant: when a TenantContext is available, the prompt is parameterised
 with the tenant's business name, agent name, appointment types, timezone,
-emergency guidance, and knowledge base. Falls back to the legacy "SmileCare
-Dental / Sarah" defaults for backwards compatibility.
+emergency guidance, and knowledge base. Falls back to generic defaults for
+backwards compatibility.
 """
 
 from typing import Any
@@ -14,9 +14,9 @@ from typing import Any
 
 # ── Fallback defaults (legacy single-tenant mode) ───────────────────────────
 
-_DEFAULT_AGENT_NAME = "Sarah"
-_DEFAULT_BUSINESS_NAME = "SmileCare Dental"
-_DEFAULT_BUSINESS_TYPE = "dental"
+_DEFAULT_AGENT_NAME = "Alex"
+_DEFAULT_BUSINESS_NAME = "Our Office"
+_DEFAULT_BUSINESS_TYPE = "general"
 _DEFAULT_GREETING = "Thank you for calling. How can I help you today?"
 
 
@@ -51,10 +51,7 @@ def _build_static_prompt(
         if business_type == "dental":
             emergency_guidance = _DENTAL_EMERGENCY_GUIDANCE
         else:
-            emergency_guidance = (
-                "For any medical emergency, advise the caller to call 911 or go to the "
-                "nearest emergency room immediately. Offer to schedule a follow-up appointment."
-            )
+            emergency_guidance = _DEFAULT_EMERGENCY_GUIDANCE
 
     # Format business hours into human-readable text
     def _fmt_time(t: str) -> str:
@@ -177,10 +174,16 @@ _DENTAL_EMERGENCY_GUIDANCE = """- Severe toothache: Rinse with warm salt water, 
 - Abscess or swelling: Potentially serious infection, prioritize same-day, advise ER if severe
 - Bleeding not stopping: Apply gauze with firm pressure, ER if severe"""
 
+_DEFAULT_EMERGENCY_GUIDANCE = """- For any life-threatening emergency, advise the caller to call 911 immediately.
+- For urgent but non-life-threatening issues, offer the earliest available same-day or next-day slot.
+- If the situation is unclear, err on the side of caution and recommend professional evaluation.
+- Offer to have the office call them back if no immediate slots are available."""
+
 
 def build_system_prompt(
     patient_context: dict | None = None,
     tenant_ctx: Any | None = None,
+    caller_phone: str = "",
 ) -> str:
     """
     Assemble the full system prompt by combining:
@@ -188,10 +191,13 @@ def build_system_prompt(
     2. Current date context + day-of-week mappings
     3. Knowledge base content (from tenant DB or legacy file)
     4. Patient context (if caller recognised by phone)
+    5. Caller phone context (even for unknown callers — so the agent
+       doesn't ask for a phone number it already has from caller-ID)
 
     Args:
         patient_context: Dict from patient_service.get_patient_history() (optional)
         tenant_ctx: TenantContext from tenant_service (optional for backwards compat)
+        caller_phone: The caller's phone number from caller-ID / test phone (optional)
     """
     from datetime import datetime, timedelta
     from zoneinfo import ZoneInfo
@@ -212,10 +218,10 @@ def build_system_prompt(
         business_name = _DEFAULT_BUSINESS_NAME
         business_type = _DEFAULT_BUSINESS_TYPE
         appointment_types = [
-            {"key": "new_patient", "label": "New Patient Exam", "duration_minutes": 90},
-            {"key": "cleaning", "label": "Routine Cleaning", "duration_minutes": 60},
-            {"key": "emergency", "label": "Emergency", "duration_minutes": 30},
+            {"key": "new_client", "label": "New Client Visit", "duration_minutes": 60},
+            {"key": "follow_up", "label": "Follow-up", "duration_minutes": 30},
             {"key": "consultation", "label": "Consultation", "duration_minutes": 45},
+            {"key": "emergency", "label": "Emergency / Urgent", "duration_minutes": 30},
         ]
         emergency_guidance = ""
         greeting_message = _DEFAULT_GREETING
@@ -318,6 +324,18 @@ def build_system_prompt(
     patient_section = ""
     if patient_context:
         patient_section = _build_patient_section(patient_context, business_name)
+    elif caller_phone:
+        # We have caller-ID but no patient record yet (first-time caller).
+        # Tell the agent the phone number so it doesn't ask for it again.
+        patient_section = (
+            f"\n=== CALLER INFORMATION ===\n"
+            f"The caller is calling from phone number: {caller_phone}\n"
+            f"This is a NEW caller — no previous patient record found.\n"
+            f"You already have their phone number from caller-ID. "
+            f"Do NOT ask for their phone number — you already have it.\n"
+            f"When booking, use {caller_phone} as the patient phone.\n"
+            f"You still need to collect: full name, date of birth, and reason for visit.\n"
+        )
 
     parts = [static_prompt, date_context]
     if patient_section:

@@ -6,8 +6,8 @@ Multi-tenant: iterates over all ACTIVE tenants, resolves their TenantContext
 for per-tenant Twilio creds and business name, then sends reminders/followups
 scoped to each tenant.
 
-- 24h-before reminder: "Your cleaning is tomorrow at 10 AM"
-- 2h-before reminder: "Your cleaning is in 2 hours"
+- 24h-before reminder: "Your appointment is tomorrow at 10 AM"
+- 2h-before reminder: "Your appointment is in 2 hours"
 - Post-visit follow-up: "How was your visit? Reply 1-5 to rate"
 - Google review solicitation: sent after follow-up with review link
 

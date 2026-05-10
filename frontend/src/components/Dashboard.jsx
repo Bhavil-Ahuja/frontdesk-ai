@@ -54,7 +54,7 @@ export default function Dashboard() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-dental-500"></div>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500"></div>
       </div>
     );
   }
@@ -128,7 +128,7 @@ export default function Dashboard() {
         {/* Calls per day */}
         <div className="bg-white rounded-xl border border-gray-200 p-6">
           <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
-            <TrendingUp className="w-5 h-5 text-dental-500" />
+            <TrendingUp className="w-5 h-5 text-primary-500" />
             Calls This Week
           </h3>
           <ResponsiveContainer width="100%" height={280}>
@@ -159,7 +159,7 @@ export default function Dashboard() {
         {/* Outcome breakdown */}
         <div className="bg-white rounded-xl border border-gray-200 p-6">
           <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
-            <Activity className="w-5 h-5 text-dental-500" />
+            <Activity className="w-5 h-5 text-primary-500" />
             Call Outcomes
           </h3>
           {pieData.length > 0 ? (

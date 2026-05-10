@@ -50,7 +50,7 @@ async def add_to_waitlist(
         tenant_id: Tenant this waitlist entry belongs to.
         patient_name: Full name of the patient.
         patient_phone: Phone number for SMS notification.
-        appointment_type: Type of appointment (e.g. "cleaning", "root_canal").
+        appointment_type: Type of appointment (e.g. "consultation", "follow_up").
         preferred_date: Desired date in YYYY-MM-DD format.
         patient_email: Optional email address.
         preferred_time_start: Optional preferred window start (HH:MM).

@@ -22,7 +22,7 @@ from openai import AsyncOpenAI, OpenAI
 
 from backend.config import settings
 from backend.services import calendar_service, sms_service, knowledge_service
-from backend.prompts.dental_agent import build_system_prompt
+from backend.prompts.agent_prompt import build_system_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -242,7 +242,7 @@ ALL_TOOLS = [
         "type": "function",
         "function": {
             "name": "get_providers",
-            "description": "Get the list of available providers (dentists, hygienists) at this practice. Call this when a patient asks to see a specific provider or when you need to offer provider choices.",
+            "description": "Get the list of available providers at this practice. Call this when a patient asks to see a specific provider or when you need to offer provider choices.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -349,6 +349,7 @@ def _looks_like_simple_chat(user_message: str) -> bool:
         "do you", "can you", "what do", "offer",
         # Patient lookup
         "my appointment", "existing", "upcoming", "check on",
+        "do i have", "any appointment", "look up", "find my",
     ]
     return not any(kw in text for kw in tool_keywords)
 
@@ -360,19 +361,36 @@ def create_session(
     call_id: str,
     caller_number: str = "",
     tenant_ctx: Any | None = None,
+    patient_context: dict | None = None,
 ) -> dict[str, Any]:
-    """Initialise a new conversation session for a call."""
+    """Initialise a new conversation session for a call.
+
+    If ``patient_context`` is supplied (from patient_service.get_patient_history),
+    it is woven into the system prompt so the agent recognises returning callers,
+    greets them by name, and already knows their upcoming appointments.
+    """
     session = {
-        "messages": [{"role": "system", "content": build_system_prompt(tenant_ctx=tenant_ctx)}],
-        "patient_info": {},
+        "messages": [
+            {
+                "role": "system",
+                "content": build_system_prompt(
+                    patient_context=patient_context,
+                    tenant_ctx=tenant_ctx,
+                    caller_phone=caller_number,
+                ),
+            }
+        ],
+        "patient_info": patient_context.get("patient", {}) if patient_context else {},
         "current_state": "greeting",
         "call_start_time": time.time(),
         "caller_number": caller_number,
         "tenant_ctx": tenant_ctx,  # stored so _execute_tool can use it
     }
     sessions[call_id] = session
-    logger.info("Session created for call %s (tenant=%s)",
-                call_id, tenant_ctx.slug if tenant_ctx else "global")
+    logger.info("Session created for call %s (tenant=%s, patient=%s)",
+                call_id,
+                tenant_ctx.slug if tenant_ctx else "global",
+                patient_context["patient"]["name"] if patient_context else "new caller")
     return session
 
 
@@ -396,6 +414,7 @@ async def process_message(
     call_id: str,
     user_message: str,
     tenant_ctx: Any | None = None,
+    caller_number: str = "",
 ) -> str:
     """
     Process an inbound user message and return the agent's response.
@@ -404,10 +423,11 @@ async def process_message(
     Args:
         tenant_ctx: If provided, tool definitions are filtered by tenant
             capabilities and all service calls use the tenant's credentials.
+        caller_number: Caller phone number for system prompt injection.
     """
     session = get_session(call_id)
     if session is None:
-        session = create_session(call_id, tenant_ctx=tenant_ctx)
+        session = create_session(call_id, caller_number=caller_number, tenant_ctx=tenant_ctx)
     # Ensure tenant_ctx is stored (e.g. if session was pre-created without it)
     if tenant_ctx and not session.get("tenant_ctx"):
         session["tenant_ctx"] = tenant_ctx
@@ -569,6 +589,7 @@ async def process_message_stream(
     call_id: str,
     user_message: str,
     tenant_ctx: Any | None = None,
+    caller_number: str = "",
 ):
     """
     Async generator version of process_message(). Yields content tokens as
@@ -583,7 +604,7 @@ async def process_message_stream(
     """
     session = get_session(call_id)
     if session is None:
-        session = create_session(call_id, tenant_ctx=tenant_ctx)
+        session = create_session(call_id, caller_number=caller_number, tenant_ctx=tenant_ctx)
     if tenant_ctx and not session.get("tenant_ctx"):
         session["tenant_ctx"] = tenant_ctx
 

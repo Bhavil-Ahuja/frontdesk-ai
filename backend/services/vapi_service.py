@@ -18,6 +18,7 @@ import httpx
 
 from backend.config import settings
 from backend.services import llm_service
+from backend.services.http_client import http
 
 logger = logging.getLogger(__name__)
 
@@ -87,21 +88,20 @@ async def register_assistant(tenant_ctx: Any | None = None) -> str | None:
     }
 
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            if assistant_id:
-                resp = await client.patch(
-                    f"{VAPI_API_BASE}/assistant/{assistant_id}",
-                    headers=_vapi_headers(api_key),
-                    json=assistant_config,
-                )
-            else:
-                resp = await client.post(
-                    f"{VAPI_API_BASE}/assistant",
-                    headers=_vapi_headers(api_key),
-                    json=assistant_config,
-                )
-            resp.raise_for_status()
-            data = resp.json()
+        if assistant_id:
+            resp = await http.patch(
+                f"{VAPI_API_BASE}/assistant/{assistant_id}",
+                headers=_vapi_headers(api_key),
+                json=assistant_config,
+            )
+        else:
+            resp = await http.post(
+                f"{VAPI_API_BASE}/assistant",
+                headers=_vapi_headers(api_key),
+                json=assistant_config,
+            )
+        resp.raise_for_status()
+        data = resp.json()
 
         result_id = data.get("id", assistant_id)
         slug = tenant_ctx.slug if tenant_ctx else "default"
@@ -199,10 +199,46 @@ async def _handle_assistant_request(assistant_id: str = "") -> dict[str, Any]:
 
 
 async def _handle_call_start(call_id: str, call_data: dict) -> dict[str, Any]:
-    """Initialise a new session when a call begins."""
+    """Initialise a new session when a call begins, with caller recognition."""
     caller_number = call_data.get("customer", {}).get("number", "")
-    llm_service.create_session(call_id, caller_number)
-    logger.info("Call started: %s from %s", call_id, caller_number)
+
+    # ── Resolve tenant so we can scope the patient lookup ──────────────
+    tenant_ctx = None
+    phone_number_id = call_data.get("phoneNumberId", "") or ""
+    assistant_id = (call_data.get("assistantId", "") or
+                    call_data.get("assistant", {}).get("id", ""))
+    if phone_number_id:
+        from backend.services.tenant_service import resolve_by_phone_number_id
+        tenant_ctx = await resolve_by_phone_number_id(phone_number_id)
+    if not tenant_ctx and assistant_id:
+        from backend.services.tenant_service import resolve_by_assistant_id
+        tenant_ctx = await resolve_by_assistant_id(assistant_id)
+
+    # ── Caller recognition → patient context ──────────────────────────
+    patient_context = None
+    tenant_id = tenant_ctx.tenant_id if tenant_ctx else None
+    if caller_number:
+        try:
+            from backend.services import patient_service
+            patient_context = await patient_service.get_patient_history(
+                caller_number, tenant_id=tenant_id,
+            )
+            if patient_context:
+                logger.info("[CallStart] 🎯 RETURNING PATIENT: %s (%d visits)",
+                            patient_context["patient"]["name"],
+                            patient_context["patient"]["visit_count"])
+        except Exception as exc:
+            logger.warning("[CallStart] Patient lookup failed: %s", exc)
+
+    llm_service.create_session(
+        call_id, caller_number,
+        tenant_ctx=tenant_ctx,
+        patient_context=patient_context,
+    )
+    logger.info("Call started: %s from %s (tenant=%s, recognised=%s)",
+                call_id, caller_number,
+                tenant_ctx.slug if tenant_ctx else "none",
+                bool(patient_context))
     return {"status": "ok"}
 
 

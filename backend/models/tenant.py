@@ -1,6 +1,6 @@
 """
-Tenant model — each row represents one onboarded client (dental office,
-hospital, clinic, etc.) with all their integration credentials and config.
+Tenant model — each row represents one onboarded client (office, clinic,
+salon, practice, etc.) with all their integration credentials and config.
 
 This is the foundation of multi-tenancy: every call, patient, and appointment
 is scoped to a tenant via tenant_id foreign keys.
@@ -50,7 +50,7 @@ class Tenant(Base):
 
     # ── Business identity ────────────────────────────────────────────────
     business_name = Column(String(255), nullable=False)
-    business_type = Column(Enum(BusinessType), nullable=False, default=BusinessType.DENTAL)
+    business_type = Column(Enum(BusinessType), nullable=False, default=BusinessType.CUSTOM)
     business_phone = Column(String(20), nullable=True)
     business_address = Column(Text, nullable=True)
     business_website = Column(String(255), nullable=True)
@@ -99,7 +99,7 @@ class Tenant(Base):
     calcom_event_types = Column(
         JSONB, nullable=False,
         default=lambda: {},
-        # e.g. {"cleaning": "5560055", "new_patient": "5560050", ...}
+        # e.g. {"consultation": "5560050", "follow_up": "5560055", ...}
     )
 
     # ── Twilio integration ───────────────────────────────────────────────
@@ -111,6 +111,14 @@ class Tenant(Base):
     google_calendar_refresh_token = Column(String(512), nullable=True)
     google_calendar_email = Column(String(255), nullable=True)
     google_calendar_connected = Column(Boolean, nullable=False, default=False)
+
+    # ── Test Agent (chat) ──────────────────────────────────────────────
+    # Auto-assigned dummy phone used as caller-ID in the Test Agent chat
+    # so the chat flow has full patient context — same as a real call.
+    test_caller_phone = Column(String(20), nullable=True)
+    # Multiple test phones for concurrent-booking testing. Each entry is
+    # a short +155501XXX number. The first entry is the default.
+    test_caller_phones = Column(JSONB, nullable=False, default=lambda: [])
 
     # ── Escalation ───────────────────────────────────────────────────────
     escalation_phone = Column(String(20), nullable=True)
@@ -149,7 +157,7 @@ class Tenant(Base):
         },
     )
 
-    # ── Knowledge base (replaces per-file dental_kb.json) ────────────────
+    # ── Knowledge base (replaces per-file default_kb.json) ──────────────
     knowledge_base = Column(JSONB, nullable=False, default=lambda: {})
     emergency_guidance = Column(Text, nullable=True)
 

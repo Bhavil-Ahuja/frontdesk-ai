@@ -25,7 +25,7 @@ from fastapi.responses import StreamingResponse
 from openai import AsyncOpenAI, OpenAI
 
 from backend.config import settings
-from backend.prompts.dental_agent import build_system_prompt
+from backend.prompts.agent_prompt import build_system_prompt
 from backend.services.llm_service import get_tools
 from backend.services import calendar_service, sms_service, patient_service
 from backend.services.tenant_service import (
@@ -156,6 +156,7 @@ async def chat_completions(request: Request):
     system_prompt = build_system_prompt(
         patient_context=patient_context,
         tenant_ctx=tenant_ctx,
+        caller_phone=caller_phone,
     )
     if messages and messages[0].get("role") == "system":
         vapi_prompt = messages[0].get("content", "")
@@ -713,11 +714,15 @@ def _looks_like_simple_chat(messages: list) -> bool:
         ":", "o'clock", "9", "10", "11", "12", "1pm", "2pm", "3pm", "4pm", "5pm",
         # Emergency / escalation
         "emergency", "urgent", "pain", "broken", "knocked",
+        "human", "person", "transfer", "callback", "call back",
         # Office info (triggers get_office_info tool)
         "hour", "hours", "open", "close", "location", "address", "where",
         "phone", "number", "insurance", "accept", "service", "pricing",
         "price", "cost", "how much", "faq", "question",
         "do you", "can you", "what do", "offer",
+        # Patient lookup
+        "my appointment", "existing", "upcoming", "check on",
+        "do i have", "any appointment", "look up", "find my",
     ]
     if any(kw in last_user for kw in tool_keywords):
         return False

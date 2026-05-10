@@ -123,7 +123,7 @@ export default function KnowledgeBase() {
   if (loading || !kb) {
     return (
       <div className="flex items-center justify-center h-full">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-dental-500"></div>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500"></div>
       </div>
     );
   }
@@ -141,7 +141,7 @@ export default function KnowledgeBase() {
         <button
           onClick={saveKB}
           disabled={saving}
-          className="flex items-center gap-2 px-5 py-2.5 bg-dental-500 text-white rounded-lg text-sm font-medium hover:bg-dental-600 disabled:opacity-50 transition-colors"
+          className="flex items-center gap-2 px-5 py-2.5 bg-primary-500 text-white rounded-lg text-sm font-medium hover:bg-primary-600 disabled:opacity-50 transition-colors"
         >
           {saved ? (
             <>
@@ -167,7 +167,7 @@ export default function KnowledgeBase() {
                 type="text"
                 value={value}
                 onChange={(e) => updateOfficeField(key, e.target.value)}
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-dental-500 focus:border-dental-500 outline-none"
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
               />
             </div>
           ))}
@@ -193,7 +193,7 @@ export default function KnowledgeBase() {
                   },
                 })
               }
-              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-dental-500 focus:border-dental-500 outline-none"
+              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
             />
           </div>
           <div>
@@ -204,7 +204,7 @@ export default function KnowledgeBase() {
               onChange={(e) =>
                 setKb({ ...kb, insurance: { ...kb.insurance, financing: e.target.value } })
               }
-              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-dental-500 focus:border-dental-500 outline-none"
+              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
             />
           </div>
         </div>
@@ -216,7 +216,7 @@ export default function KnowledgeBase() {
         action={
           <button
             onClick={addService}
-            className="flex items-center gap-1 text-xs text-dental-600 hover:text-dental-700"
+            className="flex items-center gap-1 text-xs text-primary-600 hover:text-primary-700"
           >
             <Plus className="w-3.5 h-3.5" /> Add Service
           </button>
@@ -232,7 +232,7 @@ export default function KnowledgeBase() {
                 type="text"
                 value={svc.name}
                 onChange={(e) => updateService(i, 'name', e.target.value)}
-                className="flex-1 px-2 py-1.5 border border-gray-200 rounded text-sm bg-white focus:ring-2 focus:ring-dental-500 outline-none"
+                className="flex-1 px-2 py-1.5 border border-gray-200 rounded text-sm bg-white focus:ring-2 focus:ring-primary-500 outline-none"
                 placeholder="Service name"
               />
               <div className="flex items-center gap-1 text-sm text-gray-500">
@@ -241,14 +241,14 @@ export default function KnowledgeBase() {
                   type="number"
                   value={svc.price_min}
                   onChange={(e) => updateService(i, 'price_min', e.target.value)}
-                  className="w-20 px-2 py-1.5 border border-gray-200 rounded text-sm bg-white focus:ring-2 focus:ring-dental-500 outline-none"
+                  className="w-20 px-2 py-1.5 border border-gray-200 rounded text-sm bg-white focus:ring-2 focus:ring-primary-500 outline-none"
                 />
                 –$
                 <input
                   type="number"
                   value={svc.price_max}
                   onChange={(e) => updateService(i, 'price_max', e.target.value)}
-                  className="w-20 px-2 py-1.5 border border-gray-200 rounded text-sm bg-white focus:ring-2 focus:ring-dental-500 outline-none"
+                  className="w-20 px-2 py-1.5 border border-gray-200 rounded text-sm bg-white focus:ring-2 focus:ring-primary-500 outline-none"
                 />
               </div>
               <button
@@ -268,7 +268,7 @@ export default function KnowledgeBase() {
         action={
           <button
             onClick={addFaq}
-            className="flex items-center gap-1 text-xs text-dental-600 hover:text-dental-700"
+            className="flex items-center gap-1 text-xs text-primary-600 hover:text-primary-700"
           >
             <Plus className="w-3.5 h-3.5" /> Add FAQ
           </button>
@@ -282,7 +282,7 @@ export default function KnowledgeBase() {
                   type="text"
                   value={faq.question}
                   onChange={(e) => updateFaq(i, 'question', e.target.value)}
-                  className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm font-medium bg-white focus:ring-2 focus:ring-dental-500 outline-none"
+                  className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm font-medium bg-white focus:ring-2 focus:ring-primary-500 outline-none"
                   placeholder="Question"
                 />
                 <button
@@ -296,7 +296,7 @@ export default function KnowledgeBase() {
                 value={faq.answer}
                 onChange={(e) => updateFaq(i, 'answer', e.target.value)}
                 rows={2}
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-dental-500 outline-none resize-none"
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-primary-500 outline-none resize-none"
                 placeholder="Answer"
               />
             </div>
@@ -305,8 +305,8 @@ export default function KnowledgeBase() {
       </Section>
 
       {/* Test Panel */}
-      <div className="bg-dental-50 rounded-xl border border-dental-200 p-6">
-        <h3 className="text-lg font-semibold text-dental-800 flex items-center gap-2 mb-4">
+      <div className="bg-primary-50 rounded-xl border border-primary-200 p-6">
+        <h3 className="text-lg font-semibold text-primary-800 flex items-center gap-2 mb-4">
           <MessageSquare className="w-5 h-5" />
           Test Agent Response
         </h3>
@@ -317,19 +317,19 @@ export default function KnowledgeBase() {
             onChange={(e) => setTestQuestion(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && testKB()}
             placeholder="Type a patient question..."
-            className="flex-1 px-4 py-2.5 border border-dental-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-dental-500 outline-none"
+            className="flex-1 px-4 py-2.5 border border-primary-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-primary-500 outline-none"
           />
           <button
             onClick={testKB}
             disabled={testing}
-            className="px-4 py-2.5 bg-dental-500 text-white rounded-lg text-sm font-medium hover:bg-dental-600 disabled:opacity-50 transition-colors"
+            className="px-4 py-2.5 bg-primary-500 text-white rounded-lg text-sm font-medium hover:bg-primary-600 disabled:opacity-50 transition-colors"
           >
             <Send className="w-4 h-4" />
           </button>
         </div>
         {testAnswer && (
-          <div className="mt-4 p-4 bg-white rounded-lg border border-dental-200">
-            <p className="text-xs font-medium text-dental-600 mb-1">Sarah would respond:</p>
+          <div className="mt-4 p-4 bg-white rounded-lg border border-primary-200">
+            <p className="text-xs font-medium text-primary-600 mb-1">Sarah would respond:</p>
             <p className="text-sm text-gray-700">{testAnswer}</p>
           </div>
         )}
@@ -343,7 +343,7 @@ function Section({ title, icon: Icon, action, children }) {
     <div className="bg-white rounded-xl border border-gray-200 p-6">
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-          {Icon && <Icon className="w-5 h-5 text-dental-500" />}
+          {Icon && <Icon className="w-5 h-5 text-primary-500" />}
           {title}
         </h3>
         {action}

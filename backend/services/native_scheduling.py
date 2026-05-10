@@ -22,6 +22,7 @@ import logging
 import uuid
 from datetime import datetime, timedelta, timezone, time as dtime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -59,12 +60,19 @@ async def get_native_slots(
     candidate slot and only mark it unavailable when the count reaches
     ``max_concurrent``.
 
+    All arithmetic is done in UTC so that overlap detection against DB
+    appointments (stored in UTC) is correct.  The returned ISO strings
+    include the tenant's timezone offset so downstream consumers (the LLM,
+    ``create_native_booking``) can interpret them unambiguously.
+
     Algorithm:
       1. Look up business hours for that day of week
-      2. Generate a grid of start times (every _SLOT_INTERVAL minutes)
-      3. Fetch existing CONFIRMED appointments for that day + tenant
+      2. Generate a grid of start times (every _SLOT_INTERVAL minutes) in
+         the tenant's local timezone, then convert to UTC
+      3. Fetch existing CONFIRMED appointments for that UTC range + tenant
       4. Count overlaps per slot — block only when count ≥ max_concurrent
-      5. Return remaining slots as ISO datetime strings
+      5. Return remaining slots as timezone-aware ISO datetime strings in
+         the tenant's local timezone (e.g. "2026-05-06T09:00:00-05:00")
 
     Args:
         date_str: YYYY-MM-DD
@@ -76,13 +84,20 @@ async def get_native_slots(
             before it's considered full. Default 1 (classic single-booking).
 
     Returns:
-        List of ISO datetime strings (e.g. ["2026-05-06T09:00:00", ...])
+        List of ISO datetime strings with timezone offset
+        (e.g. ["2026-05-06T09:00:00-05:00", ...])
     """
     try:
         target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
     except (ValueError, TypeError):
         logger.warning("[NativeSched] Invalid date: %s", date_str)
         return []
+
+    # Resolve the tenant's timezone
+    try:
+        local_tz = ZoneInfo(tz_name)
+    except Exception:
+        local_tz = ZoneInfo("America/Chicago")
 
     dow_key = _DOW_KEYS[target_date.weekday()]
 
@@ -112,28 +127,32 @@ async def get_native_slots(
     open_time = dtime(open_h, open_m)
     close_time = dtime(close_h, close_m)
 
-    # ── Generate slot grid ───────────────────────────────────────────────
-    candidate_slots: list[datetime] = []
-    current = datetime.combine(target_date, open_time)
-    latest_start = datetime.combine(target_date, close_time) - timedelta(minutes=duration_minutes)
+    # ── Generate slot grid in local timezone, convert to UTC ─────────────
+    candidate_slots_local: list[datetime] = []
+    candidate_slots_utc: list[datetime] = []
 
-    while current <= latest_start:
-        candidate_slots.append(current)
-        current += timedelta(minutes=_SLOT_INTERVAL)
+    current_local = datetime.combine(target_date, open_time, tzinfo=local_tz)
+    latest_start_local = datetime.combine(target_date, close_time, tzinfo=local_tz) - timedelta(minutes=duration_minutes)
 
-    if not candidate_slots:
+    while current_local <= latest_start_local:
+        candidate_slots_local.append(current_local)
+        candidate_slots_utc.append(current_local.astimezone(timezone.utc))
+        current_local += timedelta(minutes=_SLOT_INTERVAL)
+
+    if not candidate_slots_utc:
         return []
 
     # ── Fetch existing appointments for this day + tenant ────────────────
-    day_start = datetime.combine(target_date, dtime(0, 0), tzinfo=timezone.utc)
-    day_end = day_start + timedelta(days=1)
+    # Query the UTC range that covers the local business day
+    day_start_utc = candidate_slots_utc[0] - timedelta(hours=1)  # small buffer
+    day_end_utc = candidate_slots_utc[-1] + timedelta(minutes=duration_minutes, hours=1)
 
     existing_appointments: list[Appointment] = []
     async with async_session() as session:
         query = select(Appointment).where(
             and_(
-                Appointment.scheduled_at >= day_start,
-                Appointment.scheduled_at < day_end,
+                Appointment.scheduled_at >= day_start_utc,
+                Appointment.scheduled_at < day_end_utc,
                 Appointment.status == AppointmentStatus.CONFIRMED,
             )
         )
@@ -144,29 +163,33 @@ async def get_native_slots(
         existing_appointments = list(result.scalars().all())
 
     logger.info("[NativeSched] %s: %d candidates, %d existing appts (max_concurrent=%d)",
-                date_str, len(candidate_slots), len(existing_appointments), max_concurrent)
+                date_str, len(candidate_slots_utc), len(existing_appointments), max_concurrent)
 
-    # ── Count overlaps per slot ──────────────────────────────────────────
-    # Build list of (start, end) for existing appointments
+    # ── Count overlaps per slot (all in UTC) ─────────────────────────────
+    # Build list of (start_utc, end_utc) for existing appointments
     booked_ranges: list[tuple[datetime, datetime]] = []
     for appt in existing_appointments:
-        appt_start = appt.scheduled_at.replace(tzinfo=None)  # compare naive
+        appt_start = appt.scheduled_at
+        # Ensure UTC-aware for comparison
+        if appt_start.tzinfo is None:
+            appt_start = appt_start.replace(tzinfo=timezone.utc)
         appt_end = appt_start + timedelta(minutes=appt.duration_minutes or 60)
         booked_ranges.append((appt_start, appt_end))
 
     available: list[str] = []
-    for slot_start in candidate_slots:
-        slot_end = slot_start + timedelta(minutes=duration_minutes)
+    for slot_utc, slot_local in zip(candidate_slots_utc, candidate_slots_local):
+        slot_end_utc = slot_utc + timedelta(minutes=duration_minutes)
         overlap_count = 0
         for booked_start, booked_end in booked_ranges:
             # Two ranges overlap if one starts before the other ends AND vice versa
-            if slot_start < booked_end and slot_end > booked_start:
+            if slot_utc < booked_end and slot_end_utc > booked_start:
                 overlap_count += 1
                 # Early exit: no need to keep counting past the limit
                 if overlap_count >= max_concurrent:
                     break
         if overlap_count < max_concurrent:
-            available.append(slot_start.isoformat())
+            # Return in tenant's local timezone with offset for unambiguous parsing
+            available.append(slot_local.isoformat())
 
     logger.info("[NativeSched] %s: %d available slots (after filtering, max_concurrent=%d)",
                 date_str, len(available), max_concurrent)
@@ -190,9 +213,13 @@ async def create_native_booking(
     """
     try:
         scheduled_at = datetime.fromisoformat(start_time)
-        # Ensure timezone-aware
+        # Ensure timezone-aware — if the string has an offset (e.g. from
+        # get_native_slots), fromisoformat handles it and we convert to UTC
+        # for storage. If naive, assume UTC for backwards-compat.
         if scheduled_at.tzinfo is None:
             scheduled_at = scheduled_at.replace(tzinfo=timezone.utc)
+        else:
+            scheduled_at = scheduled_at.astimezone(timezone.utc)
     except (ValueError, TypeError) as exc:
         logger.error("[NativeSched] Bad start_time: %s — %s", start_time, exc)
         return None
@@ -263,8 +290,11 @@ async def reschedule_native_booking(
     """Reschedule an appointment to a new time. Returns result dict or None."""
     try:
         new_dt = datetime.fromisoformat(new_start_time)
+        # Convert to UTC for storage — handles both tz-aware and naive inputs
         if new_dt.tzinfo is None:
             new_dt = new_dt.replace(tzinfo=timezone.utc)
+        else:
+            new_dt = new_dt.astimezone(timezone.utc)
     except (ValueError, TypeError) as exc:
         logger.error("[NativeSched] Bad new_start_time: %s — %s", new_start_time, exc)
         return None

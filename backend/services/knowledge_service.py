@@ -3,7 +3,7 @@ Knowledge base service — reads per-tenant KB from the database (JSONB column)
 and converts it into context strings for system prompt injection.
 
 Multi-tenant: each tenant stores their knowledge_base in the Tenant.knowledge_base
-JSONB column. Falls back to the legacy dental_kb.json file for backwards compat.
+JSONB column. Falls back to the legacy default_kb.json file for backwards compat.
 """
 
 import json
@@ -13,7 +13,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-KB_PATH = Path(__file__).resolve().parent.parent / "knowledge" / "dental_kb.json"
+KB_PATH = Path(__file__).resolve().parent.parent / "knowledge" / "default_kb.json"
 
 
 # ── Load / save (legacy disk-based for default tenant) ───────────────────────

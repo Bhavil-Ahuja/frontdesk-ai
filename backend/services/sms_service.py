@@ -13,6 +13,7 @@ which requires aiohttp — not yet available for Python 3.14).
 import logging
 from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -66,6 +67,26 @@ def _tz_abbrev(tenant_ctx: Any | None) -> str:
     if tenant_ctx:
         return tenant_ctx.tz_abbreviation  # property on TenantContext
     return "CST"
+
+
+def _to_local_time(dt: datetime, tenant_ctx: Any | None) -> datetime:
+    """Convert a UTC datetime to the tenant's local timezone for display.
+
+    The DB stores all scheduled_at values in UTC.  Before formatting a
+    human-readable date/time string (for SMS, emails, etc.) we must
+    convert to the tenant's timezone so patients see the correct local
+    time — e.g. "9:00 AM CST" not "3:00 PM UTC".
+    """
+    tz_name = tenant_ctx.timezone if tenant_ctx else "America/Chicago"
+    try:
+        local_tz = ZoneInfo(tz_name)
+    except Exception:
+        local_tz = ZoneInfo("America/Chicago")
+    # Ensure the datetime is tz-aware (DB values should be, but guard)
+    if dt.tzinfo is None:
+        from datetime import timezone as _tz
+        dt = dt.replace(tzinfo=_tz.utc)
+    return dt.astimezone(local_tz)
 
 
 def _is_demo(tenant_ctx: Any | None) -> bool:
@@ -147,8 +168,9 @@ def send_confirmation(
     biz = _business_name(tenant_ctx)
     biz_phone = _business_phone_display(tenant_ctx)
     tz = _tz_abbrev(tenant_ctx)
-    date_str = scheduled_at.strftime("%A, %B %d, %Y")
-    time_str = scheduled_at.strftime("%I:%M %p").lstrip("0")
+    local_dt = _to_local_time(scheduled_at, tenant_ctx)
+    date_str = local_dt.strftime("%A, %B %d, %Y")
+    time_str = local_dt.strftime("%I:%M %p").lstrip("0")
     body = (
         f"Hi {patient_name}! Your {appointment_type} at {biz} is confirmed "
         f"for {date_str} at {time_str} {tz}. "
@@ -166,7 +188,8 @@ def send_cancellation(
     """Send appointment cancellation SMS to the patient."""
     biz = _business_name(tenant_ctx)
     biz_phone = _business_phone_display(tenant_ctx)
-    date_str = scheduled_at.strftime("%A, %B %d, %Y")
+    local_dt = _to_local_time(scheduled_at, tenant_ctx)
+    date_str = local_dt.strftime("%A, %B %d, %Y")
     body = (
         f"Hi {patient_name}, your {biz} appointment on {date_str} "
         f"has been cancelled. Call us anytime to reschedule: {biz_phone}"
@@ -185,8 +208,9 @@ def send_reschedule(
     biz = _business_name(tenant_ctx)
     biz_phone = _business_phone_display(tenant_ctx)
     tz = _tz_abbrev(tenant_ctx)
-    date_str = new_scheduled_at.strftime("%A, %B %d, %Y")
-    time_str = new_scheduled_at.strftime("%I:%M %p").lstrip("0")
+    local_dt = _to_local_time(new_scheduled_at, tenant_ctx)
+    date_str = local_dt.strftime("%A, %B %d, %Y")
+    time_str = local_dt.strftime("%I:%M %p").lstrip("0")
     body = (
         f"Hi {patient_name}! Your {appointment_type} at {biz} has been "
         f"rescheduled to {date_str} at {time_str} {tz}. "
@@ -242,8 +266,9 @@ def send_reminder(
     biz = _business_name(tenant_ctx)
     biz_phone = _business_phone_display(tenant_ctx)
     tz = _tz_abbrev(tenant_ctx)
-    date_str = scheduled_at.strftime("%A, %B %d")
-    time_str = scheduled_at.strftime("%I:%M %p").lstrip("0")
+    local_dt = _to_local_time(scheduled_at, tenant_ctx)
+    date_str = local_dt.strftime("%A, %B %d")
+    time_str = local_dt.strftime("%I:%M %p").lstrip("0")
     body = (
         f"Hi {patient_name}! Friendly reminder: your {appointment_type} at "
         f"{biz} is tomorrow ({date_str}) at {time_str} {tz}. "

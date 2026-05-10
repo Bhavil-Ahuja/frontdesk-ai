@@ -85,7 +85,7 @@ export default function AgentConfig() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-dental-500"></div>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500"></div>
       </div>
     );
   }
@@ -109,7 +109,7 @@ export default function AgentConfig() {
         <button
           onClick={saveConfig}
           disabled={saving}
-          className="flex items-center gap-2 px-5 py-2.5 bg-dental-500 text-white rounded-lg text-sm font-medium hover:bg-dental-600 disabled:opacity-50 transition-colors shadow-sm"
+          className="flex items-center gap-2 px-5 py-2.5 bg-primary-500 text-white rounded-lg text-sm font-medium hover:bg-primary-600 disabled:opacity-50 transition-colors shadow-sm"
         >
           {saved ? (
             <>
@@ -211,7 +211,7 @@ export default function AgentConfig() {
               value={config.greeting_message || ''}
               onChange={(e) => update('greeting_message', e.target.value)}
               rows={3}
-              placeholder="Thank you for calling SmileCare Dental. This is Sarah. How can I help you today?"
+              placeholder="Thank you for calling. How can I help you today?"
               className="input resize-none"
             />
           </Field>
@@ -297,7 +297,7 @@ export default function AgentConfig() {
                         bh[day] = { ...bh[day], open: e.target.value };
                         update('business_hours', bh);
                       }}
-                      className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-dental-500 outline-none"
+                      className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 outline-none"
                     />
                     <span className="text-gray-400">to</span>
                     <input
@@ -308,7 +308,7 @@ export default function AgentConfig() {
                         bh[day] = { ...bh[day], close: e.target.value };
                         update('business_hours', bh);
                       }}
-                      className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-dental-500 outline-none"
+                      className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 outline-none"
                     />
                   </>
                 )}
@@ -404,7 +404,7 @@ export default function AgentConfig() {
               types.push({ key: '', label: '', duration_minutes: 60, max_concurrent: 1 });
               update('appointment_types', types);
             }}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-dental-600 bg-dental-50 rounded-lg hover:bg-dental-100 transition-colors"
+            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-primary-600 bg-primary-50 rounded-lg hover:bg-primary-100 transition-colors"
           >
             <Plus className="w-4 h-4" />
             Add Appointment Type
@@ -481,7 +481,7 @@ export default function AgentConfig() {
         </Field>
         <Field
           label="Event Type Slugs (comma-separated)"
-          help="The Cal.com event types your agent can book. e.g. consultation,cleaning"
+          help="The Cal.com event types your agent can book. e.g. consultation,follow-up"
         >
           <input
             type="text"
@@ -686,7 +686,7 @@ function Section({ icon: Icon, title, children }) {
   return (
     <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
       <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-        <Icon className="w-5 h-5 text-dental-500" />
+        <Icon className="w-5 h-5 text-primary-500" />
         {title}
       </h3>
       {children}
@@ -873,7 +873,7 @@ function Toggle({ label, help, checked, onChange }) {
         aria-label={label}
       >
         {checked ? (
-          <ToggleRight className="w-8 h-8 text-dental-500" />
+          <ToggleRight className="w-8 h-8 text-primary-500" />
         ) : (
           <ToggleLeft className="w-8 h-8 text-gray-300" />
         )}

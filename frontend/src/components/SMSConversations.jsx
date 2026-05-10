@@ -12,8 +12,12 @@ import {
   Inbox,
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
+import { useAuth } from '../contexts/AuthContext';
+import { formatDateTime, formatRelativeTime as fmtRelative } from '../lib/timezone';
 
 export default function SMSConversations() {
+  const { user } = useAuth();
+  const tz = user?.timezone || 'America/Chicago';
   const [conversations, setConversations] = useState([]);
   const [messages, setMessages] = useState([]);
   const [selectedPhone, setSelectedPhone] = useState(null);
@@ -69,7 +73,7 @@ export default function SMSConversations() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-dental-500"></div>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500"></div>
       </div>
     );
   }
@@ -89,7 +93,7 @@ export default function SMSConversations() {
           )}
           <div>
             <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-              <MessageSquare className="w-7 h-7 text-dental-500" />
+              <MessageSquare className="w-7 h-7 text-primary-500" />
               {selectedPhone ? (
                 <>
                   <Phone className="w-5 h-5 text-gray-400" />
@@ -150,7 +154,7 @@ export default function SMSConversations() {
                 }`}
               >
                 {/* Avatar */}
-                <div className="w-10 h-10 rounded-full bg-dental-100 text-dental-700 flex items-center justify-center text-sm font-semibold shrink-0">
+                <div className="w-10 h-10 rounded-full bg-primary-100 text-primary-700 flex items-center justify-center text-sm font-semibold shrink-0">
                   <Phone className="w-4 h-4" />
                 </div>
 
@@ -162,7 +166,7 @@ export default function SMSConversations() {
                     </span>
                     <span className="text-xs text-gray-400 shrink-0">
                       {conv.last_message_at
-                        ? formatRelativeTime(conv.last_message_at)
+                        ? fmtRelative(conv.last_message_at, tz)
                         : ''}
                     </span>
                   </div>
@@ -191,7 +195,7 @@ export default function SMSConversations() {
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
           {loadingMessages ? (
             <div className="flex items-center justify-center h-64">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-dental-500"></div>
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500"></div>
             </div>
           ) : messages.length === 0 ? (
             <div className="p-12 text-center">
@@ -210,14 +214,14 @@ export default function SMSConversations() {
                     <div
                       className={`max-w-[70%] rounded-2xl px-4 py-2.5 ${
                         isOutbound
-                          ? 'bg-dental-500 text-white rounded-br-md'
+                          ? 'bg-primary-500 text-white rounded-br-md'
                           : 'bg-white border border-gray-200 text-gray-900 rounded-bl-md'
                       }`}
                     >
                       {/* Direction label */}
                       <div
                         className={`flex items-center gap-1 mb-1 text-xs ${
-                          isOutbound ? 'text-dental-100' : 'text-gray-400'
+                          isOutbound ? 'text-primary-100' : 'text-gray-400'
                         }`}
                       >
                         {isOutbound ? (
@@ -239,12 +243,12 @@ export default function SMSConversations() {
                       {/* Timestamp */}
                       <div
                         className={`flex items-center gap-1 mt-1 text-xs ${
-                          isOutbound ? 'text-dental-200' : 'text-gray-400'
+                          isOutbound ? 'text-primary-200' : 'text-gray-400'
                         }`}
                       >
                         <Clock className="w-3 h-3" />
                         {msg.created_at
-                          ? new Date(msg.created_at).toLocaleString()
+                          ? formatDateTime(msg.created_at, tz)
                           : ''}
                       </div>
                     </div>
@@ -261,18 +265,4 @@ export default function SMSConversations() {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
-
-function formatRelativeTime(isoString) {
-  const date = new Date(isoString);
-  const now = new Date();
-  const diffMs = now - date;
-  const diffMins = Math.floor(diffMs / 60000);
-  const diffHours = Math.floor(diffMins / 60);
-  const diffDays = Math.floor(diffHours / 24);
-
-  if (diffMins < 1) return 'just now';
-  if (diffMins < 60) return `${diffMins}m ago`;
-  if (diffHours < 24) return `${diffHours}h ago`;
-  if (diffDays < 7) return `${diffDays}d ago`;
-  return date.toLocaleDateString();
-}
+// formatRelativeTime is now imported from lib/timezone.js as fmtRelative

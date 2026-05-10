@@ -1,0 +1,53 @@
+{
+  "office_info": {
+    "name": "Our Office",
+    "address": "",
+    "phone": "",
+    "hours": "Monday–Friday 9am–5pm",
+    "emergency_info": "For emergencies, please call 911 or visit your nearest emergency room.",
+    "website": "",
+    "parking": ""
+  },
+  "insurance": {
+    "accepted_providers": [],
+    "financing": "",
+    "note": "Please contact the office to confirm your insurance coverage."
+  },
+  "services": [
+    {
+      "name": "Initial Consultation",
+      "price_min": 0,
+      "price_max": 0,
+      "duration_minutes": 45,
+      "notes": "First-time visit with the provider."
+    },
+    {
+      "name": "Follow-up Visit",
+      "price_min": 0,
+      "price_max": 0,
+      "duration_minutes": 30,
+      "notes": ""
+    },
+    {
+      "name": "Emergency Visit",
+      "price_min": 0,
+      "price_max": 0,
+      "duration_minutes": 30,
+      "notes": "Same-day appointments prioritized when available."
+    }
+  ],
+  "faqs": [
+    {
+      "question": "Do I need to arrive early for my first visit?",
+      "answer": "Yes, please arrive 15 minutes early to complete new client paperwork. You may also be able to fill it out online beforehand."
+    },
+    {
+      "question": "What payment methods do you accept?",
+      "answer": "Please contact the office for accepted payment methods."
+    },
+    {
+      "question": "What should I do in an emergency after hours?",
+      "answer": "For life-threatening emergencies, call 911 immediately. For urgent but non-emergency issues, leave a message and we will return your call as soon as possible."
+    }
+  ]
+}

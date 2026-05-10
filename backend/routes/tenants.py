@@ -37,7 +37,7 @@ class TenantOnboardRequest(BaseModel):
     """Payload for a new client onboarding request."""
     slug: str = Field(..., min_length=2, max_length=100, pattern=r"^[a-z0-9_-]+$")
     business_name: str = Field(..., min_length=2, max_length=255)
-    business_type: str = Field(default="dental")
+    business_type: str = Field(default="custom")
     owner_name: str = Field(..., min_length=2, max_length=255)
     owner_email: str = Field(..., max_length=255)
     owner_phone: Optional[str] = None

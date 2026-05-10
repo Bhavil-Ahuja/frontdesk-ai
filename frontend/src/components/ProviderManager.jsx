@@ -165,7 +165,7 @@ export default function ProviderManager() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-dental-500"></div>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500"></div>
       </div>
     );
   }
@@ -176,18 +176,18 @@ export default function ProviderManager() {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-            <Users className="w-7 h-7 text-dental-500" />
+            <Users className="w-7 h-7 text-primary-500" />
             Providers
           </h2>
           <p className="text-gray-500 mt-1">
-            Manage dentists, hygienists, and other practitioners. Each provider can have
+            Manage practitioners and staff members. Each provider can have
             their own calendar and appointment types.
           </p>
         </div>
         {editingId === null && (
           <button
             onClick={startCreate}
-            className="flex items-center gap-2 px-4 py-2.5 bg-dental-500 text-white rounded-lg text-sm font-medium hover:bg-dental-600 transition-colors shadow-sm"
+            className="flex items-center gap-2 px-4 py-2.5 bg-primary-500 text-white rounded-lg text-sm font-medium hover:bg-primary-600 transition-colors shadow-sm"
           >
             <UserPlus className="w-4 h-4" />
             Add Provider
@@ -211,7 +211,7 @@ export default function ProviderManager() {
 
       {/* Create / Edit form */}
       {editingId !== null && (
-        <div className="bg-white rounded-xl border border-dental-200 p-6 space-y-4 shadow-sm">
+        <div className="bg-white rounded-xl border border-primary-200 p-6 space-y-4 shadow-sm">
           <h3 className="text-lg font-semibold text-gray-900">
             {editingId === '__new__' ? 'New Provider' : 'Edit Provider'}
           </h3>
@@ -225,7 +225,7 @@ export default function ProviderManager() {
                 value={form.name}
                 onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
                 placeholder="Dr. Sarah Patel"
-                className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-sm outline-none focus:border-dental-500 focus:ring-2 focus:ring-dental-500/20"
+                className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-sm outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20"
               />
             </div>
             <div>
@@ -237,7 +237,7 @@ export default function ProviderManager() {
                 value={form.title}
                 onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
                 placeholder="DDS, DMD, RDH, etc."
-                className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-sm outline-none focus:border-dental-500 focus:ring-2 focus:ring-dental-500/20"
+                className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-sm outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20"
               />
             </div>
           </div>
@@ -266,7 +266,7 @@ export default function ProviderManager() {
                       onClick={() => toggleAppointmentType(at.key)}
                       className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors border ${
                         selected
-                          ? 'bg-dental-50 border-dental-300 text-dental-700'
+                          ? 'bg-primary-50 border-primary-300 text-primary-700'
                           : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'
                       }`}
                     >
@@ -290,7 +290,7 @@ export default function ProviderManager() {
               value={form.calendar_id}
               onChange={(e) => setForm((f) => ({ ...f, calendar_id: e.target.value }))}
               placeholder="provider-email@gmail.com or calendar ID"
-              className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-sm outline-none focus:border-dental-500 focus:ring-2 focus:ring-dental-500/20"
+              className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-sm outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20"
             />
             <p className="text-xs text-gray-400 mt-1">
               If blank, this provider shares the practice's primary Google Calendar.
@@ -307,7 +307,7 @@ export default function ProviderManager() {
                 onClick={toggleHoursOverride}
                 className={`ml-2 px-3 py-1 rounded-full text-xs font-medium transition-colors ${
                   form.business_hours_override
-                    ? 'bg-dental-50 text-dental-700 border border-dental-200'
+                    ? 'bg-primary-50 text-primary-700 border border-primary-200'
                     : 'bg-gray-100 text-gray-500 border border-gray-200 hover:bg-gray-200'
                 }`}
               >
@@ -349,7 +349,7 @@ export default function ProviderManager() {
                               bh[day] = { ...bh[day], open: e.target.value };
                               setForm((f) => ({ ...f, business_hours_override: bh }));
                             }}
-                            className="px-2 py-1 border border-gray-200 rounded-lg text-xs focus:ring-2 focus:ring-dental-500 outline-none"
+                            className="px-2 py-1 border border-gray-200 rounded-lg text-xs focus:ring-2 focus:ring-primary-500 outline-none"
                           />
                           <span className="text-gray-400 text-xs">to</span>
                           <input
@@ -360,7 +360,7 @@ export default function ProviderManager() {
                               bh[day] = { ...bh[day], close: e.target.value };
                               setForm((f) => ({ ...f, business_hours_override: bh }));
                             }}
-                            className="px-2 py-1 border border-gray-200 rounded-lg text-xs focus:ring-2 focus:ring-dental-500 outline-none"
+                            className="px-2 py-1 border border-gray-200 rounded-lg text-xs focus:ring-2 focus:ring-primary-500 outline-none"
                           />
                         </>
                       )}
@@ -376,7 +376,7 @@ export default function ProviderManager() {
             <button
               onClick={handleSave}
               disabled={saving}
-              className="flex items-center gap-2 px-5 py-2.5 bg-dental-500 text-white rounded-lg text-sm font-medium hover:bg-dental-600 disabled:opacity-50 transition-colors"
+              className="flex items-center gap-2 px-5 py-2.5 bg-primary-500 text-white rounded-lg text-sm font-medium hover:bg-primary-600 disabled:opacity-50 transition-colors"
             >
               <Save className="w-4 h-4" />
               {saving ? 'Saving...' : 'Save Provider'}
@@ -398,11 +398,11 @@ export default function ProviderManager() {
           <Users className="w-12 h-12 text-gray-300 mx-auto mb-3" />
           <h3 className="text-lg font-semibold text-gray-900 mb-1">No providers yet</h3>
           <p className="text-sm text-gray-500 mb-4">
-            Add your dentists and hygienists so the AI agent can schedule appointments with specific providers.
+            Add your practitioners so the AI agent can schedule appointments with specific providers.
           </p>
           <button
             onClick={startCreate}
-            className="inline-flex items-center gap-2 px-4 py-2.5 bg-dental-500 text-white rounded-lg text-sm font-medium hover:bg-dental-600 transition-colors"
+            className="inline-flex items-center gap-2 px-4 py-2.5 bg-primary-500 text-white rounded-lg text-sm font-medium hover:bg-primary-600 transition-colors"
           >
             <UserPlus className="w-4 h-4" />
             Add Your First Provider
@@ -427,7 +427,7 @@ export default function ProviderManager() {
                   <div
                     className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold shrink-0 ${
                       p.is_active
-                        ? 'bg-dental-100 text-dental-700'
+                        ? 'bg-primary-100 text-primary-700'
                         : 'bg-gray-200 text-gray-500'
                     }`}
                   >
@@ -469,7 +469,7 @@ export default function ProviderManager() {
                         e.stopPropagation();
                         startEdit(p);
                       }}
-                      className="p-2 text-gray-400 hover:text-dental-600 hover:bg-dental-50 rounded-lg transition-colors"
+                      className="p-2 text-gray-400 hover:text-primary-600 hover:bg-primary-50 rounded-lg transition-colors"
                       title="Edit"
                     >
                       <Pencil className="w-4 h-4" />

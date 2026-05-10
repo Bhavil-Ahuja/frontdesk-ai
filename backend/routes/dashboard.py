@@ -22,6 +22,7 @@ from backend.models.call import Call, CallOutcome
 from backend.models.appointment import Appointment, BookedVia
 from backend.models.tenant import Tenant
 from backend.services import auth_service, tenant_service
+from backend.services.tenant_service import _generate_test_phone
 
 logger = logging.getLogger(__name__)
 
@@ -254,6 +255,9 @@ async def get_config(current_user: Tenant = Depends(auth_service.get_current_use
         # Google Calendar
         "google_calendar_connected": bool(t.google_calendar_connected),
         "google_calendar_email": t.google_calendar_email or "",
+        # Test Agent — dummy phones used as caller-ID for patient context
+        "test_caller_phone": t.test_caller_phone or "",
+        "test_caller_phones": t.test_caller_phones or [],
         # Reminder & review settings
         "reminder_settings": t.reminder_settings or {
             "24h_enabled": True,
@@ -335,3 +339,78 @@ async def update_config(
         raise HTTPException(status_code=404, detail="Tenant not found.")
 
     return {"status": "saved", "updated_fields": list(update_fields.keys())}
+
+
+# ── Test phone management (multi-phone for concurrent booking tests) ─────────
+
+
+@router.post("/api/config/test-phones")
+async def generate_test_phone_endpoint(
+    current_user: Tenant = Depends(auth_service.get_current_user),
+):
+    """Generate a new random test caller phone and add it to the tenant's list."""
+    async with async_session() as session:
+        result = await session.execute(select(Tenant).where(Tenant.id == current_user.id))
+        t = result.scalar_one_or_none()
+        if not t:
+            raise HTTPException(status_code=404, detail="Tenant not found.")
+
+        phones = list(t.test_caller_phones or [])
+        if len(phones) >= 10:
+            raise HTTPException(status_code=400, detail="Maximum 10 test phones allowed.")
+
+        new_phone = _generate_test_phone()
+        # Ensure uniqueness (unlikely collision but be safe)
+        while new_phone in phones:
+            new_phone = _generate_test_phone()
+
+        phones.append(new_phone)
+        t.test_caller_phones = phones
+
+        # If no default test_caller_phone yet, set this as default
+        if not t.test_caller_phone:
+            t.test_caller_phone = new_phone
+
+        await session.commit()
+        tenant_service.invalidate_cache(str(t.id))
+
+    logger.info("Generated test phone %s for tenant %s (total: %d)",
+                new_phone, current_user.owner_email, len(phones))
+    return {"phone": new_phone, "test_caller_phones": phones}
+
+
+@router.delete("/api/config/test-phones/{phone}")
+async def delete_test_phone(
+    phone: str,
+    current_user: Tenant = Depends(auth_service.get_current_user),
+):
+    """Remove a test caller phone from the tenant's list."""
+    # URL-decode the phone (+ gets encoded as %2B)
+    from urllib.parse import unquote
+    phone = unquote(phone)
+
+    async with async_session() as session:
+        result = await session.execute(select(Tenant).where(Tenant.id == current_user.id))
+        t = result.scalar_one_or_none()
+        if not t:
+            raise HTTPException(status_code=404, detail="Tenant not found.")
+
+        phones = list(t.test_caller_phones or [])
+        if phone not in phones:
+            raise HTTPException(status_code=404, detail="Phone not found in your test phones list.")
+        if len(phones) <= 1:
+            raise HTTPException(status_code=400, detail="Must keep at least one test phone.")
+
+        phones.remove(phone)
+        t.test_caller_phones = phones
+
+        # If we deleted the default, switch to the first remaining
+        if t.test_caller_phone == phone:
+            t.test_caller_phone = phones[0]
+
+        await session.commit()
+        tenant_service.invalidate_cache(str(t.id))
+
+    logger.info("Deleted test phone %s for tenant %s (remaining: %d)",
+                phone, current_user.owner_email, len(phones))
+    return {"status": "deleted", "test_caller_phones": phones}

@@ -483,6 +483,7 @@ async def handle_inbound_sms(
                 call_id=session_key,
                 user_message=text,
                 tenant_ctx=tenant_ctx,
+                caller_number=from_number,
             )
             reply = ai_response.strip() if ai_response else ""
         except Exception as exc:

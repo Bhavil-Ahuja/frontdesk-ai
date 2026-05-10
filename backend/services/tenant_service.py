@@ -117,6 +117,10 @@ class TenantContext:
     reminder_settings: dict[str, Any]
     review_settings: dict[str, Any]
 
+    # Test Agent
+    test_caller_phone: str
+    test_caller_phones: list[str]
+
     # Derived
     noemail_address: str
 
@@ -175,6 +179,8 @@ def _tenant_to_context(t: Tenant) -> TenantContext:
         emergency_guidance=t.emergency_guidance or "",
         reminder_settings=t.reminder_settings or {"24h_enabled": True, "2h_enabled": True, "confirmation_reply_enabled": True},
         review_settings=t.review_settings or {"enabled": False, "google_review_link": "", "delay_hours": 24, "appointment_types": []},
+        test_caller_phone=t.test_caller_phone or "",
+        test_caller_phones=t.test_caller_phones or [],
         noemail_address=t.noemail_address,
     )
 
@@ -277,7 +283,11 @@ async def resolve_by_slug(slug: str) -> TenantContext | None:
 
 
 async def resolve_by_id(tenant_id: uuid.UUID) -> TenantContext | None:
-    """Resolve a tenant by UUID."""
+    """Resolve a tenant by UUID.
+
+    Lazily assigns a test_caller_phone if the tenant doesn't have one yet
+    (backfill for tenants created before this feature existed).
+    """
     cache_key = f"id:{tenant_id}"
     cached = _cache_get(cache_key)
     if cached:
@@ -291,6 +301,22 @@ async def resolve_by_id(tenant_id: uuid.UUID) -> TenantContext | None:
 
     if not tenant:
         return None
+
+    # Backfill test_caller_phone for existing tenants
+    if not tenant.test_caller_phone:
+        test_phone = _generate_test_phone()
+        async with async_session() as session:
+            result = await session.execute(
+                select(Tenant).where(Tenant.id == tenant_id)
+            )
+            t = result.scalar_one_or_none()
+            if t:
+                t.test_caller_phone = test_phone
+                t.updated_at = datetime.now(timezone.utc)
+                await session.commit()
+                tenant.test_caller_phone = test_phone
+                logger.info("[TenantSvc] Backfilled test_caller_phone=%s for tenant %s",
+                            test_phone, tenant.slug)
 
     ctx = _tenant_to_context(tenant)
     _cache_set(cache_key, ctx)
@@ -331,13 +357,13 @@ async def resolve_default_tenant() -> TenantContext | None:
         tenant_id=uuid.UUID("00000000-0000-0000-0000-000000000000"),
         slug="default",
         business_name=settings.OFFICE_NAME,
-        business_type="dental",
+        business_type="custom",
         business_phone="",
         business_address="",
         timezone=settings.OFFICE_TIMEZONE,
         demo_mode=settings.DEMO_MODE,
-        agent_name="Sarah",
-        greeting_message="Thank you for calling. This is Sarah. How can I help you today?",
+        agent_name="Alex",
+        greeting_message="Thank you for calling. How can I help you today?",
         system_prompt_override=None,
         vapi_api_key=settings.VAPI_API_KEY,
         vapi_assistant_id=settings.VAPI_ASSISTANT_ID,
@@ -346,8 +372,8 @@ async def resolve_default_tenant() -> TenantContext | None:
         calcom_api_key=settings.CALCOM_API_KEY,
         calcom_username=settings.CALCOM_USERNAME,
         calcom_event_types={
-            "new_patient": settings.CALCOM_EVENT_TYPE_ID_NEW_PATIENT,
-            "cleaning": settings.CALCOM_EVENT_TYPE_ID_CLEANING,
+            "new_client": settings.CALCOM_EVENT_TYPE_ID_NEW_PATIENT,
+            "follow_up": settings.CALCOM_EVENT_TYPE_ID_CLEANING,
             "emergency": settings.CALCOM_EVENT_TYPE_ID_EMERGENCY,
             "consultation": settings.CALCOM_EVENT_TYPE_ID_CONSULTATION,
         },
@@ -360,9 +386,9 @@ async def resolve_default_tenant() -> TenantContext | None:
         escalation_phone=settings.ESCALATION_PHONE_NUMBER,
         escalation_transfer_number=settings.ESCALATION_TRANSFER_NUMBER,
         appointment_types=[
-            {"key": "new_patient", "label": "New Patient Exam", "duration_minutes": 90, "max_concurrent": 1},
-            {"key": "cleaning", "label": "Routine Cleaning", "duration_minutes": 60, "max_concurrent": 2},
-            {"key": "emergency", "label": "Emergency", "duration_minutes": 30, "max_concurrent": 1},
+            {"key": "new_client", "label": "New Client Visit", "duration_minutes": 60, "max_concurrent": 1},
+            {"key": "follow_up", "label": "Follow-up", "duration_minutes": 30, "max_concurrent": 2},
+            {"key": "emergency", "label": "Emergency / Urgent", "duration_minutes": 30, "max_concurrent": 1},
             {"key": "consultation", "label": "Consultation", "duration_minutes": 45, "max_concurrent": 1},
         ],
         business_hours=None,
@@ -370,6 +396,8 @@ async def resolve_default_tenant() -> TenantContext | None:
         emergency_guidance="",
         reminder_settings={"24h_enabled": True, "2h_enabled": True, "confirmation_reply_enabled": True},
         review_settings={"enabled": False, "google_review_link": "", "delay_hours": 24, "appointment_types": []},
+        test_caller_phone="",
+        test_caller_phones=[],
         noemail_address="noemail@scheduler.ai",
     )
     _cache_set(cache_key, ctx)
@@ -378,26 +406,41 @@ async def resolve_default_tenant() -> TenantContext | None:
 
 # ── CRUD (admin operations) ──────────────────────────────────────────────────
 
+def _generate_test_phone() -> str:
+    """Generate a short dummy phone for Test Agent chat caller recognition.
+
+    Uses the 555-01XX range reserved for fictional use in US numbering plans.
+    The result looks like +15550100 through +15550199 — short enough to
+    signal "this is a test number" at a glance.
+    """
+    import random
+    suffix = random.randint(100, 199)
+    return f"+155501{suffix}"
+
+
 async def create_tenant(data: dict[str, Any]) -> Tenant:
     """
     Create a new tenant in PENDING status (requires admin approval).
+    Auto-assigns a test caller phone for the Test Agent chat.
     """
     async with async_session() as session:
         tenant = Tenant(
             slug=data["slug"],
             business_name=data["business_name"],
-            business_type=data.get("business_type", "dental"),
+            business_type=data.get("business_type", "custom"),
             owner_name=data["owner_name"],
             owner_email=data["owner_email"],
             owner_phone=data.get("owner_phone"),
             timezone=data.get("timezone", "America/Chicago"),
             plan=data.get("plan", "starter"),
             status=TenantStatus.PENDING,
+            test_caller_phone=_generate_test_phone(),
         )
         session.add(tenant)
         await session.commit()
         await session.refresh(tenant)
-        logger.info("[TenantSvc] Created tenant %s (PENDING): %s", tenant.slug, tenant.business_name)
+        logger.info("[TenantSvc] Created tenant %s (PENDING): %s (test_phone=%s)",
+                    tenant.slug, tenant.business_name, tenant.test_caller_phone)
         return tenant
 
 

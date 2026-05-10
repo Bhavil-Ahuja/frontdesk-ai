@@ -1,5 +1,5 @@
 #!/bin/bash
-# SmileCare Dental AI Agent — One-command startup
+# Scheduler.ai — One-command startup
 # Starts tunnel, captures URL, updates .env, starts backend
 
 set -e

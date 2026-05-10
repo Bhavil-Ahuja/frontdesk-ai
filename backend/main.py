@@ -3,7 +3,7 @@ Scheduler.ai — Multi-tenant AI Voice Agent Platform — FastAPI entry point.
 
 Startup sequence:
   1. Connect to PostgreSQL and auto-create tables
-  2. Load knowledge base (per-tenant from DB, fallback to dental_kb.json)
+  2. Load knowledge base (per-tenant from DB, fallback to default_kb.json)
   3. Register / update Vapi assistant (if API key is set)
   4. Mount API routes and serve React dashboard as static files
   5. Start on port 8000
@@ -42,6 +42,7 @@ from backend.routes.providers import router as providers_router
 from backend.routes.waitlist import router as waitlist_router
 from backend.routes.sms_webhook import router as sms_webhook_router
 from backend.routes.sms_messages import router as sms_messages_router
+from backend.routes.patients import router as patients_router
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -137,19 +138,18 @@ async def lifespan(app: FastAPI):
     # 3. Ollama connectivity check
     logger.info("Checking Ollama at %s ...", settings.OLLAMA_BASE_URL)
     try:
-        import httpx
-        async with httpx.AsyncClient(timeout=5) as client:
-            resp = await client.get(f"{settings.OLLAMA_BASE_URL}/api/tags")
-            if resp.status_code == 200:
-                models = [m["name"] for m in resp.json().get("models", [])]
-                if any(settings.OLLAMA_MODEL in m for m in models):
-                    logger.info("✓ Ollama running — model '%s' available.", settings.OLLAMA_MODEL)
-                else:
-                    logger.warning("⚠ Ollama running but model '%s' not found. Available: %s",
-                                   settings.OLLAMA_MODEL, models)
-                    logger.warning("  → Run: ollama pull %s", settings.OLLAMA_MODEL)
+        from backend.services.http_client import http
+        resp = await http.get(f"{settings.OLLAMA_BASE_URL}/api/tags", timeout=5)
+        if resp.status_code == 200:
+            models = [m["name"] for m in resp.json().get("models", [])]
+            if any(settings.OLLAMA_MODEL in m for m in models):
+                logger.info("✓ Ollama running — model '%s' available.", settings.OLLAMA_MODEL)
             else:
-                logger.warning("⚠ Ollama responded with HTTP %s", resp.status_code)
+                logger.warning("⚠ Ollama running but model '%s' not found. Available: %s",
+                               settings.OLLAMA_MODEL, models)
+                logger.warning("  → Run: ollama pull %s", settings.OLLAMA_MODEL)
+        else:
+            logger.warning("⚠ Ollama responded with HTTP %s", resp.status_code)
     except Exception as exc:
         logger.warning("⚠ Cannot reach Ollama at %s: %s", settings.OLLAMA_BASE_URL, exc)
         logger.warning("  → Is Ollama running? Start it with: ollama serve")
@@ -194,6 +194,11 @@ async def lifespan(app: FastAPI):
         await reminder_task
     except asyncio.CancelledError:
         pass
+
+    # Close shared HTTP client pool
+    from backend.services.http_client import close_http_client
+    await close_http_client()
+
     logger.info("Scheduler.ai shutting down.")
 
 
@@ -256,6 +261,7 @@ app.include_router(providers_router)
 app.include_router(waitlist_router)
 app.include_router(sms_webhook_router)
 app.include_router(sms_messages_router)
+app.include_router(patients_router)
 
 
 @app.get("/health")
