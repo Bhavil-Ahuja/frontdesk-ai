@@ -9,7 +9,6 @@ import {
   AlertCircle,
   ChevronRight,
   ArrowLeft,
-  Shield,
   Stethoscope,
   MessageSquare,
   PhoneCall,
@@ -393,11 +392,6 @@ function PatientProfile({ patientId, tz, onBack }) {
                   <Calendar className="w-3.5 h-3.5" /> DOB: {p.date_of_birth}
                 </span>
               )}
-              {p.insurance_provider && (
-                <span className="flex items-center gap-1">
-                  <Shield className="w-3.5 h-3.5" /> {p.insurance_provider}
-                </span>
-              )}
             </div>
 
             {/* Quick stats */}
@@ -440,7 +434,6 @@ function PatientProfile({ patientId, tz, onBack }) {
               setEditForm({
                 allergies: p.allergies || '',
                 notes: p.notes || '',
-                insurance_provider: p.insurance_provider || '',
               });
             }}
             className="px-3 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors shrink-0"
@@ -453,16 +446,6 @@ function PatientProfile({ patientId, tz, onBack }) {
         {editing && (
           <div className="mt-4 pt-4 border-t border-gray-100 space-y-3">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Insurance</label>
-                <input
-                  type="text"
-                  value={editForm.insurance_provider || ''}
-                  onChange={(e) => setEditForm((f) => ({ ...f, insurance_provider: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm outline-none focus:border-primary-500"
-                  placeholder="Delta Dental, Aetna, etc."
-                />
-              </div>
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">Allergies</label>
                 <input

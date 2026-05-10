@@ -38,7 +38,6 @@ class AppointmentOut(BaseModel):
     patient_phone: str
     patient_email: Optional[str]
     date_of_birth: Optional[str]
-    insurance_provider: Optional[str]
     appointment_type: str
     scheduled_at: datetime
     duration_minutes: int
@@ -118,7 +117,6 @@ async def list_appointments(
             patient_phone=a.patient_phone,
             patient_email=a.patient_email,
             date_of_birth=a.date_of_birth,
-            insurance_provider=a.insurance_provider,
             appointment_type=a.appointment_type,
             scheduled_at=a.scheduled_at,
             duration_minutes=a.duration_minutes,
@@ -394,7 +392,6 @@ async def sync_google_calendar(
                 "name": apt.patient_name,
                 "email": apt.patient_email or "",
                 "phone": apt.patient_phone or "",
-                "insurance": apt.insurance_provider or "",
                 "dob": apt.date_of_birth or "",
             }
             booking = await gcal.book_appointment(

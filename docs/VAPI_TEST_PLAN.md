@@ -70,7 +70,6 @@ Run all of these in one call, listening for natural responses.
 | "Hi."                                | Friendly 1-line greeting, asks how to help                            | No transfer talk, no date/time   |
 | "What are your hours?"               | Business hours from KB (varies per tenant)                            | No tool call delay               |
 | "Where are you located?"             | Address from KB                                                       | —                                |
-| "Do you accept my insurance?"        | Lists accepted providers or asks which plan                           | —                                |
 | "How much is a consultation?"        | Price range from KB                                                   | —                                |
 | "What services do you offer?"        | Service list from KB                                                  | —                                |
 | "What payment methods do you take?"  | Credit cards, HSA/FSA, financing options, etc.                        | —                                |

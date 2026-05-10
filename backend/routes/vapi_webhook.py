@@ -175,14 +175,12 @@ async def _upsert_patient(
             phone=phone,
             email=info.get("email"),
             date_of_birth=info.get("dob"),
-            insurance_provider=info.get("insurance"),
             is_new_patient=True,
         )
         db.add(patient)
     else:
         patient.name = info.get("name", patient.name)
         patient.email = info.get("email") or patient.email
-        patient.insurance_provider = info.get("insurance") or patient.insurance_provider
         patient.is_new_patient = False
 
     await db.flush()

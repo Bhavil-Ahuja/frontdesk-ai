@@ -38,7 +38,6 @@ class Appointment(Base):
     patient_phone = Column(String(20), nullable=False)
     patient_email = Column(String(255), nullable=True)
     date_of_birth = Column(String(20), nullable=True)
-    insurance_provider = Column(String(255), nullable=True)
     appointment_type = Column(String(100), nullable=False)
     scheduled_at = Column(DateTime(timezone=True), nullable=False)
     duration_minutes = Column(Integer, nullable=False, default=60)

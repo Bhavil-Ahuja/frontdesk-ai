@@ -121,7 +121,7 @@ PERSONALITY:
 - Keep responses concise for voice — no long paragraphs
 
 WHAT YOU CAN DO:
-1. Answer questions about the office — ALWAYS call get_office_info for hours, location, insurance, services, or pricing. NEVER answer these from memory.
+1. Answer questions about the office — ALWAYS call get_office_info for hours, location, services, or pricing. NEVER answer these from memory.
 2. Schedule new and existing patient appointments
 3. Reschedule or cancel existing appointments
 4. If no slots are available on the patient's preferred date, offer to add them to the waitlist. Use the add_to_waitlist tool. Tell them they'll be automatically notified by text if a slot opens up.
@@ -146,7 +146,7 @@ EMERGENCY GUIDANCE:
 ESCALATION — transfer to human when:
 - Patient mentions chest pain or difficulty breathing
 - Patient is extremely distressed or crying
-- Complex billing or insurance dispute
+- Complex billing dispute
 - Patient explicitly requests to speak to a human
 - Medical emergency of any kind
 - Situation outside your knowledge
@@ -154,7 +154,7 @@ ESCALATION — transfer to human when:
 When escalating: briefly acknowledge the patient's situation in your own warm words (one short sentence), then call the escalate_to_human tool. Do not parrot a script verbatim. Only escalate for the triggers above — never on a greeting or simple question.
 
 OFFICE INFO RULE:
-When a patient asks about hours, location, phone number, insurance, services, or pricing — ALWAYS call the get_office_info tool. NEVER answer from memory or guess. The tool returns the exact info to read to the patient.
+When a patient asks about hours, location, phone number, services, or pricing — ALWAYS call the get_office_info tool. NEVER answer from memory or guess. The tool returns the exact info to read to the patient.
 {"" if not contact_text else chr(10) + "OFFICE CONTACT:" + chr(10) + contact_text + chr(10)}
 AFTER HOURS:
 If called outside business hours, acknowledge the office is closed, still offer to schedule an appointment or take a message. For emergencies after hours, advise calling 911 or visiting the nearest emergency room.
@@ -291,7 +291,7 @@ def build_system_prompt(
         + "\n".join(upcoming_days) + "\n"
         f"\nCRITICAL RULES:\n"
         f"1. NEVER call any tool on greetings ('Hi', 'Hello'), generic small talk ('How are you?'), or expressions of confusion. Answer those conversationally.\n"
-        f"2. When the patient asks about hours, location, phone number, insurance, services, or pricing → ALWAYS call get_office_info. NEVER answer these from memory or guess.\n"
+        f"2. When the patient asks about hours, location, phone number, services, or pricing → ALWAYS call get_office_info. NEVER answer these from memory or guess.\n"
         f"3. ONLY call get_available_slots when the patient EXPLICITLY asks 'Do you have slots on <day>?', 'Can I book on <date>?', or 'What times are available?' — and the patient has actually mentioned a day or time.\n"
         f"4. ONLY call book_appointment after the patient has chosen a specific time AND given you their name, DOB, phone, and reason for visit.\n"
         f"5. ONLY call escalate_to_human for the explicit escalation triggers in your prompt (medical emergency, distress, billing dispute, explicit request for human). NEVER on a greeting.\n"
@@ -306,15 +306,13 @@ def build_system_prompt(
         f"  Patient: 'Hi'  →  You: 'Hi there! How can I help you today?' (NO tool call)\n"
         f"  Patient: 'How are you?'  →  You: 'I'm doing great, thank you! How can I help?' (NO tool call)\n"
         f"  Patient: 'Hi, are you open right now?'  →  Call get_office_info(topic='hours') — ALWAYS answer the question, even when it starts with 'hi' or 'hello'\n"
-        f"  Patient: 'Hello, do you accept Delta Dental?'  →  Call get_office_info(topic='insurance') — greet briefly, then answer\n"
         f"  Patient: 'What are your hours?'  →  Call get_office_info(topic='hours') then read the result naturally\n"
-        f"  Patient: 'Do you accept my insurance?'  →  Call get_office_info(topic='insurance')\n"
         f"  Patient: 'Do you have any slots Tuesday?'  →  Call get_available_slots(date='...', appointment_type='...')\n"
         f"\nIMPORTANT: If a message contains BOTH a greeting AND a question, ALWAYS address the question. Never respond with only a greeting when the patient asked something.\n"
     )
 
     # ── Knowledge base ───────────────────────────────────────────────────
-    # NOTE: KB content (hours, insurance, services, FAQs) is now served via
+    # NOTE: KB content (hours, services, FAQs) is now served via
     # the get_office_info tool at query time — NOT injected into the system
     # prompt. This keeps the prompt short and ensures the LLM reads factual
     # data from the tool result (close to the output) instead of trying to
@@ -363,8 +361,6 @@ def _build_patient_section(ctx: dict, business_name: str = "") -> str:
 
     if p.get("dob"):
         lines.append(f"DOB: {p['dob']}")
-    if p.get("insurance"):
-        lines.append(f"Insurance: {p['insurance']}")
     if p.get("allergies"):
         lines.append(f"Allergies: {p['allergies']}")
     if p.get("notes"):
@@ -398,7 +394,7 @@ def _build_patient_section(ctx: dict, business_name: str = "") -> str:
     pref = p.get("preferred_type")
     lines.append("\nBEHAVIOUR FOR THIS CALLER:")
     lines.append(f"- Greet them warmly by name: 'Hi {first_name}! Welcome back to {biz}.'")
-    lines.append("- Do NOT ask for their name, DOB, phone, or insurance again — you already have it.")
+    lines.append("- Do NOT ask for their name, DOB, or phone again — you already have it.")
     lines.append("- If they want to book, pre-fill their info from above. Only confirm it's correct.")
 
     if pref:

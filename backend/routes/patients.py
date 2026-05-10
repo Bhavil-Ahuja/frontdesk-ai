@@ -36,7 +36,6 @@ class PatientUpdateRequest(BaseModel):
     name: Optional[str] = None
     email: Optional[str] = None
     date_of_birth: Optional[str] = None
-    insurance_provider: Optional[str] = None
     allergies: Optional[str] = None
     notes: Optional[str] = None
     preferred_appointment_type: Optional[str] = None
@@ -101,7 +100,6 @@ async def list_patients(
                 "phone": p.phone,
                 "email": p.email,
                 "date_of_birth": p.date_of_birth,
-                "insurance_provider": p.insurance_provider,
                 "is_new_patient": p.is_new_patient,
                 "visit_count": p.visit_count or 0,
                 "no_show_count": p.no_show_count or 0,
@@ -189,7 +187,6 @@ async def get_patient_profile(
             "phone": patient.phone,
             "email": patient.email,
             "date_of_birth": patient.date_of_birth,
-            "insurance_provider": patient.insurance_provider,
             "preferred_appointment_type": patient.preferred_appointment_type,
             "allergies": patient.allergies,
             "notes": patient.notes,
@@ -245,7 +242,7 @@ async def update_patient(
     req: PatientUpdateRequest,
     current_user: Tenant = Depends(auth_service.get_current_user),
 ):
-    """Update editable patient fields (notes, allergies, insurance, etc.)."""
+    """Update editable patient fields (notes, allergies, etc.)."""
     logger.info("[Patients] Updating patient %s for tenant=%s", patient_id, current_user.slug)
     async with async_session() as session:
         result = await session.execute(

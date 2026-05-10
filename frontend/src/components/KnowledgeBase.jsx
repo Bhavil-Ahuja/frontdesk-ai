@@ -174,42 +174,6 @@ export default function KnowledgeBase() {
         </div>
       </Section>
 
-      {/* Insurance */}
-      <Section title="Insurance">
-        <div className="space-y-3">
-          <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">
-              Accepted Providers (comma-separated)
-            </label>
-            <input
-              type="text"
-              value={(kb.insurance?.accepted_providers || []).join(', ')}
-              onChange={(e) =>
-                setKb({
-                  ...kb,
-                  insurance: {
-                    ...kb.insurance,
-                    accepted_providers: e.target.value.split(',').map((s) => s.trim()),
-                  },
-                })
-              }
-              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Financing</label>
-            <input
-              type="text"
-              value={kb.insurance?.financing || ''}
-              onChange={(e) =>
-                setKb({ ...kb, insurance: { ...kb.insurance, financing: e.target.value } })
-              }
-              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
-            />
-          </div>
-        </div>
-      </Section>
-
       {/* Services & Pricing */}
       <Section
         title="Services & Pricing"

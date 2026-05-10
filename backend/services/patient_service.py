@@ -92,7 +92,7 @@ async def get_patient_history(
 
     Shape:
     {
-        "patient": {name, phone, dob, insurance, is_new, visit_count, ...},
+        "patient": {name, phone, dob, is_new, visit_count, ...},
         "upcoming_appointments": [{type, date, time, booking_uid}, ...],
         "past_appointments": [{type, date, status}, ...],
         "last_visit": {type, date} or None,
@@ -155,7 +155,6 @@ async def get_patient_history(
             "name": patient.name,
             "phone": patient.phone,
             "dob": patient.date_of_birth,
-            "insurance": patient.insurance_provider,
             "is_new_patient": patient.is_new_patient,
             "visit_count": patient.visit_count or 0,
             "preferred_type": patient.preferred_appointment_type,
@@ -191,7 +190,6 @@ async def upsert_patient(
     phone: str,
     dob: str = "",
     email: str = "",
-    insurance: str = "",
     appointment_type: str = "",
     tenant_id: _uuid.UUID | None = None,
 ) -> Patient:
@@ -221,8 +219,6 @@ async def upsert_patient(
                 patient.date_of_birth = dob.strip()
             if email and email.strip():
                 patient.email = email.strip()
-            if insurance and insurance.strip():
-                patient.insurance_provider = insurance.strip()
             if appointment_type:
                 patient.preferred_appointment_type = appointment_type
             patient.is_new_patient = False
@@ -238,7 +234,6 @@ async def upsert_patient(
                 phone=norm_phone,
                 date_of_birth=dob.strip() if dob else None,
                 email=email.strip() if email else None,
-                insurance_provider=insurance.strip() if insurance else None,
                 preferred_appointment_type=appointment_type or None,
                 is_new_patient=True,
                 visit_count=1,
@@ -262,7 +257,6 @@ async def record_appointment(
     patient_name: str = "",
     patient_email: str = "",
     dob: str = "",
-    insurance: str = "",
     tenant_id: _uuid.UUID | None = None,
 ) -> None:
     """
@@ -277,7 +271,6 @@ async def record_appointment(
         phone=norm_phone,
         dob=dob,
         email=patient_email,
-        insurance=insurance,
         appointment_type=appointment_type,
         tenant_id=tenant_id,
     )
@@ -292,7 +285,6 @@ async def record_appointment(
             patient_phone=norm_phone,
             patient_email=patient_email or None,
             date_of_birth=dob,
-            insurance_provider=insurance,
             appointment_type=appointment_type,
             scheduled_at=scheduled_at,
             status=AppointmentStatus.CONFIRMED,

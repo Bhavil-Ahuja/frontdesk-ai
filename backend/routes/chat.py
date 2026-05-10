@@ -150,7 +150,6 @@ async def chat_stream(
                     "name": test_name,
                     "phone": caller_phone,
                     "dob": "01/15/1990",
-                    "insurance": "Sample Insurance Co",
                     "is_new": False,
                     "visit_count": 2,
                     "preferred_type": "consultation",

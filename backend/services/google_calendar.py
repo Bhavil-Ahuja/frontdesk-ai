@@ -392,7 +392,6 @@ async def book_appointment(
         "description": (
             f"Patient: {patient_name}\n"
             f"Phone: {patient_phone}\n"
-            f"Insurance: {patient_info.get('insurance', 'N/A')}\n"
             f"DOB: {patient_info.get('dob', 'N/A')}\n"
             f"\nBooked by Scheduler.ai voice agent"
         ),

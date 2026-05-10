@@ -8,11 +8,6 @@
     "website": "",
     "parking": ""
   },
-  "insurance": {
-    "accepted_providers": [],
-    "financing": "",
-    "note": "Please contact the office to confirm your insurance coverage."
-  },
   "services": [
     {
       "name": "Initial Consultation",

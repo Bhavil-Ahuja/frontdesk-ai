@@ -234,7 +234,6 @@ async def create_native_booking(
             patient_phone=patient_info.get("phone", ""),
             patient_email=patient_info.get("email", ""),
             date_of_birth=patient_info.get("dob", ""),
-            insurance_provider=patient_info.get("insurance", ""),
             appointment_type=appointment_type,
             scheduled_at=scheduled_at,
             duration_minutes=duration_minutes,

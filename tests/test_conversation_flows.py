@@ -279,7 +279,6 @@ MOCK_RETURNING_PATIENT = {
         "name": "Sarah Johnson",
         "phone": "+15125551234",
         "dob": "03/15/1985",
-        "insurance": "BlueCross",
         "is_new_patient": False,
         "visit_count": 4,
         "preferred_type": "follow_up",
@@ -307,7 +306,6 @@ MOCK_RETURNING_PATIENT_NO_UPCOMING = {
         "name": "John Smith",
         "phone": "+15125559876",
         "dob": "05/01/1990",
-        "insurance": "Aetna",
         "is_new_patient": False,
         "visit_count": 2,
         "preferred_type": "consultation",
@@ -384,16 +382,7 @@ def all_flows():
              ]},
         ]),
 
-        # Flow 4: insurance
-        ("Insurance", [
-            {"user": "Do you accept BlueCross?",
-             "checks": [
-                 ("natural_reply", is_natural),
-                 ("mentions_yes", lambda r: mentions_any(r, ["yes", "accept", "blue"])),
-             ]},
-        ]),
-
-        # Flow 5: anxiety — empathetic answer
+        # Flow 4: anxiety — empathetic answer
         ("Anxiety", [
             {"user": "I'm really nervous about coming in.",
              "checks": [
@@ -402,7 +391,7 @@ def all_flows():
              ]},
         ]),
 
-        # Flow 6: scheduling — check tool call → natural response
+        # Flow 5: scheduling — check tool call → natural response
         ("Schedule_Tuesday", [
             {"user": "Do you have any slots Tuesday?",
              "checks": [
@@ -413,7 +402,7 @@ def all_flows():
              ]},
         ]),
 
-        # Flow 7: Sunday closed — must reject naturally
+        # Flow 6: Sunday closed — must reject naturally
         ("Schedule_Sunday", [
             {"user": f"Can I book on Sunday, {_next_sunday.strftime('%B %d')}?",
              "checks": [
@@ -423,7 +412,7 @@ def all_flows():
              ]},
         ]),
 
-        # Flow 8: emergency — urgent pain
+        # Flow 7: emergency — urgent pain
         ("Emergency", [
             {"user": "I'm in really bad pain and I need to be seen right away.",
              "checks": [

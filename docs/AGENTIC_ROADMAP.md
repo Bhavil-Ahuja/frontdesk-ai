@@ -34,7 +34,6 @@ Trigger: fires automatically after every call ends.
 - **Auto-summarize call** — generate a 2-3 sentence summary from the transcript
   (currently summaries are basic; this agent writes clinical-quality notes)
 - **Update patient records** — extract new info mentioned on the call:
-  - New insurance mentioned → update patient.insurance_provider
   - New allergies mentioned → update patient.allergies
   - Preference changes → update patient.notes
   - Phone/email corrections → update patient record
@@ -72,7 +71,7 @@ class CallFollowup(Base):
 
     # Patient record updates detected
     patient_updates = Column(JSONB, default=list)
-    # e.g. [{"field": "insurance", "old": "Aetna", "new": "BlueCross", "auto_applied": false}]
+    # e.g. [{"field": "allergies", "old": "", "new": "Penicillin", "auto_applied": false}]
 
     # Review flags
     needs_review = Column(Boolean, default=False)
@@ -233,22 +232,17 @@ Trigger: fires in parallel when the voice agent is handling a call.
 
 **Capabilities:**
 
-1. **Insurance eligibility check** — while patient is talking:
-   - Hit insurance verification API with patient's insurance info
-   - Feed result back to voice agent mid-call if relevant
-   - "By the way, I checked and your BlueCross plan does cover consultations."
-
-2. **Real-time slot pre-fetch** — anticipate scheduling:
+1. **Real-time slot pre-fetch** — anticipate scheduling:
    - If patient mentions wanting to book, pre-fetch next 3 days of slots
    - When voice agent calls get_available_slots, result is already cached
    - Shaves 1-2 seconds off the scheduling flow
 
-3. **Sentiment monitoring** — track emotional state during the call:
+2. **Sentiment monitoring** — track emotional state during the call:
    - Detect escalating frustration, confusion, or distress
    - Alert the voice agent: "Patient seems frustrated — be extra empathetic"
    - Auto-escalate if sentiment drops below threshold
 
-4. **Context enrichment** — pull external data mid-call:
+3. **Context enrichment** — pull external data mid-call:
    - Check EHR/PMS for recent lab results, prescriptions
    - Look up weather (for rescheduling: "I see there's a storm tomorrow...")
    - Check provider schedules for specific availability
@@ -265,8 +259,6 @@ Trigger: fires in parallel when the voice agent is handling a call.
 Voice Agent (real-time)          Background Agent (parallel)
      │                                    │
      │── call_started(patient_id) ───────▶│
-     │                                    │── check insurance
-     │◀── insurance_verified ─────────────│
      │                                    │── pre-fetch slots
      │◀── slots_cached ──────────────────│
      │                                    │── monitor sentiment

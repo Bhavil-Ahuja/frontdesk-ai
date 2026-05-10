@@ -385,7 +385,6 @@ def test_patient_context_with_tenant():
             "name": "Jane Smith",
             "phone": "+15551111111",
             "dob": "01/15/1985",
-            "insurance": "BlueCross",
             "is_new_patient": False,
             "visit_count": 5,
             "preferred_type": "consultation",

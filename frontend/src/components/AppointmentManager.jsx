@@ -6,7 +6,6 @@ import {
   User,
   Phone as PhoneIcon,
   Mail,
-  Shield,
   X,
   ChevronLeft,
   ChevronRight,
@@ -278,7 +277,6 @@ export default function AppointmentManager() {
               <DetailRow icon={User} label="Patient" value={selectedApt.patient_name} />
               <DetailRow icon={PhoneIcon} label="Phone" value={selectedApt.patient_phone} />
               <DetailRow icon={Mail} label="Email" value={selectedApt.patient_email || '—'} />
-              <DetailRow icon={Shield} label="Insurance" value={selectedApt.insurance_provider || '—'} />
               <DetailRow icon={CalendarDays} label="Type" value={selectedApt.appointment_type} />
               <DetailRow
                 icon={Clock}

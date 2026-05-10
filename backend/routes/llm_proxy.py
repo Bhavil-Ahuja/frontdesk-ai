@@ -717,7 +717,7 @@ def _looks_like_simple_chat(messages: list) -> bool:
         "human", "person", "transfer", "callback", "call back",
         # Office info (triggers get_office_info tool)
         "hour", "hours", "open", "close", "location", "address", "where",
-        "phone", "number", "insurance", "accept", "service", "pricing",
+        "phone", "number", "service", "pricing",
         "price", "cost", "how much", "faq", "question",
         "do you", "can you", "what do", "offer",
         # Patient lookup
@@ -969,7 +969,6 @@ async def _execute_tool(
                 "phone": args.get("phone", ""),
                 "email": email,
                 "dob": args.get("dob", ""),
-                "insurance": args.get("insurance", ""),
             }
 
             slot_time = args.get("slot_time", "")
@@ -1047,7 +1046,6 @@ async def _execute_tool(
                         patient_name=args.get("patient_name", ""),
                         patient_email=email,
                         dob=args.get("dob", ""),
-                        insurance=args.get("insurance", ""),
                         tenant_id=tenant_id,
                     )
                 except Exception as db_exc:

@@ -31,7 +31,6 @@ PATIENTS = [
         "phone": "+15125551001",
         "email": "maria.gonzalez@email.com",
         "dob": "03/15/1985",
-        "insurance": "Delta Dental",
         "is_new": False,
     },
     {
@@ -39,7 +38,6 @@ PATIENTS = [
         "phone": "+15125551002",
         "email": "james.chen@email.com",
         "dob": "11/22/1992",
-        "insurance": "Cigna",
         "is_new": False,
     },
     {
@@ -47,7 +45,6 @@ PATIENTS = [
         "phone": "+15125551003",
         "email": "emily.t@email.com",
         "dob": "07/04/1978",
-        "insurance": "BlueCross BlueShield",
         "is_new": True,
     },
     {
@@ -55,7 +52,6 @@ PATIENTS = [
         "phone": "+15125551004",
         "email": "rwilliams@email.com",
         "dob": "01/30/1965",
-        "insurance": "Aetna",
         "is_new": False,
     },
     {
@@ -63,7 +59,6 @@ PATIENTS = [
         "phone": "+15125551005",
         "email": "sarah.kim@email.com",
         "dob": "09/12/1990",
-        "insurance": "Humana",
         "is_new": True,
     },
 ]
@@ -89,19 +84,19 @@ BOOKING_TRANSCRIPT = [
 INQUIRY_TRANSCRIPT = [
     {"role": "assistant", "content": "Thank you for calling. This is your AI assistant. How can I help you today?"},
     {"role": "user", "content": "Hi, I was wondering about your pricing for a consultation?"},
-    {"role": "assistant", "content": "Great question! An initial consultation is typically $50 to $100 without insurance and takes about 45 minutes. Would you like to schedule one?"},
-    {"role": "user", "content": "Hmm, that's a bit more than I expected. Does insurance cover any of it?"},
-    {"role": "assistant", "content": "I understand. Many insurance plans do cover consultations, but it depends on your specific plan. We also offer flexible payment options if needed. Would you like me to share more details about that?"},
+    {"role": "assistant", "content": "Great question! An initial consultation is typically $50 to $100 and takes about 45 minutes. Would you like to schedule one?"},
+    {"role": "user", "content": "Hmm, that's a bit more than I expected. Do you offer any payment plans?"},
+    {"role": "assistant", "content": "I understand. We do offer flexible payment options if needed. Would you like me to share more details about that?"},
     {"role": "user", "content": "No, I think I'll think about it and call back. Thanks for the info."},
     {"role": "assistant", "content": "Of course! Take your time. When you're ready, just give us a call and we'll get you set up. Have a wonderful day!"},
 ]
 
 ESCALATED_TRANSCRIPT_1 = [
     {"role": "assistant", "content": "Thank you for calling. This is your AI assistant. How can I help you today?"},
-    {"role": "user", "content": "I need to talk to someone about my bill. I was charged for something my insurance should have covered."},
+    {"role": "user", "content": "I need to talk to someone about my bill. I was charged more than expected."},
     {"role": "assistant", "content": "I'm sorry to hear about the billing concern. I want to make sure we get this resolved for you. Can you tell me a little more about what happened?"},
-    {"role": "user", "content": "Yeah, I had an appointment last month and my insurance was supposed to cover it fully but I got a bill for $180. This is really frustrating."},
-    {"role": "assistant", "content": "I completely understand your frustration, and I'm sorry about the confusion. Billing questions with insurance can be tricky, and I want to make sure you get the most accurate help. Let me connect you with one of our team members who specializes in insurance and billing. They'll be able to look into this in detail for you. Please hold for just a moment."},
+    {"role": "user", "content": "Yeah, I had an appointment last month and I got a bill for $180. This is really frustrating."},
+    {"role": "assistant", "content": "I completely understand your frustration, and I'm sorry about the confusion. Billing questions can be tricky, and I want to make sure you get the most accurate help. Let me connect you with one of our team members who specializes in billing. They'll be able to look into this in detail for you. Please hold for just a moment."},
 ]
 
 ESCALATED_TRANSCRIPT_2 = [
@@ -136,11 +131,11 @@ CANCELLED_TRANSCRIPT = [
 
 NEW_PATIENT_TRANSCRIPT = [
     {"role": "assistant", "content": "Thank you for calling. This is your AI assistant. How can I help you today?"},
-    {"role": "user", "content": "Hi, I just moved to Austin and I'm looking for a new provider. Do you accept Humana insurance?"},
-    {"role": "assistant", "content": "Welcome to Austin! Yes, we absolutely accept Humana. We'd love to have you as a client! Would you like to schedule your first visit with us?"},
+    {"role": "user", "content": "Hi, I just moved to Austin and I'm looking for a new provider. Are you accepting new patients?"},
+    {"role": "assistant", "content": "Welcome to Austin! Yes, we are absolutely accepting new patients. We'd love to have you as a client! Would you like to schedule your first visit with us?"},
     {"role": "user", "content": "That would be great. What do I need for a first visit?"},
-    {"role": "assistant", "content": "For new clients, we do a comprehensive initial evaluation, which takes about 60 minutes. I'll just need your full name, date of birth, phone number, email, and your insurance information. Would you like to get started?"},
-    {"role": "user", "content": "Sure! My name is Sarah Kim, date of birth September 12, 1990, phone is 512-555-1005, email is sarah.kim@email.com, and I have Humana."},
+    {"role": "assistant", "content": "For new clients, we do a comprehensive initial evaluation, which takes about 60 minutes. I'll just need your full name, date of birth, phone number, and email. Would you like to get started?"},
+    {"role": "user", "content": "Sure! My name is Sarah Kim, date of birth September 12, 1990, phone is 512-555-1005, email is sarah.kim@email.com."},
     {"role": "assistant", "content": "Perfect, thank you Sarah! Let me check our availability. I have openings next Monday at 9 AM, next Tuesday at 1 PM, or next Wednesday at 10 AM. Which would you prefer?"},
     {"role": "user", "content": "Monday at 9 AM works for me."},
     {"role": "assistant", "content": "Wonderful! You're all set for a new client visit next Monday at 9 AM. Please arrive about 15 minutes early so we can get your paperwork taken care of. You'll receive a text confirmation shortly. Is there anything else I can help with?"},
@@ -173,7 +168,6 @@ async def seed():
                 phone=p["phone"],
                 email=p["email"],
                 date_of_birth=p["dob"],
-                insurance_provider=p["insurance"],
                 is_new_patient=p["is_new"],
                 first_seen_at=now - timedelta(days=random.randint(30, 365)),
                 last_appointment_at=now - timedelta(days=random.randint(1, 60)),
@@ -187,7 +181,7 @@ async def seed():
         transcripts = [
             (BOOKING_TRANSCRIPT, CallOutcome.BOOKED, "Patient called to schedule a routine cleaning. Booked for Thursday at 2 PM."),
             (INQUIRY_TRANSCRIPT, CallOutcome.INQUIRY, "Patient inquired about consultation pricing. Will call back."),
-            (ESCALATED_TRANSCRIPT_1, CallOutcome.ESCALATED, "Patient had a billing dispute regarding insurance coverage. Escalated to billing team."),
+            (ESCALATED_TRANSCRIPT_1, CallOutcome.ESCALATED, "Patient had a billing dispute. Escalated to billing team."),
             (ESCALATED_TRANSCRIPT_2, CallOutcome.ESCALATED, "Patient with severe dental anxiety needed extra support. Transferred to care coordinator."),
             (EMERGENCY_TRANSCRIPT, CallOutcome.BOOKED, "Emergency call — patient had urgent reaction. Booked same-day emergency visit at 3:30 PM."),
             (CANCELLED_TRANSCRIPT, CallOutcome.CANCELLED, "Patient cancelled tomorrow's follow-up appointment. Will reschedule later."),
@@ -260,7 +254,6 @@ async def seed():
                 patient_phone=patient["phone"],
                 patient_email=patient["email"],
                 date_of_birth=patient["dob"],
-                insurance_provider=patient["insurance"],
                 appointment_type=apt_type,
                 scheduled_at=scheduled,
                 duration_minutes=duration,

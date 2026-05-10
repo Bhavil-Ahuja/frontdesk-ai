@@ -94,20 +94,9 @@ def kb_to_context_string(
             f"  Emergency: {info.get('emergency_info', 'N/A')}"
         )
 
-    # Insurance
-    if "insurance" in kb:
-        ins = kb["insurance"]
-        accepted = ", ".join(ins.get("accepted_providers", []))
-        sections.append(
-            f"INSURANCE:\n"
-            f"  Accepted: {accepted}\n"
-            f"  Financing: {ins.get('financing', 'N/A')}\n"
-            f"  Note: {ins.get('note', '')}"
-        )
-
     # Services & pricing
     if "services" in kb:
-        lines = ["SERVICES & PRICING (without insurance):"]
+        lines = ["SERVICES & PRICING:"]
         for svc in kb["services"]:
             lines.append(f"  - {svc['name']}: ${svc.get('price_min', '?')}–${svc.get('price_max', '?')}")
         sections.append("\n".join(lines))

@@ -313,7 +313,7 @@ async def book_appointment(
 
     Args:
         event_type_id: Cal.com event type ID (used only for Cal.com path).
-        patient_info: Dict with name, email, phone, insurance, dob.
+        patient_info: Dict with name, email, phone, dob.
         start_time: ISO datetime string for the slot.
         tenant_ctx: TenantContext for multi-tenant routing.
         appointment_type_key: Raw appointment type key (e.g. "consultation")
@@ -372,7 +372,6 @@ async def book_appointment(
             "phoneNumber": patient_info.get("phone", ""),
         },
         "metadata": {
-            "insurance": patient_info.get("insurance", ""),
             "dob": patient_info.get("dob", ""),
         },
     }

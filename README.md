@@ -195,7 +195,6 @@ backend/knowledge/default_kb.json
 
 Update:
 - Office name, address, phone, hours
-- Insurance providers accepted
 - Services and pricing
 - FAQs specific to your business
 

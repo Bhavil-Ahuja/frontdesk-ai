@@ -102,7 +102,6 @@ ALL_TOOLS = [
                     "phone": {"type": "string"},
                     "email": {"type": "string", "description": "Patient email (optional — system provides default if not given)."},
                     "dob": {"type": "string", "description": "Date of birth (MM/DD/YYYY)."},
-                    "insurance": {"type": "string"},
                     "appointment_type": {
                         "type": "string",
                         "description": "Type of appointment.",
@@ -183,7 +182,7 @@ ALL_TOOLS = [
             "description": (
                 "Get accurate office information. ALWAYS call this tool when the patient "
                 "asks about: business hours, open hours, office location, address, phone number, "
-                "insurance accepted, services offered, pricing, FAQs, or any factual question about the office. "
+                "services offered, pricing, FAQs, or any factual question about the office. "
                 "Do NOT answer these from memory — always call this tool to get the exact info."
             ),
             "parameters": {
@@ -191,7 +190,7 @@ ALL_TOOLS = [
                 "properties": {
                     "topic": {
                         "type": "string",
-                        "enum": ["hours", "location", "insurance", "services", "faqs", "all"],
+                        "enum": ["hours", "location", "services", "faqs", "all"],
                         "description": "What info the patient is asking about.",
                     },
                 },
@@ -344,7 +343,7 @@ def _looks_like_simple_chat(user_message: str) -> bool:
         "human", "person", "transfer", "callback", "call back",
         # Office info (triggers get_office_info tool)
         "hour", "hours", "open", "close", "location", "address", "where",
-        "phone", "number", "insurance", "accept", "service", "pricing",
+        "phone", "number", "service", "pricing",
         "price", "cost", "how much", "faq", "question",
         "do you", "can you", "what do", "offer",
         # Patient lookup
@@ -924,7 +923,6 @@ async def _execute_tool(
                 "phone": args.get("phone", ""),
                 "email": email,
                 "dob": args.get("dob", ""),
-                "insurance": args.get("insurance", ""),
             }
             # Store patient info in session for later DB persistence
             if session:
@@ -1016,7 +1014,6 @@ async def _execute_tool(
                         patient_name=args.get("patient_name", ""),
                         patient_email=email,
                         dob=args.get("dob", ""),
-                        insurance=args.get("insurance", ""),
                         tenant_id=tenant_id,
                     )
                     logger.info("[Call %s] ✓ Appointment recorded in DB (uid=%s)", call_id, booking_uid)
@@ -1331,23 +1328,6 @@ def _build_office_info(topic: str, tenant_ctx: Any | None) -> dict[str, Any]:
             parts.append(" ".join(contact_parts))
         else:
             parts.append("Office location and contact details are not configured yet.")
-
-    # ── Insurance ────────────────────────────────────────────────────────
-    if topic in ("insurance", "all"):
-        kb = _get_kb(tenant_ctx)
-        ins = kb.get("insurance", {})
-        if ins:
-            accepted = ins.get("accepted_providers", [])
-            if accepted:
-                parts.append(f"We accept the following insurance providers: {', '.join(accepted)}.")
-            financing = ins.get("financing")
-            if financing:
-                parts.append(f"Financing: {financing}")
-            note = ins.get("note")
-            if note:
-                parts.append(note)
-        else:
-            parts.append("Insurance information is not configured yet. I can have someone from our team follow up with you about insurance.")
 
     # ── Services & pricing ───────────────────────────────────────────────
     if topic in ("services", "all"):

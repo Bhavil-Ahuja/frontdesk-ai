@@ -1,5 +1,5 @@
 """
-Patient database model — stores patient contact, insurance, and preference data.
+Patient database model — stores patient contact and preference data.
 Used for caller recognition (phone-based lookup) and personalised greetings.
 
 Multi-tenant: each patient belongs to one tenant. The same phone number can
@@ -32,7 +32,6 @@ class Patient(Base):
     date_of_birth = Column(String(20), nullable=True)
 
     # ── Clinical / preference ────────────────────────────────────────────
-    insurance_provider = Column(String(255), nullable=True)
     preferred_appointment_type = Column(String(100), nullable=True)  # e.g. "consultation"
     allergies = Column(Text, nullable=True)                          # free text
     notes = Column(Text, nullable=True)                              # receptionist notes
