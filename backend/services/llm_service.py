@@ -335,18 +335,19 @@ ALL_TOOLS = [
                 "Look up a patient's full CRM record — personal details, past appointments, "
                 "and upcoming appointments. Use this when you need to verify or retrieve patient "
                 "information mid-conversation (e.g. DOB, allergies, visit history). "
-                "Search by phone number (primary) or patient name."
+                "ALWAYS use the caller's phone number (from caller-ID in your system prompt) as the "
+                "primary lookup key. Only use name as a last resort — multiple patients can share a name."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "phone": {
                         "type": "string",
-                        "description": "Patient's phone number. This is the primary lookup key.",
+                        "description": "Patient's phone number — ALWAYS provide this. You have it from caller-ID.",
                     },
                     "name": {
                         "type": "string",
-                        "description": "Patient's name. Used as fallback if phone not provided.",
+                        "description": "Patient's name. Only use as last resort if phone is truly unavailable. May return multiple matches.",
                     },
                 },
                 "required": [],
@@ -360,15 +361,15 @@ ALL_TOOLS = [
             "description": (
                 "Update a patient's personal information in the CRM. Use when a patient "
                 "provides new or corrected details during the conversation — for example, "
-                "their date of birth, allergies, or notes. Requires the patient's phone "
-                "number to identify them."
+                "their date of birth, allergies, or notes. Use the caller's phone number "
+                "from caller-ID (in your system prompt) to identify them."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "phone": {
                         "type": "string",
-                        "description": "Patient's phone number (required to identify the patient).",
+                        "description": "Patient's phone number (from caller-ID in your system prompt).",
                     },
                     "name": {
                         "type": "string",
@@ -1582,7 +1583,9 @@ async def _execute_tool(
                         "summary_for_assistant": (
                             f"Found {len(matches)} patients matching the name '{patient_name}': "
                             + "; ".join(match_lines) + ". "
-                            "Ask the patient for their phone number or date of birth to identify the correct record."
+                            "You already have the caller's phone number from caller-ID (in your system prompt). "
+                            "Call lookup_patient again with the phone parameter to get the exact match. "
+                            "If for some reason you don't have the phone, ask the patient to confirm it."
                         ),
                     }
                 elif len(matches) == 1:

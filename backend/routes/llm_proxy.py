@@ -1388,7 +1388,9 @@ async def _execute_tool(
                         "summary_for_assistant": (
                             f"Found {len(matches)} patients matching the name '{patient_name}': "
                             + "; ".join(match_lines) + ". "
-                            "Ask the patient for their phone number or date of birth to identify the correct record."
+                            "You already have the caller's phone number from caller-ID. "
+                            "Call lookup_patient again with the phone parameter to get the exact match. "
+                            "If for some reason you don't have the phone, ask the patient to confirm it."
                         ),
                     }
                 elif len(matches) == 1:
