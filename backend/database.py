@@ -38,7 +38,7 @@ class Base(DeclarativeBase):
 
 _MIGRATIONS: list[str] = [
     # ── tenants table — reminder & review settings ────────────────────────
-    "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS reminder_settings JSONB DEFAULT '{\"24h_enabled\": true, \"2h_enabled\": true, \"confirmation_reply_enabled\": true}'::jsonb",
+    "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS reminder_settings JSONB DEFAULT '{\"2h_enabled\": true, \"confirmation_reply_enabled\": true}'::jsonb",
     "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS review_settings JSONB DEFAULT '{\"enabled\": false, \"google_review_link\": \"\", \"delay_hours\": 24, \"appointment_types\": []}'::jsonb",
 
     # ── tenants table — test caller phone for Test Agent chat
@@ -53,6 +53,9 @@ _MIGRATIONS: list[str] = [
        SET test_caller_phones = jsonb_build_array(test_caller_phone)
        WHERE test_caller_phone IS NOT NULL
          AND (test_caller_phones IS NULL OR test_caller_phones = '[]'::jsonb)""",
+
+    # ── tenants table — unified test_callers [{phone, name}] (replaces parallel arrays)
+    "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS test_callers JSONB DEFAULT '[]'::jsonb",
 
     # ── appointments table — provider, extra reminders, patient confirmation
     "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS provider_id UUID REFERENCES providers(id)",

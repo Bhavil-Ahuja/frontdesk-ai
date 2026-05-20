@@ -21,13 +21,8 @@ class Settings:
     VAPI_ASSISTANT_ID: str = os.getenv("VAPI_ASSISTANT_ID", "")
     VAPI_WEBHOOK_SECRET: str = os.getenv("VAPI_WEBHOOK_SECRET", "")
 
-    # ── Cal.com ───────────────────────────────────────────────────────────
-    CALCOM_API_KEY: str = os.getenv("CALCOM_API_KEY", "")
-    CALCOM_EVENT_TYPE_ID_NEW_PATIENT: str = os.getenv("CALCOM_EVENT_TYPE_ID_NEW_PATIENT", "")
-    CALCOM_EVENT_TYPE_ID_CLEANING: str = os.getenv("CALCOM_EVENT_TYPE_ID_CLEANING", "")
-    CALCOM_EVENT_TYPE_ID_EMERGENCY: str = os.getenv("CALCOM_EVENT_TYPE_ID_EMERGENCY", "")
-    CALCOM_EVENT_TYPE_ID_CONSULTATION: str = os.getenv("CALCOM_EVENT_TYPE_ID_CONSULTATION", "")
-    CALCOM_USERNAME: str = os.getenv("CALCOM_USERNAME", "")
+    # ── ElevenLabs (voice preview) ───────────────────────────────────────
+    ELEVENLABS_API_KEY: str = os.getenv("ELEVENLABS_API_KEY", "")
 
     # ── Twilio ────────────────────────────────────────────────────────────
     TWILIO_ACCOUNT_SID: str = os.getenv("TWILIO_ACCOUNT_SID", "")
@@ -74,16 +69,6 @@ class Settings:
         """OpenAI-compatible base URL for Ollama."""
         return f"{self.OLLAMA_BASE_URL}/v1"
 
-    def get_event_type_id(self, appointment_type: str) -> str:
-        """Map an appointment type string to the corresponding Cal.com event type ID."""
-        mapping = {
-            "new_client": self.CALCOM_EVENT_TYPE_ID_NEW_PATIENT,
-            "new_patient": self.CALCOM_EVENT_TYPE_ID_NEW_PATIENT,
-            "follow_up": self.CALCOM_EVENT_TYPE_ID_CLEANING,
-            "emergency": self.CALCOM_EVENT_TYPE_ID_EMERGENCY,
-            "consultation": self.CALCOM_EVENT_TYPE_ID_CONSULTATION,
-        }
-        return mapping.get(appointment_type.lower().replace(" ", "_"), self.CALCOM_EVENT_TYPE_ID_CONSULTATION)
 
 
 settings = Settings()

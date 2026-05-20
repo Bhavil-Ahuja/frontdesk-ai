@@ -86,11 +86,6 @@ class TenantContext:
     vapi_phone_number_id: str
     vapi_webhook_secret: str
 
-    # Cal.com
-    calcom_api_key: str
-    calcom_username: str
-    calcom_event_types: dict[str, str]
-
     # Twilio
     twilio_account_sid: str
     twilio_auth_token: str
@@ -117,20 +112,14 @@ class TenantContext:
     reminder_settings: dict[str, Any]
     review_settings: dict[str, Any]
 
-    # Test Agent
+    # Test Agent — unified callers with 1:1 phone→name mapping
+    test_callers: list[dict[str, str]]  # [{phone: str, name: str}, ...]
+
+    # Legacy fields (deprecated — prefer test_callers)
     test_caller_phone: str
     test_caller_phones: list[str]
-
-    # Derived
-    noemail_address: str
-
-    def get_event_type_id(self, appointment_type: str) -> str:
-        """Map appointment type key → Cal.com event type ID."""
-        key = appointment_type.lower().replace(" ", "_")
-        return str(
-            self.calcom_event_types.get(key, "")
-            or self.calcom_event_types.get("consultation", "")
-        )
+    test_patient_name: str
+    test_patient_names: list[str]
 
     @property
     def tz_abbreviation(self) -> str:
@@ -162,9 +151,6 @@ def _tenant_to_context(t: Tenant) -> TenantContext:
         vapi_assistant_id=t.vapi_assistant_id or "",
         vapi_phone_number_id=t.vapi_phone_number_id or "",
         vapi_webhook_secret=t.vapi_webhook_secret or "",
-        calcom_api_key=t.calcom_api_key or "",
-        calcom_username=t.calcom_username or "",
-        calcom_event_types=t.calcom_event_types or {},
         twilio_account_sid=t.twilio_account_sid or "",
         twilio_auth_token=t.twilio_auth_token or "",
         twilio_phone_number=t.twilio_phone_number or "",
@@ -177,12 +163,43 @@ def _tenant_to_context(t: Tenant) -> TenantContext:
         business_hours=t.business_hours,
         knowledge_base=t.knowledge_base or {},
         emergency_guidance=t.emergency_guidance or "",
-        reminder_settings=t.reminder_settings or {"24h_enabled": True, "2h_enabled": True, "confirmation_reply_enabled": True},
+        reminder_settings=t.reminder_settings or {"2h_enabled": True, "confirmation_reply_enabled": True},
         review_settings=t.review_settings or {"enabled": False, "google_review_link": "", "delay_hours": 24, "appointment_types": []},
+        # Unified test_callers — migrate from legacy if needed
+        test_callers=_merge_test_callers(t),
+        # Legacy fields (kept for backwards compat)
         test_caller_phone=t.test_caller_phone or "",
         test_caller_phones=t.test_caller_phones or [],
-        noemail_address=t.noemail_address,
+        test_patient_name=t.test_patient_name or "Alex Johnson",
+        test_patient_names=t.test_patient_names or ["Alex Johnson"],
     )
+
+
+def _merge_test_callers(t: Tenant) -> list[dict[str, str]]:
+    """
+    Build the test_callers list. If the new unified field is populated, use it.
+    Otherwise, merge the legacy parallel arrays (phones + names) into pairs.
+    """
+    if t.test_callers:
+        return t.test_callers
+
+    # Merge legacy parallel arrays
+    phones = t.test_caller_phones or []
+    names = t.test_patient_names or []
+
+    # If no phones but we have the single legacy field, use that
+    if not phones and t.test_caller_phone:
+        phones = [t.test_caller_phone]
+    if not names and t.test_patient_name:
+        names = [t.test_patient_name]
+
+    # Pair them up — if arrays are different lengths, use index or default name
+    result = []
+    for i, phone in enumerate(phones):
+        name = names[i] if i < len(names) else f"Test Patient {i + 1}"
+        result.append({"phone": phone, "name": name})
+
+    return result
 
 
 # ── Resolution (the hot path — called on every request) ──────────────────────
@@ -369,14 +386,6 @@ async def resolve_default_tenant() -> TenantContext | None:
         vapi_assistant_id=settings.VAPI_ASSISTANT_ID,
         vapi_phone_number_id=settings.VAPI_PHONE_NUMBER_ID,
         vapi_webhook_secret=settings.VAPI_WEBHOOK_SECRET,
-        calcom_api_key=settings.CALCOM_API_KEY,
-        calcom_username=settings.CALCOM_USERNAME,
-        calcom_event_types={
-            "new_client": settings.CALCOM_EVENT_TYPE_ID_NEW_PATIENT,
-            "follow_up": settings.CALCOM_EVENT_TYPE_ID_CLEANING,
-            "emergency": settings.CALCOM_EVENT_TYPE_ID_EMERGENCY,
-            "consultation": settings.CALCOM_EVENT_TYPE_ID_CONSULTATION,
-        },
         twilio_account_sid=settings.TWILIO_ACCOUNT_SID,
         twilio_auth_token=settings.TWILIO_AUTH_TOKEN,
         twilio_phone_number=settings.TWILIO_PHONE_NUMBER,
@@ -386,19 +395,21 @@ async def resolve_default_tenant() -> TenantContext | None:
         escalation_phone=settings.ESCALATION_PHONE_NUMBER,
         escalation_transfer_number=settings.ESCALATION_TRANSFER_NUMBER,
         appointment_types=[
-            {"key": "new_client", "label": "New Client Visit", "duration_minutes": 60, "max_concurrent": 1},
-            {"key": "follow_up", "label": "Follow-up", "duration_minutes": 30, "max_concurrent": 2},
-            {"key": "emergency", "label": "Emergency / Urgent", "duration_minutes": 30, "max_concurrent": 1},
-            {"key": "consultation", "label": "Consultation", "duration_minutes": 45, "max_concurrent": 1},
+            {"code": "new_client", "name": "New Client Visit", "duration_minutes": 60, "max_concurrent": 1},
+            {"code": "follow_up", "name": "Follow-up", "duration_minutes": 30, "max_concurrent": 2},
+            {"code": "emergency", "name": "Emergency / Urgent", "duration_minutes": 30, "max_concurrent": 1},
+            {"code": "consultation", "name": "Consultation", "duration_minutes": 45, "max_concurrent": 1},
         ],
         business_hours=None,
         knowledge_base={},
         emergency_guidance="",
-        reminder_settings={"24h_enabled": True, "2h_enabled": True, "confirmation_reply_enabled": True},
+        reminder_settings={"2h_enabled": True, "confirmation_reply_enabled": True},
         review_settings={"enabled": False, "google_review_link": "", "delay_hours": 24, "appointment_types": []},
+        test_callers=[],
         test_caller_phone="",
         test_caller_phones=[],
-        noemail_address="noemail@scheduler.ai",
+        test_patient_name="Alex Johnson",
+        test_patient_names=["Alex Johnson"],
     )
     _cache_set(cache_key, ctx)
     return ctx
@@ -407,27 +418,40 @@ async def resolve_default_tenant() -> TenantContext | None:
 # ── CRUD (admin operations) ──────────────────────────────────────────────────
 
 def _generate_test_phone() -> str:
-    """Generate a short dummy phone for Test Agent chat caller recognition.
+    """Generate a unique dummy phone for Test Agent chat caller recognition.
 
-    Uses the 555-01XX range reserved for fictional use in US numbering plans.
-    The result looks like +15550100 through +15550199 — short enough to
-    signal "this is a test number" at a glance.
+    Uses the 555-XXXX range reserved for fictional use in US numbering plans.
+    The result looks like +15551000 through +15559999 — clearly a test number.
+    With 9000 possible values, collisions are extremely unlikely.
     """
     import random
-    suffix = random.randint(100, 199)
-    return f"+155501{suffix}"
+    suffix = random.randint(1000, 9999)
+    return f"+1555{suffix}"
+
+
+_DEFAULT_BUSINESS_HOURS = {
+    "monday": {"open": "08:00", "close": "18:00"},
+    "tuesday": {"open": "08:00", "close": "18:00"},
+    "wednesday": {"open": "08:00", "close": "18:00"},
+    "thursday": {"open": "08:00", "close": "18:00"},
+    "friday": {"open": "08:00", "close": "18:00"},
+    "saturday": None,
+    "sunday": None,
+}
 
 
 async def create_tenant(data: dict[str, Any]) -> Tenant:
     """
     Create a new tenant in PENDING status (requires admin approval).
-    Auto-assigns a test caller phone for the Test Agent chat.
+    Auto-assigns a test caller phone and default business hours.
     """
     async with async_session() as session:
         tenant = Tenant(
             slug=data["slug"],
             business_name=data["business_name"],
             business_type=data.get("business_type", "custom"),
+            business_phone=data.get("owner_phone", ""),
+            business_address=data.get("business_address", ""),
             owner_name=data["owner_name"],
             owner_email=data["owner_email"],
             owner_phone=data.get("owner_phone"),
@@ -435,6 +459,9 @@ async def create_tenant(data: dict[str, Any]) -> Tenant:
             plan=data.get("plan", "starter"),
             status=TenantStatus.PENDING,
             test_caller_phone=_generate_test_phone(),
+            test_patient_names=["Alex Johnson"],
+            test_patient_name="Alex Johnson",
+            business_hours=_DEFAULT_BUSINESS_HOURS,
         )
         session.add(tenant)
         await session.commit()
@@ -481,8 +508,7 @@ async def update_tenant(tenant_id: uuid.UUID, data: dict[str, Any]) -> Tenant | 
             "business_website", "timezone", "agent_name", "greeting_message",
             "system_prompt_override", "voice_config", "end_call_phrases",
             "vapi_api_key", "vapi_assistant_id", "vapi_phone_number_id",
-            "vapi_webhook_secret", "calcom_api_key", "calcom_username",
-            "calcom_event_types", "twilio_account_sid", "twilio_auth_token",
+            "vapi_webhook_secret", "twilio_account_sid", "twilio_auth_token",
             "twilio_phone_number", "escalation_phone", "escalation_transfer_number",
             "appointment_types", "business_hours", "knowledge_base",
             "emergency_guidance", "demo_mode", "plan",

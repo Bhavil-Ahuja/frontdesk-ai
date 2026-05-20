@@ -2,7 +2,7 @@
 Conversation flow simulator.
 
 Exercises the LLM proxy end-to-end against a real Ollama backend, but with
-Cal.com / Twilio tool execution mocked. Validates every common patient
+calendar / Twilio tool execution mocked. Validates every common patient
 interaction so we don't have to discover bugs through real Vapi calls.
 
 Run:  venv/bin/python tests/test_conversation_flows.py
@@ -26,7 +26,7 @@ from backend.services.llm_service import TOOLS
 
 
 # ─── Mock tool executor ──────────────────────────────────────────────────────
-# Returns the same shape as the real _execute_tool, without hitting Cal.com.
+# Returns the same shape as the real _execute_tool, without hitting external APIs.
 
 # Dynamically generate mock slots relative to today so tests don't break
 # when the date changes.

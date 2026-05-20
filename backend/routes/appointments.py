@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import async_session, get_db
 from backend.models.appointment import Appointment, AppointmentStatus, BookedVia
+from backend.models.provider import Provider
 from backend.models.tenant import Tenant
 from backend.services import sms_service, auth_service, tenant_service, calendar_service
 from backend.services import google_calendar as gcal
@@ -45,6 +46,8 @@ class AppointmentOut(BaseModel):
     booked_via: str
     notes: Optional[str]
     created_at: Optional[datetime]
+    provider_id: Optional[str] = None
+    provider_name: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -59,21 +62,14 @@ async def list_appointments(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     appointment_type: Optional[str] = None,
+    provider_id: Optional[str] = Query(None, description="Filter by provider UUID"),
     tenant_id: Optional[str] = Query(None, description="Filter by tenant UUID (admin-only)"),
-    sync: int = Query(0, description="If 1, pull latest bookings from Cal.com before returning"),
     db: AsyncSession = Depends(get_db),
     current_user: Tenant = Depends(auth_service.get_current_user),
 ):
     """List all appointments with optional filters. Auto-scoped to current tenant."""
-    logger.info("Listing appointments for user=%s admin=%s status=%s type=%s sync=%d",
-                current_user.owner_email, current_user.is_admin, status, appointment_type, sync)
-
-    # Optional live sync from Cal.com → upsert into local Appointment table
-    if sync and not current_user.is_admin:
-        try:
-            await _sync_calcom_bookings(current_user)
-        except Exception as exc:
-            logger.warning("Cal.com sync failed (non-fatal): %s", exc)
+    logger.info("Listing appointments for user=%s admin=%s status=%s type=%s",
+                current_user.owner_email, current_user.is_admin, status, appointment_type)
 
     query = select(Appointment)
 
@@ -104,10 +100,25 @@ async def list_appointments(
             pass
     if appointment_type:
         query = query.where(Appointment.appointment_type.ilike(f"%{appointment_type}%"))
+    if provider_id:
+        try:
+            query = query.where(Appointment.provider_id == uuid.UUID(provider_id))
+        except ValueError:
+            pass
 
     query = query.order_by(desc(Appointment.scheduled_at))
     result = await db.execute(query)
     appointments = result.scalars().all()
+
+    # Batch-fetch provider names for appointments that have provider_id
+    provider_ids = {a.provider_id for a in appointments if a.provider_id}
+    provider_map = {}
+    if provider_ids:
+        prov_result = await db.execute(
+            select(Provider).where(Provider.id.in_(provider_ids))
+        )
+        for p in prov_result.scalars().all():
+            provider_map[p.id] = p.name
 
     return [
         AppointmentOut(
@@ -124,6 +135,8 @@ async def list_appointments(
             booked_via=a.booked_via.value,
             notes=a.notes,
             created_at=a.created_at,
+            provider_id=str(a.provider_id) if a.provider_id else None,
+            provider_name=provider_map.get(a.provider_id) if a.provider_id else None,
         )
         for a in appointments
     ]
@@ -199,11 +212,14 @@ async def sync_google_calendar(
 ):
     """
     Bidirectional sync between the local Appointment table and Google Calendar.
+    The DB is the source of truth — conflicts are resolved in DB's favour.
 
-    1. Pull: Fetch future events from Google Calendar → upsert into DB
-    2. Push: Find DB appointments missing from Google Calendar → create GCal events
+    1. Pull: Fetch GCal events → upsert into DB (skips appointments cancelled in DB)
+    2. Re-push: Confirmed DB appointments whose GCal event disappeared → clear UID for re-push
+    3. Push: DB appointments without a gcal-* UID → create in Google Calendar
+    4. Push cancellations: CANCELLED DB appointments with a gcal-* UID → delete from GCal
 
-    Returns sync stats: { pulled, pushed, errors, total }.
+    Returns sync stats: { pulled, pushed, cancelled, errors, total }.
     """
     if not current_user.google_calendar_connected or not current_user.google_calendar_refresh_token:
         raise HTTPException(
@@ -245,7 +261,9 @@ async def sync_google_calendar(
             gcal_uid = f"gcal-{event_id}"
             gcal_status = event.get("status", "confirmed")
 
-            # Cancelled events from GCal may lack start/end — handle them specially
+            # Cancelled events from GCal may lack start/end — handle them specially.
+            # DB is authoritative: if DB says CONFIRMED but GCal says cancelled,
+            # we clear the gcal UID so the PUSH step re-creates it in GCal.
             if gcal_status == "cancelled":
                 existing = (
                     await db.execute(
@@ -255,10 +273,19 @@ async def sync_google_calendar(
                         )
                     )
                 ).scalar_one_or_none()
-                if existing and existing.status != AppointmentStatus.CANCELLED:
-                    existing.status = AppointmentStatus.CANCELLED
-                    pulled += 1
-                    logger.info("[GCalSync] Cancelled from GCal: %s (%s)", gcal_uid, existing.patient_name)
+                if existing:
+                    if existing.status == AppointmentStatus.CANCELLED:
+                        # Both sides agree — nothing to do
+                        logger.debug("[GCalSync] Already cancelled in both DB and GCal: %s", gcal_uid)
+                    else:
+                        # DB says confirmed but GCal says cancelled → DB wins.
+                        # Clear the gcal UID so the PUSH step re-creates it.
+                        logger.info(
+                            "[GCalSync] GCal event cancelled but DB is CONFIRMED for %s (%s) — "
+                            "clearing gcal UID so it will be re-pushed",
+                            gcal_uid, existing.patient_name,
+                        )
+                        existing.cal_booking_uid = None
                 continue
 
             # Skip all-day events (no dateTime means all-day)
@@ -312,6 +339,17 @@ async def sync_google_calendar(
             ).scalar_one_or_none()
 
             if existing:
+                # DB is source of truth: if the appointment is cancelled in
+                # DB, do NOT resurrect it just because GCal still shows it as
+                # confirmed. The PUSH CANCELLATIONS step will remove it from
+                # GCal instead.
+                if existing.status == AppointmentStatus.CANCELLED:
+                    logger.info(
+                        "[GCalSync] Skipping GCal update for %s — cancelled in DB (DB is authoritative)",
+                        gcal_uid,
+                    )
+                    continue
+
                 existing.scheduled_at = scheduled_at
                 existing.duration_minutes = duration
                 existing.status = local_status
@@ -343,10 +381,11 @@ async def sync_google_calendar(
 
     await db.flush()
 
-    # ── DETECT DELETIONS: GCal events that disappeared ───────────────────
-    # When an event is fully deleted in Google Calendar (not just "cancelled"),
-    # it vanishes from the events list. Find DB appointments with gcal- UIDs
-    # that are NOT in the returned events → mark them CANCELLED.
+    # ── RE-PUSH: DB appointments with gcal- UIDs missing from GCal ───────
+    # DB is source of truth. If a confirmed appointment has a gcal- UID but
+    # the event no longer exists in Google Calendar (someone deleted it
+    # directly in GCal), we re-create it in GCal rather than cancelling
+    # in DB. We clear the old gcal- UID so the PUSH step below picks it up.
     gcal_uids_in_calendar = {f"gcal-{e.get('id', '')}" for e in gcal_events if e.get("id")}
 
     result = await db.execute(
@@ -361,10 +400,12 @@ async def sync_google_calendar(
 
     for apt in gcal_db_appointments:
         if apt.cal_booking_uid not in gcal_uids_in_calendar:
-            apt.status = AppointmentStatus.CANCELLED
-            pulled += 1
-            logger.info("[GCalSync] Detected deletion from GCal: %s (%s)",
-                        apt.cal_booking_uid, apt.patient_name)
+            logger.info(
+                "[GCalSync] GCal event missing for confirmed DB appointment %s (%s) — "
+                "clearing gcal UID so it will be re-pushed",
+                apt.cal_booking_uid, apt.patient_name,
+            )
+            apt.cal_booking_uid = None  # PUSH step will re-create in GCal
 
     await db.flush()
 
@@ -462,110 +503,3 @@ async def sync_google_calendar(
         "message": f"Synced {total} appointments ({pulled} from Google Calendar, {pushed} pushed, {cancelled_count} cancellations synced)"
         + (f", {errors} errors" if errors else ""),
     }
-
-
-# ── Cal.com live sync ─────────────────────────────────────────────────────────
-
-
-async def _sync_calcom_bookings(tenant: Tenant) -> int:
-    """
-    Pull bookings from Cal.com for this tenant and upsert into the local
-    Appointment table (matched by cal_booking_uid).
-
-    Returns the number of bookings synced.
-    """
-    if not tenant.calcom_api_key:
-        logger.debug("[CalSync] Skipped — tenant %s has no calcom_api_key", tenant.slug)
-        return 0
-
-    # Build a TenantContext to satisfy calendar_service signatures
-    ctx = tenant_service._tenant_to_context(tenant)
-    bookings = await calendar_service.list_bookings(tenant_ctx=ctx, take=100)
-
-    if not bookings:
-        return 0
-
-    synced = 0
-    async with async_session() as session:
-        for b in bookings:
-            try:
-                uid = b.get("uid") or b.get("id")
-                if not uid:
-                    continue
-                uid = str(uid)
-
-                # Pull fields from Cal.com booking shape
-                start = b.get("start") or b.get("startTime")
-                end = b.get("end") or b.get("endTime")
-                event_title = (b.get("eventType") or {}).get("title") or b.get("title") or "Appointment"
-                status_str = (b.get("status") or "ACCEPTED").upper()
-
-                # Attendee details
-                attendees = b.get("attendees") or []
-                first_attendee = attendees[0] if attendees else {}
-                patient_name = first_attendee.get("name") or b.get("responses", {}).get("name") or "Unknown"
-                patient_email = first_attendee.get("email") or b.get("responses", {}).get("email")
-                patient_phone = (
-                    first_attendee.get("phoneNumber")
-                    or b.get("responses", {}).get("smsReminderNumber")
-                    or b.get("responses", {}).get("phone")
-                    or ""
-                )
-
-                if not start:
-                    continue
-                scheduled_at = datetime.fromisoformat(start.replace("Z", "+00:00"))
-                duration = 30
-                if end:
-                    end_dt = datetime.fromisoformat(end.replace("Z", "+00:00"))
-                    duration = max(int((end_dt - scheduled_at).total_seconds() / 60), 5)
-
-                # Map Cal.com status → local AppointmentStatus
-                if status_str in ("CANCELLED", "REJECTED"):
-                    local_status = AppointmentStatus.CANCELLED
-                elif status_str in ("PENDING", "AWAITING_HOST"):
-                    local_status = AppointmentStatus.CONFIRMED
-                else:
-                    local_status = AppointmentStatus.CONFIRMED
-
-                # Upsert by cal_booking_uid
-                existing = (
-                    await session.execute(
-                        select(Appointment).where(
-                            Appointment.cal_booking_uid == uid,
-                            Appointment.tenant_id == tenant.id,
-                        )
-                    )
-                ).scalar_one_or_none()
-
-                if existing:
-                    existing.scheduled_at = scheduled_at
-                    existing.duration_minutes = duration
-                    existing.status = local_status
-                    existing.appointment_type = event_title
-                    existing.patient_name = patient_name
-                    existing.patient_email = patient_email
-                    if patient_phone:
-                        existing.patient_phone = patient_phone
-                else:
-                    new = Appointment(
-                        tenant_id=tenant.id,
-                        cal_booking_uid=uid,
-                        patient_name=patient_name,
-                        patient_phone=patient_phone or "",
-                        patient_email=patient_email,
-                        appointment_type=event_title,
-                        scheduled_at=scheduled_at,
-                        duration_minutes=duration,
-                        status=local_status,
-                        booked_via=BookedVia.AI,  # Booked via Cal.com (treated as agent-booked)
-                    )
-                    session.add(new)
-                synced += 1
-            except Exception as exc:
-                logger.warning("[CalSync] Failed to upsert booking %s: %s", b.get("uid"), exc)
-
-        await session.commit()
-
-    logger.info("[CalSync] Synced %d bookings for tenant %s", synced, tenant.slug)
-    return synced

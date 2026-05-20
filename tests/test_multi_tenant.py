@@ -49,7 +49,6 @@ def _make_mock_tenant(
     business_type_val="custom",
     vapi_assistant_id="asst_abc123",
     status_val="ACTIVE",
-    calcom_api_key="cal_key_abc",
     twilio_account_sid="AC_test123",
     twilio_auth_token="token_test",
     twilio_phone_number="+15551234567",
@@ -58,7 +57,6 @@ def _make_mock_tenant(
     agent_name="Alex",
     escalation_phone="+15559990000",
     escalation_transfer_number="",
-    calcom_event_types=None,
     appointment_types=None,
     knowledge_base=None,
     emergency_guidance="",
@@ -84,17 +82,14 @@ def _make_mock_tenant(
     t.vapi_assistant_id = vapi_assistant_id
     t.vapi_phone_number_id = "phone_id_test"
     t.vapi_webhook_secret = "secret_test"
-    t.calcom_api_key = calcom_api_key
-    t.calcom_username = "acme-clinic"
-    t.calcom_event_types = calcom_event_types or {"consultation": "5560050", "follow_up": "5560055"}
     t.twilio_account_sid = twilio_account_sid
     t.twilio_auth_token = twilio_auth_token
     t.twilio_phone_number = twilio_phone_number
     t.escalation_phone = escalation_phone
     t.escalation_transfer_number = escalation_transfer_number
     t.appointment_types = appointment_types or [
-        {"key": "consultation", "label": "Consultation", "duration_minutes": 45},
-        {"key": "follow_up", "label": "Follow-up Visit", "duration_minutes": 30},
+        {"code": "consultation", "name": "Consultation", "duration_minutes": 45},
+        {"code": "follow_up", "name": "Follow-up Visit", "duration_minutes": 30},
     ]
     t.business_hours = None
     t.knowledge_base = knowledge_base or {}
@@ -106,7 +101,6 @@ def _make_mock_tenant(
     t.status = MagicMock(value=status_val)
     t.created_at = datetime.now(timezone.utc)
     t.updated_at = datetime.now(timezone.utc)
-    t.noemail_address = f"noemail@{slug}.scheduler.ai"
     return t
 
 
@@ -136,9 +130,7 @@ def test_tenant_context_creation():
     _assert(ctx.demo_mode is True, "demo_mode matches")
     _assert(ctx.agent_name == "Alex", "agent_name matches")
     _assert(ctx.vapi_assistant_id == "asst_abc123", "vapi_assistant_id matches")
-    _assert(ctx.calcom_api_key == "cal_key_abc", "calcom_api_key matches")
     _assert(ctx.twilio_account_sid == "AC_test123", "twilio_account_sid matches")
-    _assert(ctx.noemail_address == "noemail@acme-clinic.scheduler.ai", "noemail_address generated correctly")
 
     # Immutability (frozen dataclass)
     try:
@@ -149,21 +141,18 @@ def test_tenant_context_creation():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TEST 2: TenantContext.get_event_type_id
+# TEST 2: TenantContext fields (Cal.com removed)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def test_event_type_mapping():
-    print("\n── Test 2: Event type ID resolution ──")
+def test_tenant_context_no_calcom():
+    print("\n── Test 2: TenantContext no longer has Cal.com fields ──")
 
     ctx = _make_tenant_context()
 
-    _assert(ctx.get_event_type_id("consultation") == "5560050", "consultation → correct event type")
-    _assert(ctx.get_event_type_id("follow_up") == "5560055", "follow_up → correct event type")
-    _assert(ctx.get_event_type_id("unknown_type") == "5560050", "unknown falls back to consultation")
-    # "Follow Up" → "follow_up" key (direct match)
-    _assert(ctx.get_event_type_id("Follow Up") == "5560055", "title-case normalised to key")
-    # Unknown title-case falls back to consultation
-    _assert(ctx.get_event_type_id("Some Unknown Type") == "5560050", "unknown title-case falls back to consultation")
+    _assert(not hasattr(ctx, "calcom_api_key"), "calcom_api_key removed from TenantContext")
+    _assert(not hasattr(ctx, "calcom_username"), "calcom_username removed from TenantContext")
+    _assert(not hasattr(ctx, "calcom_event_types"), "calcom_event_types removed from TenantContext")
+    _assert(not hasattr(ctx, "get_event_type_id"), "get_event_type_id removed from TenantContext")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -309,22 +298,15 @@ def test_sms_confirmation_uses_tenant():
 def test_calendar_service_tenant_config():
     print("\n── Test 9: Calendar service resolves config from tenant ──")
 
-    from backend.services.calendar_service import _resolve_calcom_config, _is_demo
+    from backend.services.calendar_service import _is_demo
 
     ctx = _make_tenant_context(
-        calcom_api_key="cal_key_hospital",
         timezone_val="America/New_York",
         demo_mode=False,
     )
 
-    api_key, tz = _resolve_calcom_config(ctx)
-    _assert(api_key == "cal_key_hospital", "Cal.com API key from tenant")
-    _assert(tz == "America/New_York", "timezone from tenant")
+    _assert(ctx.timezone == "America/New_York", "timezone from tenant")
     _assert(_is_demo(ctx) is False, "demo mode from tenant (False)")
-
-    # Fallback
-    api_key_default, tz_default = _resolve_calcom_config(None)
-    _assert(tz_default is not None, "fallback timezone is not None")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -341,8 +323,8 @@ def test_system_prompt_uses_tenant():
         business_name="Sunrise Veterinary Clinic",
         business_type_val="veterinary",
         appointment_types=[
-            {"key": "checkup", "label": "Annual Checkup", "duration_minutes": 30},
-            {"key": "vaccination", "label": "Vaccination", "duration_minutes": 15},
+            {"code": "checkup", "name": "Annual Checkup", "duration_minutes": 30},
+            {"code": "vaccination", "name": "Vaccination", "duration_minutes": 15},
         ],
     )
 
@@ -454,7 +436,6 @@ def test_tenant_isolation_concept():
         slug="acme-clinic",
         business_name="Acme Clinic",
         vapi_assistant_id="asst_1",
-        calcom_api_key="cal_key_1",
     )
 
     ctx2 = _make_tenant_context(
@@ -462,14 +443,12 @@ def test_tenant_isolation_concept():
         slug="sunrise",
         business_name="Sunrise Hospital",
         vapi_assistant_id="asst_2",
-        calcom_api_key="cal_key_2",
     )
 
     # Verify isolation
     _assert(ctx1.tenant_id != ctx2.tenant_id, "different tenant IDs")
     _assert(ctx1.slug != ctx2.slug, "different slugs")
     _assert(ctx1.business_name != ctx2.business_name, "different business names")
-    _assert(ctx1.calcom_api_key != ctx2.calcom_api_key, "different Cal.com keys")
     _assert(ctx1.vapi_assistant_id != ctx2.vapi_assistant_id, "different Vapi assistant IDs")
 
 
@@ -525,7 +504,6 @@ def test_tenant_model_columns():
         "agent_name", "greeting_message", "system_prompt_override",
         "voice_config", "end_call_phrases",
         "vapi_api_key", "vapi_assistant_id", "vapi_phone_number_id", "vapi_webhook_secret",
-        "calcom_api_key", "calcom_username", "calcom_event_types",
         "twilio_account_sid", "twilio_auth_token", "twilio_phone_number",
         "escalation_phone", "escalation_transfer_number",
         "appointment_types", "business_hours", "knowledge_base", "emergency_guidance",
@@ -668,11 +646,9 @@ def test_tenant_out_hides_keys():
 
     fields = set(TenantOut.model_fields.keys())
     _assert("vapi_api_key" not in fields, "vapi_api_key not in response")
-    _assert("calcom_api_key" not in fields, "calcom_api_key not in response")
     _assert("twilio_auth_token" not in fields, "twilio_auth_token not in response")
     _assert("twilio_account_sid" not in fields, "twilio_account_sid not in response")
     _assert("vapi_configured" in fields, "vapi_configured (boolean) in response")
-    _assert("calcom_configured" in fields, "calcom_configured (boolean) in response")
     _assert("twilio_configured" in fields, "twilio_configured (boolean) in response")
 
 

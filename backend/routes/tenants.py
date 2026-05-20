@@ -38,10 +38,11 @@ class TenantOnboardRequest(BaseModel):
     slug: str = Field(..., min_length=2, max_length=100, pattern=r"^[a-z0-9_-]+$")
     business_name: str = Field(..., min_length=2, max_length=255)
     business_type: str = Field(default="custom")
+    business_address: str = Field(..., min_length=5)
     owner_name: str = Field(..., min_length=2, max_length=255)
     owner_email: str = Field(..., max_length=255)
-    owner_phone: Optional[str] = None
-    timezone: str = Field(default="America/Chicago")
+    owner_phone: str = Field(..., min_length=5)
+    timezone: str = Field(..., min_length=1)
     plan: str = Field(default="starter")
 
 
@@ -60,9 +61,6 @@ class TenantUpdateRequest(BaseModel):
     vapi_assistant_id: Optional[str] = None
     vapi_phone_number_id: Optional[str] = None
     vapi_webhook_secret: Optional[str] = None
-    calcom_api_key: Optional[str] = None
-    calcom_username: Optional[str] = None
-    calcom_event_types: Optional[dict[str, str]] = None
     twilio_account_sid: Optional[str] = None
     twilio_auth_token: Optional[str] = None
     twilio_phone_number: Optional[str] = None
@@ -93,7 +91,6 @@ class TenantOut(BaseModel):
     greeting_message: Optional[str]
     # Integration status (show whether configured, don't expose keys)
     vapi_configured: bool
-    calcom_configured: bool
     twilio_configured: bool
     google_calendar_connected: bool
     google_calendar_email: Optional[str]
@@ -121,7 +118,6 @@ def _tenant_to_out(t: Tenant) -> TenantOut:
         agent_name=t.agent_name,
         greeting_message=t.greeting_message,
         vapi_configured=bool(t.vapi_api_key and t.vapi_assistant_id),
-        calcom_configured=bool(t.calcom_api_key),
         twilio_configured=bool(t.twilio_account_sid and t.twilio_auth_token),
         google_calendar_connected=bool(t.google_calendar_connected),
         google_calendar_email=t.google_calendar_email or "",

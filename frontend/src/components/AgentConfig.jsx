@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Power,
   Phone as PhoneIcon,
@@ -22,17 +22,22 @@ import {
   Star,
   ToggleLeft,
   ToggleRight,
+  Play,
+  Square,
+  Volume2,
+  Loader2,
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
+import { getToken } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 
 const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 const VOICE_OPTIONS = [
-  { id: '21m00Tcm4TlvDq8ikWAM', name: 'Rachel (Warm, Professional)' },
-  { id: 'AZnzlk1XvdvUeBnXmlld', name: 'Domi (Confident, Direct)' },
-  { id: 'EXAVITQu4vr4xnSDxMaL', name: 'Bella (Soft, Friendly)' },
-  { id: 'MF3mGyEYCl7XYWbV9V6O', name: 'Emily (Calm, Gentle)' },
-  { id: 'TxGEqnHWrfWFTfGW9XjX', name: 'Josh (Deep, Reassuring)' },
+  { id: '21m00Tcm4TlvDq8ikWAM', name: 'Rachel', description: 'Young female, warm and professional tone' },
+  { id: 'AZnzlk1XvdvUeBnXmlld', name: 'Domi', description: 'Young female, confident and direct delivery' },
+  { id: 'EXAVITQu4vr4xnSDxMaL', name: 'Bella', description: 'Young female, soft and friendly manner' },
+  { id: 'MF3mGyEYCl7XYWbV9V6O', name: 'Emily', description: 'Young female, calm and gentle cadence' },
+  { id: 'TxGEqnHWrfWFTfGW9XjX', name: 'Josh', description: 'Young male, deep and reassuring voice' },
 ];
 
 export default function AgentConfig() {
@@ -43,6 +48,118 @@ export default function AgentConfig() {
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState(null);
   const [showSecrets, setShowSecrets] = useState({});
+
+  // Voice preview state
+  const [playingVoiceId, setPlayingVoiceId] = useState(null);
+  const [loadingVoiceId, setLoadingVoiceId] = useState(null);
+  const audioRef = useRef(null);
+
+  // Cleanup audio on unmount
+  useEffect(() => {
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+      window.speechSynthesis?.cancel();
+    };
+  }, []);
+
+  const stopAudio = useCallback(() => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+      audioRef.current = null;
+    }
+    window.speechSynthesis?.cancel();
+    setPlayingVoiceId(null);
+    setLoadingVoiceId(null);
+  }, []);
+
+  const playVoicePreview = useCallback(async (voiceId) => {
+    // If already playing this voice, stop it
+    if (playingVoiceId === voiceId) {
+      stopAudio();
+      return;
+    }
+
+    // Stop any currently playing audio
+    stopAudio();
+    setLoadingVoiceId(voiceId);
+
+    try {
+      // Try the backend ElevenLabs endpoint first
+      const token = getToken();
+      const resp = await fetch(`/api/voice-preview/${voiceId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (resp.ok) {
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        audioRef.current = audio;
+
+        audio.onplay = () => {
+          setLoadingVoiceId(null);
+          setPlayingVoiceId(voiceId);
+        };
+        audio.onended = () => {
+          setPlayingVoiceId(null);
+          URL.revokeObjectURL(url);
+          audioRef.current = null;
+        };
+        audio.onerror = () => {
+          setPlayingVoiceId(null);
+          setLoadingVoiceId(null);
+          URL.revokeObjectURL(url);
+          audioRef.current = null;
+        };
+
+        await audio.play();
+        return;
+      }
+
+      // Fallback: use browser SpeechSynthesis
+      if ('speechSynthesis' in window) {
+        const utterance = new SpeechSynthesisUtterance(
+          'Hi there! Thank you for calling. How can I help you today?'
+        );
+        utterance.rate = 0.95;
+        utterance.pitch = 1.0;
+
+        // Try to pick a voice that roughly matches
+        const voices = window.speechSynthesis.getVoices();
+        const voice = VOICE_OPTIONS.find((v) => v.id === voiceId);
+        if (voice && voices.length > 0) {
+          const isM = voice.description?.toLowerCase().includes('male') &&
+                      !voice.description?.toLowerCase().includes('female');
+          const match = voices.find((v) =>
+            v.lang.startsWith('en') &&
+            (isM ? v.name.toLowerCase().includes('male') : v.name.toLowerCase().includes('female'))
+          ) || voices.find((v) => v.lang.startsWith('en'));
+          if (match) utterance.voice = match;
+        }
+
+        utterance.onstart = () => {
+          setLoadingVoiceId(null);
+          setPlayingVoiceId(voiceId);
+        };
+        utterance.onend = () => setPlayingVoiceId(null);
+        utterance.onerror = () => {
+          setPlayingVoiceId(null);
+          setLoadingVoiceId(null);
+        };
+
+        window.speechSynthesis.speak(utterance);
+      } else {
+        setLoadingVoiceId(null);
+      }
+    } catch {
+      setLoadingVoiceId(null);
+      setPlayingVoiceId(null);
+    }
+  }, [playingVoiceId, stopAudio]);
 
   useEffect(() => {
     fetchConfig();
@@ -215,19 +332,80 @@ export default function AgentConfig() {
               className="input resize-none"
             />
           </Field>
-          <Field label="Agent Voice">
-            <select
-              value={config.voice_id || VOICE_OPTIONS[0].id}
-              onChange={(e) => update('voice_id', e.target.value)}
-              className="input"
-            >
-              {VOICE_OPTIONS.map((v) => (
-                <option key={v.id} value={v.id}>
-                  {v.name}
-                </option>
-              ))}
-            </select>
-          </Field>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Agent Voice</label>
+            <p className="text-xs text-gray-400 mb-3">Select a voice for your AI agent. Click the play button to preview each voice.</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {VOICE_OPTIONS.map((v) => {
+                const isSelected = (config.voice_id || VOICE_OPTIONS[0].id) === v.id;
+                const isPlaying = playingVoiceId === v.id;
+                const isLoading = loadingVoiceId === v.id;
+                return (
+                  <div
+                    key={v.id}
+                    onClick={() => update('voice_id', v.id)}
+                    className={`relative flex items-start gap-3 p-3.5 rounded-xl border-2 cursor-pointer transition-all ${
+                      isSelected
+                        ? 'border-primary-500 bg-primary-50 shadow-sm'
+                        : 'border-gray-200 bg-white hover:border-gray-300 hover:shadow-sm'
+                    }`}
+                  >
+                    {/* Radio indicator */}
+                    <div className="mt-0.5 shrink-0">
+                      <div
+                        className={`w-4 h-4 rounded-full border-2 flex items-center justify-center transition-colors ${
+                          isSelected ? 'border-primary-500' : 'border-gray-300'
+                        }`}
+                      >
+                        {isSelected && (
+                          <div className="w-2 h-2 rounded-full bg-primary-500" />
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Voice info */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className={`text-sm font-semibold ${isSelected ? 'text-primary-700' : 'text-gray-900'}`}>
+                          {v.name}
+                        </span>
+                        {isPlaying && (
+                          <Volume2 className="w-3.5 h-3.5 text-primary-500 animate-pulse" />
+                        )}
+                      </div>
+                      <p className="text-xs text-gray-500 mt-0.5 leading-snug">{v.description}</p>
+                    </div>
+
+                    {/* Play/Stop button */}
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        playVoicePreview(v.id);
+                      }}
+                      className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center transition-all ${
+                        isPlaying
+                          ? 'bg-primary-500 text-white hover:bg-primary-600 shadow-md'
+                          : isLoading
+                          ? 'bg-gray-100 text-gray-400'
+                          : 'bg-gray-100 text-gray-600 hover:bg-primary-100 hover:text-primary-600'
+                      }`}
+                      title={isPlaying ? 'Stop preview' : 'Play voice preview'}
+                      disabled={isLoading}
+                    >
+                      {isLoading ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : isPlaying ? (
+                        <Square className="w-3 h-3" />
+                      ) : (
+                        <Play className="w-3.5 h-3.5 ml-0.5" />
+                      )}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         </div>
       </Section>
 
@@ -329,26 +507,26 @@ export default function AgentConfig() {
           {(config.appointment_types || []).map((at, idx) => (
             <div key={idx} className="flex items-start gap-3 bg-gray-50 rounded-lg p-3 border border-gray-100">
               <div className="flex-1 grid grid-cols-2 md:grid-cols-4 gap-3">
-                <Field label="Key">
+                <Field label="Short Code">
                   <input
                     type="text"
-                    value={at.key || ''}
+                    value={at.code || ''}
                     onChange={(e) => {
                       const types = [...(config.appointment_types || [])];
-                      types[idx] = { ...types[idx], key: e.target.value.toLowerCase().replace(/\s+/g, '_') };
+                      types[idx] = { ...types[idx], code: e.target.value.toLowerCase().replace(/\s+/g, '_') };
                       update('appointment_types', types);
                     }}
                     placeholder="consultation"
                     className="input"
                   />
                 </Field>
-                <Field label="Label">
+                <Field label="Display Name">
                   <input
                     type="text"
-                    value={at.label || ''}
+                    value={at.name || ''}
                     onChange={(e) => {
                       const types = [...(config.appointment_types || [])];
-                      types[idx] = { ...types[idx], label: e.target.value };
+                      types[idx] = { ...types[idx], name: e.target.value };
                       update('appointment_types', types);
                     }}
                     placeholder="Consultation"
@@ -401,7 +579,7 @@ export default function AgentConfig() {
             type="button"
             onClick={() => {
               const types = [...(config.appointment_types || [])];
-              types.push({ key: '', label: '', duration_minutes: 60, max_concurrent: 1 });
+              types.push({ code: '', name: '', duration_minutes: 60, max_concurrent: 1 });
               update('appointment_types', types);
             }}
             className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-primary-600 bg-primary-50 rounded-lg hover:bg-primary-100 transition-colors"
@@ -446,56 +624,6 @@ export default function AgentConfig() {
             value={config.vapi_phone_number_id || ''}
             onChange={(e) => update('vapi_phone_number_id', e.target.value)}
             placeholder="phone_..."
-            className="input"
-          />
-        </Field>
-      </IntegrationSection>
-
-      {/* Cal.com integration */}
-      <IntegrationSection
-        icon={CalendarCheck}
-        title="Cal.com (Booking)"
-        description="Required to book appointments into your calendar. Get an API key at cal.com → Settings → Developer → API Keys."
-        configured={config.calcom_configured}
-        accent="emerald"
-        learnMore="https://cal.com"
-      >
-        <SecretField
-          label="Cal.com API Key"
-          fieldKey="calcom_api_key"
-          showSecrets={showSecrets}
-          setShowSecrets={setShowSecrets}
-          masked={config.calcom_api_key_masked}
-          value={config.calcom_api_key}
-          onChange={(v) => update('calcom_api_key', v)}
-          placeholder="cal_..."
-        />
-        <Field label="Cal.com Username">
-          <input
-            type="text"
-            value={config.calcom_username || ''}
-            onChange={(e) => update('calcom_username', e.target.value)}
-            placeholder="your-cal-username"
-            className="input"
-          />
-        </Field>
-        <Field
-          label="Event Type Slugs (comma-separated)"
-          help="The Cal.com event types your agent can book. e.g. consultation,follow-up"
-        >
-          <input
-            type="text"
-            value={(config.calcom_event_types || []).join(', ')}
-            onChange={(e) =>
-              update(
-                'calcom_event_types',
-                e.target.value
-                  .split(',')
-                  .map((s) => s.trim())
-                  .filter(Boolean)
-              )
-            }
-            placeholder="consultation, cleaning, checkup"
             className="input"
           />
         </Field>
@@ -551,19 +679,8 @@ export default function AgentConfig() {
         </p>
         <div className="space-y-4">
           <Toggle
-            label="24-Hour Reminder"
-            help="Send an SMS reminder 24 hours before the appointment."
-            checked={config.reminder_settings?.['24h_enabled'] !== false}
-            onChange={(v) =>
-              update('reminder_settings', {
-                ...(config.reminder_settings || {}),
-                '24h_enabled': v,
-              })
-            }
-          />
-          <Toggle
-            label="2-Hour Reminder"
-            help="Send a shorter reminder 2 hours before the appointment."
+            label="Appointment Reminder (2 hours before)"
+            help="Send an SMS reminder 2 hours before the appointment."
             checked={config.reminder_settings?.['2h_enabled'] !== false}
             onChange={(v) =>
               update('reminder_settings', {
@@ -778,7 +895,7 @@ function GoogleCalendarSection({ config, onUpdate }) {
   }
 
   async function handleDisconnect() {
-    if (!confirm('Disconnect Google Calendar? Your agent will fall back to Cal.com or the built-in scheduler.')) return;
+    if (!confirm('Disconnect Google Calendar? Your agent will fall back to the built-in scheduler.')) return;
     setDisconnecting(true);
     try {
       await apiFetch('/api/integrations/google/disconnect', { method: 'POST' });
@@ -811,7 +928,7 @@ function GoogleCalendarSection({ config, onUpdate }) {
             )}
           </div>
           <p className="text-sm text-gray-500 mt-0.5">
-            Free alternative to Cal.com. Connect your Google Calendar and the AI agent will
+            Connect your Google Calendar and the AI agent will
             check your real availability and book directly into your calendar.
           </p>
         </div>

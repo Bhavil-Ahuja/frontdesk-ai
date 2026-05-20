@@ -302,11 +302,18 @@ async def check_waitlist_for_opening(
         f"book it or it will go to the next person on our waitlist."
     )
 
-    sms_service._send_sms(
+    ok = sms_service._send_sms(
         to=matched_entry.patient_phone,
         body=sms_body,
         tenant_ctx=tenant_ctx,
     )
+    if ok:
+        sms_service._log_outbound_sms(
+            tenant_ctx,
+            to_number=matched_entry.patient_phone,
+            body=sms_body,
+            patient_phone=matched_entry.patient_phone,
+        )
 
     logger.info(
         "[Waitlist] Notified %s (%s) about %s slot on %s at %s (entry %s)",

@@ -25,7 +25,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from datetime import datetime, timedelta, timezone as tz
+from datetime import timezone as tz
 
 from backend.config import settings
 from backend.models.tenant import Tenant
@@ -56,6 +56,14 @@ class ChatRequest(BaseModel):
             "If omitted, uses the tenant's default test_caller_phone."
         ),
     )
+    test_patient_name: Optional[str] = Field(
+        default=None,
+        description=(
+            "Override the test patient name for this chat session. "
+            "Must be one of the tenant's registered test_patient_names. "
+            "If omitted, uses the tenant's default test_patient_name."
+        ),
+    )
 
 
 class ChatEnabledResponse(BaseModel):
@@ -79,7 +87,7 @@ async def reset_chat(
     """End the LLM session for this conversation_id (clears history)."""
     if not settings.LOCAL_CHAT_MODE:
         raise HTTPException(status_code=404, detail="Local chat mode is disabled.")
-    session_key = _session_key(current_user, body.conversation_id)
+    session_key = _session_key(current_user, body.conversation_id, body.test_phone)
     llm_service.end_session(session_key)
     return {"status": "reset", "conversation_id": body.conversation_id}
 
@@ -100,7 +108,8 @@ async def chat_stream(
             detail="Local chat mode is disabled. Set LOCAL_CHAT_MODE=true in .env.",
         )
 
-    session_key = _session_key(current_user, body.conversation_id)
+    # Include test_phone in session key so switching callers creates fresh sessions
+    session_key = _session_key(current_user, body.conversation_id, body.test_phone)
     model = settings.OLLAMA_MODEL
 
     # ── Resolve tenant context from the authenticated user ──────────────
@@ -131,53 +140,51 @@ async def chat_stream(
         patient_context = None
         try:
             patient_context = await patient_service.get_patient_history(
-                caller_phone, tenant_id=tenant_ctx.tenant_id,
+                caller_phone,
+                tenant_id=tenant_ctx.tenant_id,
+                tz_name=tenant_ctx.timezone,
             )
         except Exception as exc:
             logger.warning("[Chat] Patient lookup failed for test phone %s: %s",
                            caller_phone, exc)
 
         # If no real patient record exists for the test phone, build a
-        # synthetic patient_context so the agent has something to demo with.
+        # clean new-patient context so the agent can demo booking flows.
         # This is prompt-only — NO fake records are written to the DB.
+        # The patient name comes from the test_callers mapping (phone → name).
         if not patient_context:
-            now = datetime.now(tz.utc)
-            future_date = now + timedelta(days=3)
-            past_date = now - timedelta(days=14)
-            test_name = current_user.owner_name or "Test Patient"
+            # Look up the test patient name from test_callers by phone
+            test_patient_name = "Test Patient"  # fallback
+            for tc in (tenant_ctx.test_callers or []):
+                if tc.get("phone") == caller_phone:
+                    test_patient_name = tc.get("name", "Test Patient")
+                    break
+            else:
+                # Fallback to legacy fields if no match in test_callers
+                if body.test_patient_name:
+                    test_patient_name = body.test_patient_name
+                elif tenant_ctx.test_patient_name:
+                    test_patient_name = tenant_ctx.test_patient_name
+            logger.info("[Chat] Resolved test patient name '%s' for phone %s", test_patient_name, caller_phone)
+            # For test mode, we create a NEW patient with no history.
+            # This avoids confusion from fake appointments mixing with real ones.
             patient_context = {
                 "patient": {
-                    "name": test_name,
+                    "name": test_patient_name,
                     "phone": caller_phone,
-                    "dob": "01/15/1990",
-                    "is_new": False,
-                    "visit_count": 2,
-                    "preferred_type": "consultation",
+                    "dob": None,  # Unknown — agent must ASK for DOB
+                    "is_new": True,  # New patient — no fake data
+                    "visit_count": 0,
+                    "preferred_type": None,  # Unknown — agent must ASK
                     "allergies": "",
                     "notes": "",
                 },
-                "upcoming_appointments": [
-                    {
-                        "type": "Consultation",
-                        "date": future_date.strftime("%B %d, %Y"),
-                        "time": future_date.strftime("%I:%M %p").lstrip("0"),
-                        "booking_uid": f"test-upcoming-{tenant_ctx.slug}",
-                    },
-                ],
-                "past_appointments": [
-                    {
-                        "type": "Consultation",
-                        "date": past_date.strftime("%B %d, %Y"),
-                        "status": "COMPLETED",
-                    },
-                ],
-                "last_visit": {
-                    "type": "Consultation",
-                    "date": past_date.strftime("%B %d, %Y"),
-                },
-                "months_since_last_visit": 0,
+                "upcoming_appointments": [],
+                "past_appointments": [],
+                "last_visit": None,
+                "months_since_last_visit": None,
             }
-            logger.info("[Chat] Built synthetic patient context for test phone %s (no DB writes)",
+            logger.info("[Chat] Built clean test patient context for phone %s (new patient, no fake history)",
                         caller_phone)
 
         llm_service.create_session(
@@ -215,13 +222,15 @@ async def chat_stream(
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
-def _session_key(user: Tenant, conversation_id: Optional[str]) -> str:
+def _session_key(user: Tenant, conversation_id: Optional[str], test_phone: Optional[str] = None) -> str:
     """
     Build a deterministic session key so multi-turn chats keep their history.
     Scoped per-tenant to prevent cross-tenant leakage in shared dev environments.
+    Includes test_phone so switching callers creates a fresh session with correct patient context.
     """
     conv = conversation_id or "default"
-    return f"chat-{user.id}-{conv}"
+    phone_suffix = f"-{test_phone}" if test_phone else ""
+    return f"chat-{user.id}-{conv}{phone_suffix}"
 
 
 async def _stream_tokens_as_sse(token_gen, model: str):

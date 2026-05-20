@@ -55,7 +55,7 @@ After that, Ollama keeps the model loaded for ~5 minutes of inactivity.
 1. Backend running: `./start.sh`
 2. SSH tunnel URL pasted into Vapi's "Custom LLM URL" field (minus `/chat/completions`)
 3. Ollama warm (run the curl above)
-4. Cal.com bookings page open in browser to verify: <https://app.cal.com/bookings>
+4. Google Calendar open in browser to verify bookings
 5. Real cell phone ready for SMS confirmation
 
 ---
@@ -92,7 +92,7 @@ Start a fresh call for clean conversation state.
 | "Anything today?"                  | "Sorry, no availability — try another day?"               | `get_available_slots(date="...")` returns 0         |
 
 **Pass criteria:**
-- Real Cal.com slots are spoken naturally
+- Real calendar slots are spoken naturally
 - **No JSON, no field names, no slot strings like `T09:00:00`**
 - Reply in 2–4 seconds
 
@@ -112,11 +112,11 @@ Start a fresh call for clean conversation state.
 **You say:** *"10 AM works. My name is John Smith, born May 1st 1990, phone 512-555-1234."*
 
 - **Hear:** "Booked for Monday at 10 AM. You'll get an SMS confirmation."
-- **Backend log:** `book_appointment(...)` — then a real Cal.com booking is created
+- **Backend log:** `book_appointment(...)` — then a real calendar booking is created
 - **Twilio SMS** arrives at the phone number you gave (use **your real cell** for this test)
 
 ### Pass criteria
-- Cal.com dashboard shows a new booking at <https://app.cal.com/bookings>
+- Google Calendar shows a new booking
 - SMS arrives within 5 seconds of "booked" being spoken
 - Agent does **not** ask for your email (the server fills it in automatically)
 - Total flow finishes in under 30 seconds wall-clock
@@ -215,7 +215,7 @@ Plus optionally `escalate_to_human` if you trigger a transfer scenario.
 - **Wrong day-of-week → date** — server resolves "Monday" / "tomorrow" / "next Tuesday" from the user's actual message and overrides the model.
 - **Email asked of patient** — system prompt forbids it; server fills `noemail@<tenant>.scheduler.ai` automatically.
 - **Wrong year in slot_time** — server forces `datetime.now().year` and matches by hour-of-day.
-- **Wrong timezone format** — smart slot matcher finds the matching real Cal.com slot ignoring the timezone the LLM emitted.
+- **Wrong timezone format** — smart slot matcher finds the matching real calendar slot ignoring the timezone the LLM emitted.
 - **Explicit human request** — server short-circuits the LLM, calls `escalate_to_human` directly.
 - **Tool-eagerness on greetings** — server suppresses tool definitions for short non-scheduling messages.
 - **`<think>` tag leaks** — server strips them before returning (defensive against model swap).

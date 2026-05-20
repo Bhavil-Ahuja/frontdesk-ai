@@ -15,6 +15,8 @@ import re
 import uuid as _uuid
 from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
+from datetime import timedelta
 
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -82,13 +84,42 @@ async def get_patient_by_phone(
     return None
 
 
+async def get_patient_by_name(
+    name: str,
+    tenant_id: _uuid.UUID | None = None,
+) -> Patient | None:
+    """Look up a patient by name (case-insensitive), scoped to a tenant.
+
+    Returns the first match. Used as fallback when phone is not available.
+    """
+    if not name or not name.strip():
+        return None
+
+    async with async_session() as session:
+        filters = [Patient.name.ilike(f"%{name.strip()}%")]
+        if tenant_id:
+            filters.append(Patient.tenant_id == tenant_id)
+
+        result = await session.execute(
+            select(Patient).where(and_(*filters)).limit(1)
+        )
+        return result.scalar_one_or_none()
+
+
 async def get_patient_history(
     phone: str,
     tenant_id: _uuid.UUID | None = None,
+    tz_name: str | None = None,
 ) -> dict[str, Any] | None:
     """
     Full patient context for system prompt injection, scoped to a tenant.
     Returns None if patient not found.
+
+    Args:
+        phone: Patient phone number
+        tenant_id: Scope to this tenant's records
+        tz_name: Timezone name (e.g. "Europe/London") to display times in.
+                 If None, times are shown in UTC.
 
     Shape:
     {
@@ -102,6 +133,47 @@ async def get_patient_history(
     patient = await get_patient_by_phone(phone, tenant_id=tenant_id)
     if not patient:
         return None
+
+    # Resolve display timezone (for formatting appointment times)
+    display_tz: ZoneInfo | None = None
+    if tz_name:
+        try:
+            display_tz = ZoneInfo(tz_name)
+        except Exception:
+            logger.warning("[PatientSvc] Invalid timezone %s — falling back to UTC", tz_name)
+
+    def _to_local(dt: datetime) -> datetime:
+        """Convert a datetime to the display timezone (or return as-is if no tz)."""
+        if display_tz is None:
+            return dt
+        # Ensure UTC-aware before converting
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(display_tz)
+
+    def _relative_date_label(dt: datetime) -> str:
+        """Get a relative label like 'TODAY', 'TOMORROW', 'in 3 days' for a datetime."""
+        local_dt = _to_local(dt)
+        now_local = datetime.now(display_tz) if display_tz else datetime.now(timezone.utc)
+
+        # Compare dates only (ignore time)
+        appt_date = local_dt.date()
+        today_date = now_local.date()
+
+        delta_days = (appt_date - today_date).days
+
+        if delta_days == 0:
+            return "TODAY"
+        elif delta_days == 1:
+            return "TOMORROW"
+        elif delta_days == -1:
+            return "YESTERDAY"
+        elif delta_days > 1 and delta_days <= 7:
+            return f"in {delta_days} days"
+        elif delta_days < -1:
+            return f"{abs(delta_days)} days ago"
+        else:
+            return ""
 
     now = datetime.now(timezone.utc)
     async with async_session() as session:
@@ -143,9 +215,10 @@ async def get_patient_history(
     last_visit_info = None
     if past:
         last = past[0]
+        last_local = _to_local(last.scheduled_at)
         last_visit_info = {
             "type": last.appointment_type.replace("_", " ").title(),
-            "date": last.scheduled_at.strftime("%B %d, %Y"),
+            "date": last_local.strftime("%B %d, %Y"),
         }
         delta = now - last.scheduled_at.replace(tzinfo=timezone.utc) if last.scheduled_at.tzinfo is None else now - last.scheduled_at
         months_since = max(0, int(delta.days / 30))
@@ -164,8 +237,9 @@ async def get_patient_history(
         "upcoming_appointments": [
             {
                 "type": a.appointment_type.replace("_", " ").title(),
-                "date": a.scheduled_at.strftime("%A, %B %d, %Y"),
-                "time": a.scheduled_at.strftime("%I:%M %p").lstrip("0"),
+                "date": _to_local(a.scheduled_at).strftime("%A, %B %d, %Y"),
+                "relative": _relative_date_label(a.scheduled_at),  # "TODAY", "TOMORROW", etc.
+                "time": _to_local(a.scheduled_at).strftime("%I:%M %p").lstrip("0"),
                 "booking_uid": a.cal_booking_uid or "",
             }
             for a in upcoming
@@ -173,7 +247,7 @@ async def get_patient_history(
         "past_appointments": [
             {
                 "type": a.appointment_type.replace("_", " ").title(),
-                "date": a.scheduled_at.strftime("%B %d, %Y"),
+                "date": _to_local(a.scheduled_at).strftime("%B %d, %Y"),
                 "status": a.status.value if a.status else "UNKNOWN",
             }
             for a in past[:5]  # limit context size
@@ -258,9 +332,10 @@ async def record_appointment(
     patient_email: str = "",
     dob: str = "",
     tenant_id: _uuid.UUID | None = None,
+    provider_id: _uuid.UUID | None = None,
 ) -> None:
     """
-    Record an appointment in the DB after a successful Cal.com booking.
+    Record an appointment in the DB after a successful calendar booking.
     Also upserts the patient record. Scoped to a tenant.
     """
     norm_phone = _normalise_phone(patient_phone)
@@ -288,8 +363,9 @@ async def record_appointment(
             appointment_type=appointment_type,
             scheduled_at=scheduled_at,
             status=AppointmentStatus.CONFIRMED,
+            provider_id=provider_id,
         )
         session.add(appointment)
         await session.commit()
-        logger.info("[PatientSvc] Recorded appointment: %s @ %s (uid=%s, tenant=%s)",
-                    patient_name, scheduled_at, cal_booking_uid, tenant_id)
+        logger.info("[PatientSvc] Recorded appointment: %s @ %s (uid=%s, tenant=%s, provider=%s)",
+                    patient_name, scheduled_at, cal_booking_uid, tenant_id, provider_id)

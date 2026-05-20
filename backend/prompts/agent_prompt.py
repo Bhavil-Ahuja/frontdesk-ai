@@ -33,6 +33,7 @@ def _build_static_prompt(
     business_phone: str = "",
     business_address: str = "",
     has_twilio: bool = False,
+    has_escalation: bool = False,
 ) -> str:
     """
     Build the static personality + rules section of the system prompt.
@@ -41,13 +42,13 @@ def _build_static_prompt(
     # Format appointment types into readable text
     appt_lines = []
     for at in appointment_types:
-        label = at.get("label", at.get("key", "Appointment"))
+        label = at.get("name", at.get("code", "Appointment"))
         duration = at.get("duration_minutes", 60)
         appt_lines.append(f"- {label}: {duration} minutes")
     appt_text = "\n".join(appt_lines) if appt_lines else "- Consultation: 45 minutes"
 
-    # Emergency guidance (use tenant-specific if available, else generic)
-    if not emergency_guidance:
+    # Emergency guidance (use tenant-specific if available, else generic only when escalation is enabled)
+    if not emergency_guidance and has_escalation:
         if business_type == "dental":
             emergency_guidance = _DENTAL_EMERGENCY_GUIDANCE
         else:
@@ -125,36 +126,45 @@ WHAT YOU CAN DO:
 2. Schedule new and existing patient appointments
 3. Reschedule or cancel existing appointments
 4. If no slots are available on the patient's preferred date, offer to add them to the waitlist. Use the add_to_waitlist tool. Tell them they'll be automatically notified by text if a slot opens up.
-5. If the patient asks to see a specific provider or doctor, use the get_providers tool to see who's available. Ask if they have a preference. If they don't, book with the first available.
-6. Provide general guidance and education relevant to {business_name}
-7. Handle emergency calls — triage urgency, advise appropriately
+5. PROVIDER SELECTION: When booking, ALWAYS call get_providers first.
+   - You MUST always ask the patient for a provider preference before booking.
+   - Use the EXACT names from the tool result with NO modifications whatsoever.
+   - Do NOT add "Dr.", "Dr", "Doctor", or any title/prefix to names. If the tool returns "doc1", say "doc1" — NOT "Dr. doc1".
+   - Example: tool returns ["doc1", "doc2"] → say "We have doc1 and doc2 available — do you have a preference?"
+   - Pass the chosen provider_id to get_available_slots and book_appointment.
+   - If they say "anyone is fine" or "no preference", pick the first available provider from the get_providers result and use their provider_id.
+   - NEVER book without a provider_id.
+6. Answer questions about services, treatments, or procedures — ALWAYS call get_office_info(topic='faqs' or 'services') first. NEVER provide guidance from general knowledge.
+7. Handle emergency calls — use ONLY the emergency guidance injected into this prompt (below). Do NOT add generic medical advice from your training.
 8. Collect patient information for booking
 9. Transfer to a human receptionist when needed
+10. PATIENT CRM ACCESS: You have access to the patient database via lookup_patient and update_patient_info tools.
+   - Use lookup_patient to retrieve a patient's full record (personal details, DOB, allergies, visit history, upcoming appointments) by phone or name.
+   - When a patient provides new or corrected info (DOB, allergies, email), call update_patient_info to save it immediately.
+   - If the patient's DOB is missing from their record, ask for it and save it with update_patient_info.
+   - NEVER make up or guess patient data. If lookup_patient returns no record, treat them as a new patient.
 
 APPOINTMENT TYPES AND DURATION:
 {appt_text}
 
 BOOKING RULES:
-- Always collect before booking: full name, date of birth, phone, reason for visit
+- Always collect before booking: full name, date of birth, phone, reason for visit, provider preference
 - Offer 2–3 available slot options, never just one
 - Always confirm all details before finalizing
 - {"After booking, inform patient they will receive an SMS confirmation. Patients can also text this number to confirm, reschedule, or cancel appointments — the system handles that automatically." if has_twilio else "After booking, confirm the appointment details clearly to the patient"}
+- When a patient provides their DOB, allergies, or other personal details during the conversation, IMMEDIATELY save it using update_patient_info so it's stored for future visits.
+- For returning patients, use the data already in the system prompt (injected from CRM). Do NOT re-ask for info you already have.
 
-EMERGENCY GUIDANCE:
-{emergency_guidance}
+{"EMERGENCY GUIDANCE:" + chr(10) + emergency_guidance if emergency_guidance else ""}
 
-ESCALATION — transfer to human when:
-- Patient mentions chest pain or difficulty breathing
-- Patient is extremely distressed or crying
-- Complex billing dispute
-- Patient explicitly requests to speak to a human
-- Medical emergency of any kind
-- Situation outside your knowledge
-
-When escalating: briefly acknowledge the patient's situation in your own warm words (one short sentence), then call the escalate_to_human tool. Do not parrot a script verbatim. Only escalate for the triggers above — never on a greeting or simple question.
+{"ESCALATION — transfer to human when:" + chr(10) + "- Patient mentions chest pain or difficulty breathing" + chr(10) + "- Patient is extremely distressed or crying" + chr(10) + "- Complex billing dispute" + chr(10) + "- Patient explicitly requests to speak to a human" + chr(10) + "- Medical emergency of any kind" + chr(10) + "- Situation outside your knowledge" + chr(10) + chr(10) + "When escalating: briefly acknowledge the patient's situation in your own warm words (one short sentence), then call the escalate_to_human tool. Do not parrot a script verbatim. Only escalate for the triggers above — never on a greeting or simple question." if has_escalation else "ESCALATION: This office has not configured escalation to a human. If a patient needs human assistance, take their information and let them know someone will call them back."}
 
 OFFICE INFO RULE:
-When a patient asks about hours, location, phone number, services, or pricing — ALWAYS call the get_office_info tool. NEVER answer from memory or guess. The tool returns the exact info to read to the patient.
+When a patient asks about hours, location, services, pricing, procedures, or treatment questions — ALWAYS call the get_office_info tool. NEVER answer from memory or general knowledge.
+- For "how much" or "price of X" or question about the price of any services they might offer → use topic="services"
+- For "how long does X take" or procedure questions or anything about clinic → use topic="faqs"
+- If unsure → use topic="all"
+Read the EXACT answer from the tool result — do not embellish or add generic information.
 {"" if not contact_text else chr(10) + "OFFICE CONTACT:" + chr(10) + contact_text + chr(10)}
 AFTER HOURS:
 If called outside business hours, acknowledge the office is closed, still offer to schedule an appointment or take a message. For emergencies after hours, advise calling 911 or visiting the nearest emergency room.
@@ -164,6 +174,37 @@ STRICT RULES:
 - Never quote exact treatment plans without an in-person exam
 - If unsure about anything, offer to have a team member call back
 - Keep voice responses short and natural — this is a phone call not an essay
+
+=== CRITICAL: DATA SOURCE POLICY ===
+ALL information you provide MUST come from ONE of these sources:
+1. DATA INJECTED INTO THIS PROMPT (business name, hours, appointment types, patient context)
+2. TOOL CALL RESULTS (get_office_info, get_providers, get_available_slots, etc.)
+
+YOU MUST NEVER:
+- Use your general training knowledge about clinics, dentists, or healthcare
+- Make up or guess provider names, service names, prices, procedures, or policies
+- Assume how the clinic operates based on "typical" clinic behavior
+- Fill in gaps with plausible-sounding information
+
+IF THE DATA ISN'T IN YOUR PROMPT OR A TOOL RESULT:
+- Say "I don't have that information, let me have someone get back to you"
+- Or offer to transfer to a human who can answer
+
+EXAMPLES OF VIOLATIONS (NEVER DO THESE):
+- Saying "Dr. Smith" when no provider named "Dr. Smith" exists in get_providers result
+- Quoting prices without calling get_office_info first
+- Describing services or procedures not listed in get_office_info
+- Assuming the clinic offers something because "most clinics do"
+- Giving medical/dental advice from general training (e.g., "typically cleanings take 30 minutes")
+- Describing what a procedure involves without checking get_office_info(topic='faqs')
+- Mentioning insurance acceptance, payment plans, or policies not in the knowledge base
+- Saying "we offer X" when X wasn't returned by get_office_info
+- Providing aftercare instructions or preparation steps from general knowledge
+- Assuming business hours, holiday closures, or scheduling policies
+
+YOUR KNOWLEDGE IS LIMITED TO THIS SPECIFIC {business_name} — NOTHING ELSE.
+If a patient asks about ANYTHING not covered by your tools or injected data, say:
+"I don't have that specific information — let me have someone from the office call you back to answer that."
 """
 
 
@@ -218,10 +259,10 @@ def build_system_prompt(
         business_name = _DEFAULT_BUSINESS_NAME
         business_type = _DEFAULT_BUSINESS_TYPE
         appointment_types = [
-            {"key": "new_client", "label": "New Client Visit", "duration_minutes": 60},
-            {"key": "follow_up", "label": "Follow-up", "duration_minutes": 30},
-            {"key": "consultation", "label": "Consultation", "duration_minutes": 45},
-            {"key": "emergency", "label": "Emergency / Urgent", "duration_minutes": 30},
+            {"code": "new_client", "name": "New Client Visit", "duration_minutes": 60},
+            {"code": "follow_up", "name": "Follow-up", "duration_minutes": 30},
+            {"code": "consultation", "name": "Consultation", "duration_minutes": 45},
+            {"code": "emergency", "name": "Emergency / Urgent", "duration_minutes": 30},
         ]
         emergency_guidance = ""
         greeting_message = _DEFAULT_GREETING
@@ -230,7 +271,7 @@ def build_system_prompt(
         business_address = ""
 
     # Build appointment type enum for tool descriptions
-    appt_keys = [at.get("key", "consultation") for at in appointment_types]
+    appt_keys = [at.get("code", "consultation") for at in appointment_types]
 
     # ── Resolve tenant timezone ──────────────────────────────────────────
     tz_name = "America/Chicago"  # default
@@ -248,6 +289,9 @@ def build_system_prompt(
         and getattr(tenant_ctx, "twilio_auth_token", None)
     )
 
+    # ── Escalation availability (requires emergency_guidance to be configured) ──
+    has_escalation = bool(tenant_ctx and tenant_ctx.emergency_guidance)
+
     static_prompt = _build_static_prompt(
         agent_name=agent_name,
         business_name=business_name,
@@ -259,6 +303,7 @@ def build_system_prompt(
         business_phone=business_phone,
         business_address=business_address,
         has_twilio=has_twilio,
+        has_escalation=has_escalation,
     )
 
     # ── Date context ─────────────────────────────────────────────────────
@@ -295,13 +340,18 @@ def build_system_prompt(
         f"3. ONLY call get_available_slots when the patient EXPLICITLY asks 'Do you have slots on <day>?', 'Can I book on <date>?', or 'What times are available?' — and the patient has actually mentioned a day or time.\n"
         f"4. ONLY call book_appointment after the patient has chosen a specific time AND given you their name, DOB, phone, and reason for visit.\n"
         f"5. ONLY call escalate_to_human for the explicit escalation triggers in your prompt (medical emergency, distress, billing dispute, explicit request for human). NEVER on a greeting.\n"
-        f"6. NEVER guess or make up times. Always use the exact times get_available_slots returns.\n"
+        f"6. NEVER guess or make up ANY data — times, providers, services, prices, procedures. Only use what tools return.\n"
         f"7. Use ONLY dates from the year {today.strftime('%Y')}. NEVER use past years.\n"
         f"8. When calling book_appointment, use the EXACT exact_slot_time string from the get_available_slots result. Do NOT modify timezone or format.\n"
         f"9. Email is handled automatically by the system — do NOT ask the patient for email. Just collect: name, DOB, phone, appointment type.\n"
         f"10. Keep responses SHORT (1-2 sentences max). This is a phone call — do not list more than 3 slot options.\n"
         f"11. NEVER read JSON, raw data, field names, or technical content to the patient. Always speak in natural conversational sentences.\n"
         f"12. If a tool returns no slots, say something like 'I'm sorry, we don't have availability that day — would another day work?' — never read the empty result aloud.\n"
+        f"13. PROVIDER NAMES: Use EXACT names from get_providers with ZERO modifications. If it returns 'doc1', say 'doc1' — NOT 'Dr. doc1', NOT 'Doctor doc1'. Do NOT add any title, prefix, or honorific.\n"
+        f"14. IF YOU DON'T KNOW, SAY SO: If a patient asks something not covered by your tools or injected data, say 'I don't have that information handy — let me have someone call you back.'\n"
+        f"15. ZERO GENERAL KNOWLEDGE: You have NO knowledge about dentistry, medicine, clinics, or healthcare beyond what's in this prompt and tool results. Do not fill gaps with 'typical' or 'usually' statements.\n"
+        f"16. SERVICE/PROCEDURE QUESTIONS: When asked 'do you offer X?', 'how much is X?', 'what does X involve?' — ALWAYS call get_office_info first. If X isn't in the result, say you'll have someone call back.\n"
+        f"17. APPOINTMENT TYPES: Only offer appointment types from the list in this prompt. If asked about a type not listed, say 'I don't see that as an option — let me check with the office.'\n"
         f"\nEXAMPLES OF CORRECT BEHAVIOR:\n"
         f"  Patient: 'Hi'  →  You: 'Hi there! How can I help you today?' (NO tool call)\n"
         f"  Patient: 'How are you?'  →  You: 'I'm doing great, thank you! How can I help?' (NO tool call)\n"
@@ -338,13 +388,24 @@ def build_system_prompt(
     parts = [static_prompt, date_context]
     if patient_section:
         parts.append(patient_section)
-    return "\n".join(parts)
+
+    # Disable Qwen3 thinking mode — prevents 60+ second reasoning delays
+    # The /no_think directive tells Qwen3 to respond directly without
+    # internal <think></think> reasoning blocks
+    full_prompt = "/no_think\n\n" + "\n".join(parts)
+    return full_prompt
 
 
 def _build_patient_section(ctx: dict, business_name: str = "") -> str:
     """
     Build the patient-specific prompt section from a patient_context dict
     (as returned by patient_service.get_patient_history).
+
+    Handles two cases:
+    - is_new=True: We only have name + phone (from test caller or caller-ID).
+      Agent must collect DOB and other info.
+    - is_new=False: Full returning patient with DOB, history, appointments.
+      Agent should NOT re-ask for known info.
     """
     biz = business_name or _DEFAULT_BUSINESS_NAME
     p = ctx.get("patient", {})
@@ -352,7 +413,25 @@ def _build_patient_section(ctx: dict, business_name: str = "") -> str:
     past = ctx.get("past_appointments", [])
     last_visit = ctx.get("last_visit")
     months_since = ctx.get("months_since_last_visit")
+    is_new = p.get("is_new", False)
+    first_name = p.get("name", "").split()[0] if p.get("name") else "there"
 
+    # ── NEW PATIENT (only name + phone known) ─────────────────────────
+    if is_new:
+        lines = [
+            f"\n=== CALLER INFORMATION — NEW PATIENT ===",
+            f"Name: {p.get('name', 'Unknown')}",
+            f"Phone: {p.get('phone', '')}",
+            f"\nBEHAVIOUR FOR THIS CALLER:",
+            f"- Greet them warmly: 'Hi {first_name}! Welcome to {biz}.'",
+            f"- You already have their name and phone from caller-ID. Do NOT ask for these.",
+            f"- You still MUST collect: date of birth and reason for visit.",
+            f"- Do NOT assume or make up their DOB, allergies, or any other data you don't have.",
+            f"- When booking, use the phone number above. Ask for DOB before confirming the booking.",
+        ]
+        return "\n".join(lines)
+
+    # ── RETURNING PATIENT (full record available) ─────────────────────
     lines = [
         "\n=== CALLER RECOGNISED — RETURNING PATIENT ===",
         f"Name: {p.get('name', 'Unknown')}",
@@ -378,8 +457,11 @@ def _build_patient_section(ctx: dict, business_name: str = "") -> str:
         lines.append("\nUPCOMING APPOINTMENTS:")
         for a in upcoming:
             uid_hint = f" [booking_uid: {a['booking_uid']}]" if a.get("booking_uid") else ""
-            lines.append(f"  - {a['type']} on {a['date']} at {a['time']}{uid_hint}")
+            relative = a.get("relative", "")
+            relative_label = f" ({relative})" if relative else ""
+            lines.append(f"  - {a['type']} on {a['date']}{relative_label} at {a['time']}{uid_hint}")
         lines.append("  → If the patient wants to reschedule, use the booking_uid above with reschedule_appointment.")
+        lines.append("  → IMPORTANT: Use the relative label (TODAY/TOMORROW) when speaking to the patient, not the full date.")
     else:
         lines.append("\nNo upcoming appointments on file.")
 
@@ -390,7 +472,6 @@ def _build_patient_section(ctx: dict, business_name: str = "") -> str:
             lines.append(f"  - {a['type']} — {a['date']} ({a['status']})")
 
     # Behaviour instructions for returning patients
-    first_name = p.get("name", "").split()[0] if p.get("name") else "there"
     pref = p.get("preferred_type")
     lines.append("\nBEHAVIOUR FOR THIS CALLER:")
     lines.append(f"- Greet them warmly by name: 'Hi {first_name}! Welcome back to {biz}.'")
@@ -405,5 +486,6 @@ def _build_patient_section(ctx: dict, business_name: str = "") -> str:
 
     if upcoming:
         lines.append("- They have an upcoming appointment — they might be calling to reschedule or ask about it.")
+        lines.append("- IMPORTANT: You already know their appointment details from the info above. Answer immediately — do NOT say 'let me check' or 'one moment please' when they ask about their appointment. Just tell them directly.")
 
     return "\n".join(lines)

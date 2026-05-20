@@ -55,21 +55,28 @@ const TENANT_NAV = [
 // ── Hook: ask the backend whether local chat mode is enabled ─────────────────
 function useLocalChatEnabled() {
   const [enabled, setEnabled] = useState(false);
+  const [checked, setChecked] = useState(false); // true once we've fetched
   useEffect(() => {
     let cancelled = false;
     fetch('/api/chat/enabled')
       .then((r) => (r.ok ? r.json() : { enabled: false }))
       .then((data) => {
-        if (!cancelled) setEnabled(!!data?.enabled);
+        if (!cancelled) {
+          setEnabled(!!data?.enabled);
+          setChecked(true);
+        }
       })
       .catch(() => {
-        if (!cancelled) setEnabled(false);
+        if (!cancelled) {
+          setEnabled(false);
+          setChecked(true);
+        }
       });
     return () => {
       cancelled = true;
     };
   }, []);
-  return enabled;
+  return { enabled, checked };
 }
 
 export default function App() {
@@ -125,7 +132,7 @@ function AppShell() {
   const { user, logout, isAdmin } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const localChatEnabled = useLocalChatEnabled();
+  const { enabled: localChatEnabled, checked: chatChecked } = useLocalChatEnabled();
 
   function handleLogout() {
     logout();
@@ -220,11 +227,11 @@ function AppShell() {
         <div className="p-4 border-t border-gray-100">
           <div className="flex items-center gap-3 px-2 py-2 mb-2">
             <div className="w-8 h-8 bg-primary-100 text-primary-700 rounded-full flex items-center justify-center text-xs font-semibold shrink-0">
-              {(user?.owner_name || user?.email || '?').charAt(0).toUpperCase()}
+              {(user?.name || user?.email || '?').charAt(0).toUpperCase()}
             </div>
             <div className="min-w-0 flex-1">
               <p className="text-sm font-medium text-gray-900 truncate">
-                {user?.owner_name || 'Account'}
+                {user?.name || 'Account'}
               </p>
               <p className="text-xs text-gray-500 truncate">{user?.email}</p>
             </div>
@@ -259,18 +266,24 @@ function AppShell() {
               </ProtectedRoute>
             }
           />
-          {/* Local chat — only mounted when the backend flag is on. When off,
-              navigating to /chat falls through to the catch-all redirect. */}
-          {localChatEnabled && (
-            <Route
-              path="/chat"
-              element={
-                <ProtectedRoute>
+          {/* Local chat — always mounted to prevent redirect race on reload.
+              Shows loading until we've checked the flag, then either LocalChat or redirect. */}
+          <Route
+            path="/chat"
+            element={
+              <ProtectedRoute>
+                {!chatChecked ? (
+                  <div className="flex items-center justify-center h-full">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
+                  </div>
+                ) : localChatEnabled ? (
                   <LocalChat />
-                </ProtectedRoute>
-              }
-            />
-          )}
+                ) : (
+                  <Navigate to="/dashboard" replace />
+                )}
+              </ProtectedRoute>
+            }
+          />
           <Route
             path="/calls"
             element={

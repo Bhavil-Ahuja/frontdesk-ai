@@ -93,15 +93,6 @@ class Tenant(Base):
     vapi_phone_number_id = Column(String(255), nullable=True)
     vapi_webhook_secret = Column(String(255), nullable=True)
 
-    # ── Cal.com integration ──────────────────────────────────────────────
-    calcom_api_key = Column(String(255), nullable=True)
-    calcom_username = Column(String(100), nullable=True)
-    calcom_event_types = Column(
-        JSONB, nullable=False,
-        default=lambda: {},
-        # e.g. {"consultation": "5560050", "follow_up": "5560055", ...}
-    )
-
     # ── Twilio integration ───────────────────────────────────────────────
     twilio_account_sid = Column(String(255), nullable=True)
     twilio_auth_token = Column(String(255), nullable=True)
@@ -113,12 +104,16 @@ class Tenant(Base):
     google_calendar_connected = Column(Boolean, nullable=False, default=False)
 
     # ── Test Agent (chat) ──────────────────────────────────────────────
-    # Auto-assigned dummy phone used as caller-ID in the Test Agent chat
-    # so the chat flow has full patient context — same as a real call.
+    # Unified test callers — each entry is {phone, name} to ensure 1:1 mapping.
+    # The first entry is the default caller used when the chat starts.
+    # Example: [{"phone": "+155501177", "name": "Alex Johnson"}, ...]
+    test_callers = Column(JSONB, nullable=False, default=lambda: [])
+
+    # DEPRECATED: Legacy separate arrays — kept for migration, prefer test_callers
     test_caller_phone = Column(String(20), nullable=True)
-    # Multiple test phones for concurrent-booking testing. Each entry is
-    # a short +155501XXX number. The first entry is the default.
     test_caller_phones = Column(JSONB, nullable=False, default=lambda: [])
+    test_patient_name = Column(String(100), nullable=True, default="Alex Johnson")
+    test_patient_names = Column(JSONB, nullable=False, default=lambda: ["Alex Johnson"])
 
     # ── Escalation ───────────────────────────────────────────────────────
     escalation_phone = Column(String(20), nullable=True)
@@ -128,7 +123,7 @@ class Tenant(Base):
     appointment_types = Column(
         JSONB, nullable=False,
         default=lambda: [
-            {"key": "consultation", "label": "Consultation", "duration_minutes": 45, "max_concurrent": 1},
+            {"code": "consultation", "name": "Consultation", "duration_minutes": 45, "max_concurrent": 1},
         ],
     )
     business_hours = Column(
@@ -140,7 +135,6 @@ class Tenant(Base):
     reminder_settings = Column(
         JSONB, nullable=False,
         default=lambda: {
-            "24h_enabled": True,
             "2h_enabled": True,
             "confirmation_reply_enabled": True,
         },
@@ -169,16 +163,3 @@ class Tenant(Base):
     def __repr__(self) -> str:
         return f"<Tenant {self.slug} ({self.business_name})>"
 
-    def get_event_type_id(self, appointment_type: str) -> str:
-        """Map an appointment type key to the Cal.com event type ID for this tenant."""
-        mapping = self.calcom_event_types or {}
-        # Try exact match, then fallback to 'consultation'
-        return str(
-            mapping.get(appointment_type.lower().replace(" ", "_"), "")
-            or mapping.get("consultation", "")
-        )
-
-    @property
-    def noemail_address(self) -> str:
-        """Auto-generated no-reply email for Cal.com bookings."""
-        return f"noemail@{self.slug}.scheduler.ai"

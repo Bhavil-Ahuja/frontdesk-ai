@@ -10,7 +10,9 @@ Uses httpx to call the Twilio REST API directly (avoids the heavy twilio SDK
 which requires aiohttp — not yet available for Python 3.14).
 """
 
+import asyncio
 import logging
+import uuid
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -154,6 +156,101 @@ def _send_sms(to: str, body: str, tenant_ctx: Any | None = None) -> bool:
         return False
 
 
+# ── Outbound SMS logging ─────────────────────────────────────────────────────
+
+
+async def _async_log_outbound_sms(
+    tenant_id: uuid.UUID,
+    to_number: str,
+    body: str,
+    patient_phone: str,
+    from_number: str = "",
+) -> None:
+    """Persist an outbound SMS record for conversation threading / audit.
+
+    This is the async implementation; callers from synchronous send_*()
+    functions should use _log_outbound_sms() which schedules this onto the
+    running event loop.
+    """
+    # Lazy import to avoid circular dependency (sms_inbound_service -> sms_service)
+    from backend.database import async_session
+    from backend.models.sms_message import SMSMessage, SMSDirection
+
+    try:
+        async with async_session() as session:
+            msg = SMSMessage(
+                tenant_id=tenant_id,
+                direction=SMSDirection.OUTBOUND,
+                from_number=from_number,
+                to_number=to_number,
+                body=body,
+                patient_phone=patient_phone,
+            )
+            session.add(msg)
+            await session.commit()
+    except Exception as exc:
+        logger.error(
+            "[SMS Service] Failed to log OUTBOUND SMS (tenant=%s, to=%s): %s",
+            tenant_id, to_number, exc,
+        )
+
+
+def _log_outbound_sms(
+    tenant_ctx: Any | None,
+    to_number: str,
+    body: str,
+    patient_phone: str,
+) -> None:
+    """Schedule an outbound SMS log entry on the running async event loop.
+
+    All callers of the public send_*() functions are async (FastAPI routes,
+    async services), so there will always be a running event loop. We use
+    create_task() to fire-and-forget so the synchronous send function does
+    not need to await.
+
+    Args:
+        tenant_ctx: TenantContext (must have .tenant_id).
+        to_number: The recipient phone number.
+        body: The message text that was sent.
+        patient_phone: The patient phone used for conversation threading.
+    """
+    if not tenant_ctx:
+        logger.debug("[SMS Service] No tenant_ctx — skipping outbound SMS log")
+        return
+
+    tenant_id = getattr(tenant_ctx, "tenant_id", None)
+    if not tenant_id:
+        logger.debug("[SMS Service] tenant_ctx has no tenant_id — skipping outbound SMS log")
+        return
+
+    from_number = getattr(tenant_ctx, "twilio_phone_number", "") or ""
+
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(
+            _async_log_outbound_sms(
+                tenant_id=tenant_id,
+                to_number=to_number,
+                body=body,
+                patient_phone=patient_phone,
+                from_number=from_number,
+            )
+        )
+    except RuntimeError:
+        # No running event loop (e.g. called from a pure-sync test harness).
+        # Fall back to creating a new loop — this path should be rare.
+        logger.debug("[SMS Service] No running event loop — logging outbound SMS synchronously")
+        asyncio.run(
+            _async_log_outbound_sms(
+                tenant_id=tenant_id,
+                to_number=to_number,
+                body=body,
+                patient_phone=patient_phone,
+                from_number=from_number,
+            )
+        )
+
+
 # ── Public helpers ────────────────────────────────────────────────────────────
 
 
@@ -176,7 +273,10 @@ def send_confirmation(
         f"for {date_str} at {time_str} {tz}. "
         f"Questions? Call {biz_phone}. See you soon!"
     )
-    return _send_sms(phone, body, tenant_ctx)
+    ok = _send_sms(phone, body, tenant_ctx)
+    if ok:
+        _log_outbound_sms(tenant_ctx, to_number=phone, body=body, patient_phone=phone)
+    return ok
 
 
 def send_cancellation(
@@ -194,7 +294,10 @@ def send_cancellation(
         f"Hi {patient_name}, your {biz} appointment on {date_str} "
         f"has been cancelled. Call us anytime to reschedule: {biz_phone}"
     )
-    return _send_sms(phone, body, tenant_ctx)
+    ok = _send_sms(phone, body, tenant_ctx)
+    if ok:
+        _log_outbound_sms(tenant_ctx, to_number=phone, body=body, patient_phone=phone)
+    return ok
 
 
 def send_reschedule(
@@ -216,7 +319,10 @@ def send_reschedule(
         f"rescheduled to {date_str} at {time_str} {tz}. "
         f"Questions? Call {biz_phone}."
     )
-    return _send_sms(phone, body, tenant_ctx)
+    ok = _send_sms(phone, body, tenant_ctx)
+    if ok:
+        _log_outbound_sms(tenant_ctx, to_number=phone, body=body, patient_phone=phone)
+    return ok
 
 
 def send_escalation_notification(
@@ -230,7 +336,10 @@ def send_escalation_notification(
         f"Hi {patient_name}, you recently called {biz}. "
         f"Our team will call you back within 30 minutes. Thank you!"
     )
-    return _send_sms(phone, body, tenant_ctx)
+    ok = _send_sms(phone, body, tenant_ctx)
+    if ok:
+        _log_outbound_sms(tenant_ctx, to_number=phone, body=body, patient_phone=phone)
+    return ok
 
 
 def send_office_alert(
@@ -249,7 +358,10 @@ def send_office_alert(
         f"{biz} AI Alert: Caller {caller_number} needs human assistance. "
         f"Reason: {reason}. Please call back."
     )
-    return _send_sms(esc_phone, body, tenant_ctx)
+    ok = _send_sms(esc_phone, body, tenant_ctx)
+    if ok:
+        _log_outbound_sms(tenant_ctx, to_number=esc_phone, body=body, patient_phone=caller_number)
+    return ok
 
 
 # ── Appointment reminders & follow-ups ──────────────────────────────────────
@@ -262,19 +374,21 @@ def send_reminder(
     scheduled_at: datetime,
     tenant_ctx: Any | None = None,
 ) -> bool:
-    """Send a 24-hour-before appointment reminder SMS."""
+    """Send a 2-hour-before appointment reminder SMS."""
     biz = _business_name(tenant_ctx)
     biz_phone = _business_phone_display(tenant_ctx)
     tz = _tz_abbrev(tenant_ctx)
     local_dt = _to_local_time(scheduled_at, tenant_ctx)
-    date_str = local_dt.strftime("%A, %B %d")
     time_str = local_dt.strftime("%I:%M %p").lstrip("0")
     body = (
         f"Hi {patient_name}! Friendly reminder: your {appointment_type} at "
-        f"{biz} is tomorrow ({date_str}) at {time_str} {tz}. "
+        f"{biz} is coming up today at {time_str} {tz}. "
         f"Need to reschedule? Call {biz_phone}. See you soon!"
     )
-    return _send_sms(phone, body, tenant_ctx)
+    ok = _send_sms(phone, body, tenant_ctx)
+    if ok:
+        _log_outbound_sms(tenant_ctx, to_number=phone, body=body, patient_phone=phone)
+    return ok
 
 
 def send_followup(
@@ -290,4 +404,7 @@ def send_followup(
         f"We hope everything went well! If you have any questions or concerns, "
         f"please call us at {biz_phone}. Have a great day!"
     )
-    return _send_sms(phone, body, tenant_ctx)
+    ok = _send_sms(phone, body, tenant_ctx)
+    if ok:
+        _log_outbound_sms(tenant_ctx, to_number=phone, body=body, patient_phone=phone)
+    return ok

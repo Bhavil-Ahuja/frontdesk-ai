@@ -298,7 +298,6 @@ function TenantRow({ tenant, expanded, onToggle, onAction, actionLoading }) {
         {/* Integration badges */}
         <div className="hidden md:flex items-center gap-1.5">
           <IntegrationBadge label="Vapi" active={tenant.vapi_configured} />
-          <IntegrationBadge label="Cal" active={tenant.calcom_configured} />
           <IntegrationBadge label="GCal" active={tenant.google_calendar_connected} />
           <IntegrationBadge label="Twilio" active={tenant.twilio_configured} />
         </div>
@@ -345,7 +344,6 @@ function TenantRow({ tenant, expanded, onToggle, onAction, actionLoading }) {
 
               <div className="pt-2 space-y-2">
                 <IntegrationStatus label="Vapi" configured={tenant.vapi_configured} />
-                <IntegrationStatus label="Cal.com" configured={tenant.calcom_configured} />
                 <IntegrationStatus
                   label={`Google Calendar${tenant.google_calendar_email ? ` (${tenant.google_calendar_email})` : ''}`}
                   configured={tenant.google_calendar_connected}

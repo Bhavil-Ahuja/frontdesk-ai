@@ -23,6 +23,7 @@ const EMPTY_PROVIDER = {
   title: '',
   appointment_types: [],
   calendar_id: '',
+  max_concurrent: 1,
   business_hours_override: null,
 };
 
@@ -75,6 +76,7 @@ export default function ProviderManager() {
       title: provider.title || '',
       appointment_types: provider.appointment_types || [],
       calendar_id: provider.calendar_id || '',
+      max_concurrent: provider.max_concurrent || 1,
       business_hours_override: provider.business_hours_override || null,
     });
     setError(null);
@@ -258,19 +260,19 @@ export default function ProviderManager() {
             ) : (
               <div className="flex flex-wrap gap-2">
                 {tenantAppointmentTypes.map((at) => {
-                  const selected = (form.appointment_types || []).includes(at.key);
+                  const selected = (form.appointment_types || []).includes(at.code);
                   return (
                     <button
-                      key={at.key}
+                      key={at.code}
                       type="button"
-                      onClick={() => toggleAppointmentType(at.key)}
+                      onClick={() => toggleAppointmentType(at.code)}
                       className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors border ${
                         selected
                           ? 'bg-primary-50 border-primary-300 text-primary-700'
                           : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'
                       }`}
                     >
-                      {at.label || at.key}
+                      {at.name || at.code}
                       {selected && <span className="ml-1">✓</span>}
                     </button>
                   );
@@ -294,6 +296,25 @@ export default function ProviderManager() {
             />
             <p className="text-xs text-gray-400 mt-1">
               If blank, this provider shares the practice's primary Google Calendar.
+            </p>
+          </div>
+
+          {/* Max Concurrent Appointments */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5 flex items-center gap-1.5">
+              <Users className="w-4 h-4 text-gray-400" />
+              Max Concurrent Appointments
+            </label>
+            <input
+              type="number"
+              min="1"
+              max="10"
+              value={form.max_concurrent}
+              onChange={(e) => setForm((f) => ({ ...f, max_concurrent: Math.max(1, parseInt(e.target.value) || 1) }))}
+              className="w-24 px-4 py-2.5 border border-gray-200 rounded-lg text-sm outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20"
+            />
+            <p className="text-xs text-gray-400 mt-1">
+              How many patients this provider can see at overlapping times. Set to 1 for single-booking (one patient at a time).
             </p>
           </div>
 
@@ -454,6 +475,11 @@ export default function ProviderManager() {
                         </span>
                       ) : (
                         <span className="text-xs text-gray-400 italic">All appointment types</span>
+                      )}
+                      {(p.max_concurrent || 1) > 1 && (
+                        <span className="text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full">
+                          {p.max_concurrent} concurrent
+                        </span>
                       )}
                       {p.calendar_id && (
                         <span className="text-xs text-blue-500 flex items-center gap-1">

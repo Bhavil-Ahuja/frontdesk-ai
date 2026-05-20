@@ -11,6 +11,7 @@ import {
   AlertCircle,
   ArrowRight,
   Sparkles,
+  MapPin,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -64,6 +65,7 @@ const INITIAL_FORM = {
   slug: '',
   business_name: '',
   business_type: 'custom',
+  business_address: '',
   owner_name: '',
   owner_email: '',
   owner_phone: '',
@@ -108,8 +110,10 @@ export default function TenantRegister() {
     return (
       form.slug.length >= 2 &&
       form.business_name.length >= 2 &&
+      form.business_address.length >= 5 &&
       form.owner_name.length >= 2 &&
       form.owner_email.includes('@') &&
+      form.owner_phone.length >= 5 &&
       form.password.length >= 8 &&
       form.password === form.password_confirm
     );
@@ -125,7 +129,6 @@ export default function TenantRegister() {
     try {
       const payload = { ...form };
       delete payload.password_confirm;
-      if (!payload.owner_phone) delete payload.owner_phone;
 
       // Register + auto-login
       const user = await register(payload);
@@ -236,18 +239,42 @@ export default function TenantRegister() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">Timezone</label>
-                <select
-                  value={form.timezone}
-                  onChange={(e) => updateField('timezone', e.target.value)}
-                  className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
-                >
-                  {TIMEZONES.map((tz) => (
-                    <option key={tz} value={tz}>
-                      {tz.replace(/_/g, ' ')}
-                    </option>
-                  ))}
-                </select>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                  Timezone <span className="text-red-400">*</span>
+                </label>
+                <div className="relative">
+                  <Clock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                  <select
+                    value={form.timezone}
+                    onChange={(e) => updateField('timezone', e.target.value)}
+                    required
+                    className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
+                  >
+                    {TIMEZONES.map((tz) => (
+                      <option key={tz} value={tz}>
+                        {tz.replace(/_/g, ' ')}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="md:col-span-2">
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                  Business Address <span className="text-red-400">*</span>
+                </label>
+                <div className="relative">
+                  <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                  <input
+                    type="text"
+                    value={form.business_address}
+                    onChange={(e) => updateField('business_address', e.target.value)}
+                    placeholder="123 Main St, Suite 100, Austin, TX 78701"
+                    required
+                    minLength={5}
+                    className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
+                  />
+                </div>
               </div>
             </div>
           </div>
@@ -301,7 +328,7 @@ export default function TenantRegister() {
 
               <div className="md:col-span-2">
                 <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                  Phone <span className="text-gray-400 font-normal">(optional)</span>
+                  Phone <span className="text-red-400">*</span>
                 </label>
                 <div className="relative">
                   <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -310,6 +337,8 @@ export default function TenantRegister() {
                     value={form.owner_phone}
                     onChange={(e) => updateField('owner_phone', e.target.value)}
                     placeholder="+1 (512) 555-0100"
+                    required
+                    minLength={5}
                     className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
                   />
                 </div>
@@ -417,7 +446,7 @@ export default function TenantRegister() {
                 <ol className="text-sm text-blue-700 mt-1 space-y-1 list-decimal list-inside">
                   <li>Your account is created and submitted for admin review</li>
                   <li>An admin approves you (usually within 24 hours)</li>
-                  <li>You'll be guided through connecting Vapi, Cal.com, and Twilio</li>
+                  <li>You'll be guided through connecting Vapi, Google Calendar, and Twilio</li>
                   <li>Your AI agent goes live and starts answering calls</li>
                 </ol>
               </div>

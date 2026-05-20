@@ -53,10 +53,11 @@ class RegisterRequest(BaseModel):
     slug: str = Field(..., min_length=2, max_length=100, pattern=r"^[a-z0-9_-]+$")
     business_name: str = Field(..., min_length=2, max_length=255)
     business_type: str = "custom"
+    business_address: str = Field(..., min_length=5)
     owner_name: str = Field(..., min_length=2, max_length=255)
     owner_email: str
-    owner_phone: Optional[str] = None
-    timezone: str = "America/Chicago"
+    owner_phone: str = Field(..., min_length=5)
+    timezone: str = Field(..., min_length=1)
     plan: str = "starter"
     password: str = Field(..., min_length=8, max_length=128)
 
@@ -90,7 +91,6 @@ class UserResponse(BaseModel):
     plan: Optional[str]
     # Integration setup status
     vapi_configured: bool
-    calcom_configured: bool
     twilio_configured: bool
 
 
@@ -107,7 +107,6 @@ def _user_to_dict(t: Tenant) -> dict:
         "timezone": t.timezone or "America/Chicago",
         "plan": t.plan.value if t.plan else None,
         "vapi_configured": bool(t.vapi_api_key and t.vapi_assistant_id),
-        "calcom_configured": bool(t.calcom_api_key),
         "twilio_configured": bool(t.twilio_account_sid and t.twilio_auth_token),
     }
 

@@ -67,12 +67,6 @@ def _log_config_status():
         ("Vapi Phone Number ID", settings.VAPI_PHONE_NUMBER_ID, False),
         ("Vapi Assistant ID", settings.VAPI_ASSISTANT_ID, False),
         ("Vapi Webhook Secret", settings.VAPI_WEBHOOK_SECRET, False),
-        ("Cal.com API Key", settings.CALCOM_API_KEY, False),
-        ("Cal.com Username", settings.CALCOM_USERNAME, False),
-        ("Cal.com New Patient Event", settings.CALCOM_EVENT_TYPE_ID_NEW_PATIENT, False),
-        ("Cal.com Cleaning Event", settings.CALCOM_EVENT_TYPE_ID_CLEANING, False),
-        ("Cal.com Emergency Event", settings.CALCOM_EVENT_TYPE_ID_EMERGENCY, False),
-        ("Cal.com Consultation Event", settings.CALCOM_EVENT_TYPE_ID_CONSULTATION, False),
         ("Twilio Account SID", settings.TWILIO_ACCOUNT_SID, False),
         ("Twilio Auth Token", settings.TWILIO_AUTH_TOKEN, False),
         ("Twilio Phone Number", settings.TWILIO_PHONE_NUMBER, False),
@@ -171,9 +165,9 @@ async def lifespan(app: FastAPI):
     logger.info("=" * 60)
     logger.info("  %s AI Agent running at %s", settings.OFFICE_NAME, settings.SERVER_BASE_URL)
     if settings.DEMO_MODE:
-        logger.info("  ⚡ DEMO MODE active — SMS and Cal.com calls are simulated")
+        logger.info("  ⚡ DEMO MODE active — SMS and calendar calls are simulated")
     else:
-        logger.info("  🔴 LIVE MODE — real API calls to Cal.com, Twilio, Vapi")
+        logger.info("  🔴 LIVE MODE — real API calls to Google Calendar, Twilio, Vapi")
     logger.info("")
     logger.info("  Dashboard:  %s", settings.SERVER_BASE_URL)
     logger.info("  API Docs:   %s/docs", settings.SERVER_BASE_URL)
@@ -184,7 +178,7 @@ async def lifespan(app: FastAPI):
 
     # 5. Start background reminder/follow-up scheduler
     reminder_task = asyncio.create_task(run_reminder_loop())
-    logger.info("✓ Reminder scheduler started (24h reminders + post-visit follow-ups)")
+    logger.info("✓ Reminder scheduler started (2h reminders + post-visit follow-ups)")
 
     yield  # Server is running
 

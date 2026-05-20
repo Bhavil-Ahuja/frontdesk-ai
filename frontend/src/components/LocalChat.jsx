@@ -7,12 +7,13 @@
  * they stream in — so the UX matches Vapi's transcript stream.
  */
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { Send, RotateCcw, Bot, User as UserIcon, MessageSquare, Phone, Plus, Trash2, ChevronDown } from 'lucide-react';
+import { Send, RotateCcw, Bot, User as UserIcon, MessageSquare, Phone, Plus, Trash2, ChevronDown, Download } from 'lucide-react';
 import { getToken } from '../lib/api';
 
 // Stable per-tab conversation id so multi-turn chat keeps history server-side.
 const CONV_KEY = 'scheduler_ai_chat_conv';
 const MSGS_KEY = 'scheduler_ai_chat_msgs';
+const STREAM_KEY = 'scheduler_ai_chat_stream'; // tracks in-flight stream
 
 function ensureConversationId() {
   let id = sessionStorage.getItem(CONV_KEY);
@@ -22,6 +23,67 @@ function ensureConversationId() {
   }
   return id;
 }
+
+// ── Background stream manager ─────────────────────────────────────────────
+// Keeps the stream alive even when the component unmounts (user navigates away).
+// Tokens are saved to sessionStorage so the response persists across route changes.
+const backgroundStream = {
+  active: false,
+  abortController: null,
+  onUpdate: null, // callback to notify mounted component of new tokens
+
+  start(fetchPromise, abortController) {
+    this.active = true;
+    this.abortController = abortController;
+    sessionStorage.setItem(STREAM_KEY, 'active');
+  },
+
+  appendToken(token) {
+    // Update sessionStorage directly (persists even if component unmounted)
+    try {
+      const msgs = JSON.parse(sessionStorage.getItem(MSGS_KEY) || '[]');
+      const last = msgs[msgs.length - 1];
+      if (last && last.role === 'assistant') {
+        last.content = (last.content || '') + token;
+        sessionStorage.setItem(MSGS_KEY, JSON.stringify(msgs));
+      }
+    } catch (_) { /* ignore */ }
+    // Also notify mounted component if listening
+    if (this.onUpdate) this.onUpdate(token);
+  },
+
+  finish(error = null) {
+    this.active = false;
+    this.abortController = null;
+    sessionStorage.removeItem(STREAM_KEY);
+    // Mark message as complete in sessionStorage
+    try {
+      const msgs = JSON.parse(sessionStorage.getItem(MSGS_KEY) || '[]');
+      const last = msgs[msgs.length - 1];
+      if (last && last.role === 'assistant') {
+        delete last.pending;
+        if (error && !last.content) {
+          last.content = `_(error: ${error})_`;
+        }
+        sessionStorage.setItem(MSGS_KEY, JSON.stringify(msgs));
+      }
+    } catch (_) { /* ignore */ }
+    // Notify mounted component
+    if (this.onUpdate) this.onUpdate(null, true, error);
+  },
+
+  abort() {
+    if (this.abortController) {
+      this.abortController.abort();
+    }
+    this.active = false;
+    sessionStorage.removeItem(STREAM_KEY);
+  },
+
+  isActive() {
+    return this.active || sessionStorage.getItem(STREAM_KEY) === 'active';
+  },
+};
 
 const DEFAULT_WELCOME = {
   role: 'assistant',
@@ -53,79 +115,90 @@ export default function LocalChat() {
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState(null);
-  // Multi-phone state
-  const [testPhones, setTestPhones] = useState([]);
-  const [selectedPhone, setSelectedPhone] = useState('');
-  const [phoneDropdownOpen, setPhoneDropdownOpen] = useState(false);
-  const [generatingPhone, setGeneratingPhone] = useState(false);
-  const [deletingPhone, setDeletingPhone] = useState(null);
+  // Unified test callers: [{phone, name}, ...]
+  const [testCallers, setTestCallers] = useState([]);
+  const [selectedCaller, setSelectedCaller] = useState(null); // {phone, name}
+  const [callerDropdownOpen, setCallerDropdownOpen] = useState(false);
+  const [addingCaller, setAddingCaller] = useState(false);
+  const [newCallerName, setNewCallerName] = useState('');
+  const [deletingCaller, setDeletingCaller] = useState(null);
   const conversationId = useRef(ensureConversationId());
-  const phoneDropdownRef = useRef(null);
+  const callerDropdownRef = useRef(null);
 
-  // Fetch test caller phones from config
-  const fetchPhones = useCallback(() => {
+  // Fetch test callers from config
+  const fetchConfig = useCallback(() => {
     const token = getToken();
     fetch('/api/config', {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     })
       .then((r) => (r.ok ? r.json() : {}))
       .then((cfg) => {
-        const phones = cfg?.test_caller_phones || [];
-        const defaultPhone = cfg?.test_caller_phone || '';
-        // Ensure legacy single phone is in the list
-        if (defaultPhone && !phones.includes(defaultPhone)) {
-          phones.unshift(defaultPhone);
-        }
-        setTestPhones(phones);
-        // Preserve selection if still valid, otherwise use default
-        setSelectedPhone((prev) => (phones.includes(prev) ? prev : (defaultPhone || phones[0] || '')));
+        const callers = cfg?.test_callers || [];
+        setTestCallers(callers);
+        // Set selected caller (prefer current selection if still exists)
+        setSelectedCaller((prev) => {
+          if (prev && callers.some((c) => c.phone === prev.phone)) {
+            return callers.find((c) => c.phone === prev.phone);
+          }
+          return callers[0] || null;
+        });
       })
       .catch(() => {});
   }, []);
 
-  useEffect(() => { fetchPhones(); }, [fetchPhones]);
+  useEffect(() => { fetchConfig(); }, [fetchConfig]);
 
-  // Close phone dropdown on outside click
+  // Close dropdown on outside click
   useEffect(() => {
     function handleClick(e) {
-      if (phoneDropdownRef.current && !phoneDropdownRef.current.contains(e.target)) {
-        setPhoneDropdownOpen(false);
+      if (callerDropdownRef.current && !callerDropdownRef.current.contains(e.target)) {
+        setCallerDropdownOpen(false);
+        setAddingCaller(false);
+        setNewCallerName('');
       }
     }
     document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
   }, []);
 
-  // Generate a new test phone
-  async function handleGeneratePhone() {
-    setGeneratingPhone(true);
+  // Add a new test caller (generates phone, user provides name)
+  async function handleAddCaller() {
+    const name = newCallerName.trim();
+    if (!name || name.length < 2) {
+      setError('Name must be at least 2 characters.');
+      return;
+    }
+    setAddingCaller(true);
     try {
       const token = getToken();
-      const resp = await fetch('/api/config/test-phones', {
+      const resp = await fetch('/api/config/test-callers', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ name }),
       });
       if (!resp.ok) {
         const j = await resp.json().catch(() => ({}));
         throw new Error(j.detail || `Failed (${resp.status})`);
       }
       const data = await resp.json();
-      setTestPhones(data.test_caller_phones || []);
-      // Auto-select the newly generated phone
-      if (data.phone) setSelectedPhone(data.phone);
+      setTestCallers(data.test_callers || []);
+      // Auto-select the newly created caller
+      if (data.caller) setSelectedCaller(data.caller);
+      setNewCallerName('');
+      setCallerDropdownOpen(false);
     } catch (err) {
-      setError(err.message || 'Failed to generate test phone.');
+      setError(err.message || 'Failed to add test caller.');
     } finally {
-      setGeneratingPhone(false);
+      setAddingCaller(false);
     }
   }
 
-  // Delete a test phone
-  async function handleDeletePhone(phone) {
-    setDeletingPhone(phone);
+  // Delete a test caller
+  async function handleDeleteCaller(phone) {
+    setDeletingCaller(phone);
     try {
       const token = getToken();
-      const resp = await fetch(`/api/config/test-phones/${encodeURIComponent(phone)}`, {
+      const resp = await fetch(`/api/config/test-callers/${encodeURIComponent(phone)}`, {
         method: 'DELETE',
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
@@ -134,16 +207,16 @@ export default function LocalChat() {
         throw new Error(j.detail || `Failed (${resp.status})`);
       }
       const data = await resp.json();
-      const remaining = data.test_caller_phones || [];
-      setTestPhones(remaining);
-      // If we deleted the selected phone, switch to first remaining
-      if (selectedPhone === phone) {
-        setSelectedPhone(remaining[0] || '');
+      const remaining = data.test_callers || [];
+      setTestCallers(remaining);
+      // If we deleted the selected caller, switch to first remaining
+      if (selectedCaller?.phone === phone) {
+        setSelectedCaller(remaining[0] || null);
       }
     } catch (err) {
-      setError(err.message || 'Failed to delete test phone.');
+      setError(err.message || 'Failed to delete test caller.');
     } finally {
-      setDeletingPhone(null);
+      setDeletingCaller(null);
     }
   }
 
@@ -153,6 +226,51 @@ export default function LocalChat() {
   }, [messages]);
   const abortRef = useRef(null);
   const scrollRef = useRef(null);
+
+  // Subscribe to background stream updates (for when component remounts mid-stream)
+  useEffect(() => {
+    // Check if there's an active background stream we need to listen to
+    if (backgroundStream.isActive()) {
+      setStreaming(true);
+    }
+
+    // Register callback to receive token updates from background stream
+    backgroundStream.onUpdate = (token, done, error) => {
+      if (done) {
+        // Stream finished while we were mounted or just remounted
+        setStreaming(false);
+        if (error) {
+          setError(error);
+        }
+        // Reload messages from sessionStorage to get final state
+        setMessages(loadMessages());
+      } else if (token) {
+        // New token arrived — update the last message
+        setMessages((prev) => {
+          const next = [...prev];
+          const last = next[next.length - 1];
+          if (last && last.role === 'assistant') {
+            next[next.length - 1] = {
+              ...last,
+              content: (last.content || '') + token,
+            };
+          }
+          return next;
+        });
+      }
+    };
+
+    // On mount, sync with sessionStorage (in case stream completed while away)
+    if (!backgroundStream.active && sessionStorage.getItem(STREAM_KEY) !== 'active') {
+      setMessages(loadMessages());
+      setStreaming(false);
+    }
+
+    return () => {
+      // Don't abort on unmount — let background stream continue
+      backgroundStream.onUpdate = null;
+    };
+  }, []);
 
   // Auto-scroll to bottom on new content
   useEffect(() => {
@@ -168,16 +286,21 @@ export default function LocalChat() {
 
     setError(null);
     setInput('');
-    setMessages((prev) => [
-      ...prev,
+
+    // Add user message and pending assistant bubble
+    const newMessages = [
+      ...messages,
       { role: 'user', content: text },
       { role: 'assistant', content: '', pending: true },
-    ]);
+    ];
+    setMessages(newMessages);
+    saveMessages(newMessages); // persist immediately for background stream
     setStreaming(true);
 
     const token = getToken();
     const controller = new AbortController();
     abortRef.current = controller;
+    backgroundStream.start(null, controller);
 
     try {
       const res = await fetch('/api/chat/stream', {
@@ -190,7 +313,7 @@ export default function LocalChat() {
         body: JSON.stringify({
           message: text,
           conversation_id: conversationId.current,
-          test_phone: selectedPhone || undefined,
+          test_phone: selectedCaller?.phone || undefined,
         }),
         signal: controller.signal,
       });
@@ -233,7 +356,8 @@ export default function LocalChat() {
 
           const payload = dataLines.join('\n');
           if (payload === '[DONE]') {
-            // Terminator — finalize the in-flight bubble
+            // Terminator — finalize the stream
+            backgroundStream.finish();
             setMessages((prev) => {
               const next = [...prev];
               const last = next[next.length - 1];
@@ -256,30 +380,24 @@ export default function LocalChat() {
           // OpenAI chat.completion.chunk shape — same as Vapi consumes
           const delta = chunk?.choices?.[0]?.delta || {};
           if (typeof delta.content === 'string' && delta.content.length > 0) {
-            setMessages((prev) => {
-              const next = [...prev];
-              const last = next[next.length - 1];
-              if (last && last.role === 'assistant') {
-                next[next.length - 1] = {
-                  ...last,
-                  content: (last.content || '') + delta.content,
-                };
-              }
-              return next;
-            });
+            // Update both sessionStorage (for background persistence) and React state
+            backgroundStream.appendToken(delta.content);
+            // React state update happens via backgroundStream.onUpdate callback
           }
         }
       }
     } catch (err) {
       if (err.name === 'AbortError') {
-        // user-initiated cancel — just unmark pending
+        // Manual abort (e.g., reset button) — not navigation
+        backgroundStream.finish('cancelled');
         setMessages((prev) => {
           const next = [...prev];
           const last = next[next.length - 1];
           if (last && last.role === 'assistant') {
+            const content = last.content || '';
             next[next.length - 1] = {
               ...last,
-              content: last.content || '_(cancelled)_',
+              content: content ? `${content}\n\n_(cancelled)_` : '_(cancelled)_',
               pending: false,
             };
           }
@@ -287,6 +405,7 @@ export default function LocalChat() {
         });
       } else {
         console.error('[LocalChat] stream error:', err);
+        backgroundStream.finish(err.message);
         setError(err.message || 'Failed to reach the agent.');
         // Drop the empty pending bubble
         setMessages((prev) => {
@@ -305,7 +424,9 @@ export default function LocalChat() {
   }
 
   async function resetConversation() {
-    if (streaming && abortRef.current) {
+    // Abort any background stream
+    backgroundStream.abort();
+    if (abortRef.current) {
       abortRef.current.abort();
     }
     const oldId = conversationId.current;
@@ -318,7 +439,11 @@ export default function LocalChat() {
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({ message: 'reset', conversation_id: oldId }),
+        body: JSON.stringify({
+          message: 'reset',
+          conversation_id: oldId,
+          test_phone: selectedCaller?.phone || undefined,
+        }),
       });
     } catch (err) {
       console.warn('[LocalChat] reset request failed:', err);
@@ -339,6 +464,25 @@ export default function LocalChat() {
     setError(null);
   }
 
+  function exportChat() {
+    const exportData = {
+      exported_at: new Date().toISOString(),
+      conversation_id: conversationId.current,
+      test_caller: selectedCaller || null,
+      messages: messages.map(({ pending, ...rest }) => rest), // strip pending flags
+    };
+
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `chat-export-${new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-')}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
@@ -353,53 +497,70 @@ export default function LocalChat() {
               Same LLM + tools as the voice agent — chat to test before going live.
             </p>
           </div>
-          {/* ── Phone selector dropdown ──────────────────────────── */}
-          {testPhones.length > 0 && (
-            <div className="relative ml-2" ref={phoneDropdownRef}>
+          {/* ── Unified Test Caller selector dropdown (phone + name) ─────────── */}
+          {testCallers.length > 0 && (
+            <div className="relative ml-2" ref={callerDropdownRef}>
               <button
                 type="button"
-                onClick={() => setPhoneDropdownOpen((v) => !v)}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 transition-colors"
+                onClick={() => setCallerDropdownOpen((v) => !v)}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-teal-50 border border-teal-200 rounded-lg hover:bg-teal-100 transition-colors"
               >
-                <Phone className="w-3.5 h-3.5 text-blue-600" />
-                <span className="text-xs font-medium text-blue-700">
-                  {selectedPhone || 'Select phone'}
+                <Phone className="w-3.5 h-3.5 text-teal-600" />
+                <span className="text-xs font-medium text-teal-700">
+                  {selectedCaller ? `${selectedCaller.phone}` : 'Select caller'}
                 </span>
-                <ChevronDown className={`w-3 h-3 text-blue-500 transition-transform ${phoneDropdownOpen ? 'rotate-180' : ''}`} />
+                {selectedCaller?.name && (
+                  <span className="text-xs text-teal-600 bg-teal-100 px-1.5 py-0.5 rounded-full font-medium">
+                    {selectedCaller.name}
+                  </span>
+                )}
+                <ChevronDown className={`w-3 h-3 text-teal-500 transition-transform ${callerDropdownOpen ? 'rotate-180' : ''}`} />
               </button>
-              {phoneDropdownOpen && (
-                <div className="absolute top-full left-0 mt-1 w-64 bg-white border border-gray-200 rounded-xl shadow-lg z-50 py-1">
+              {callerDropdownOpen && (
+                <div className="absolute top-full left-0 mt-1 w-72 bg-white border border-gray-200 rounded-xl shadow-lg z-50 py-1">
                   <div className="px-3 py-2 border-b border-gray-100">
-                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Test Caller Phones</p>
+                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Test Callers</p>
+                    <p className="text-[10px] text-gray-400 mt-0.5">Each phone maps to a unique patient</p>
                   </div>
                   <div className="max-h-48 overflow-y-auto">
-                    {testPhones.map((phone) => (
+                    {testCallers.map((caller) => (
                       <div
-                        key={phone}
+                        key={caller.phone}
                         className={`flex items-center justify-between px-3 py-2 hover:bg-gray-50 cursor-pointer ${
-                          phone === selectedPhone ? 'bg-blue-50' : ''
+                          caller.phone === selectedCaller?.phone ? 'bg-teal-50' : ''
                         }`}
                       >
                         <button
                           type="button"
                           className="flex items-center gap-2 flex-1 text-left"
-                          onClick={() => { setSelectedPhone(phone); setPhoneDropdownOpen(false); }}
+                          onClick={async () => {
+                            if (caller.phone !== selectedCaller?.phone) {
+                              // Switching callers — reset old session first, then switch
+                              await resetConversation();
+                              setSelectedCaller(caller);
+                            }
+                            setCallerDropdownOpen(false);
+                          }}
                         >
-                          <Phone className={`w-3.5 h-3.5 ${phone === selectedPhone ? 'text-blue-600' : 'text-gray-400'}`} />
-                          <span className={`text-sm ${phone === selectedPhone ? 'font-semibold text-blue-700' : 'text-gray-700'}`}>
-                            {phone}
-                          </span>
-                          {phone === selectedPhone && (
-                            <span className="text-[10px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded-full font-medium">active</span>
+                          <div className="flex flex-col">
+                            <span className={`text-sm ${caller.phone === selectedCaller?.phone ? 'font-semibold text-teal-700' : 'text-gray-700'}`}>
+                              {caller.name}
+                            </span>
+                            <span className={`text-xs ${caller.phone === selectedCaller?.phone ? 'text-teal-600' : 'text-gray-400'}`}>
+                              {caller.phone}
+                            </span>
+                          </div>
+                          {caller.phone === selectedCaller?.phone && (
+                            <span className="text-[10px] bg-teal-100 text-teal-600 px-1.5 py-0.5 rounded-full font-medium ml-2">active</span>
                           )}
                         </button>
-                        {testPhones.length > 1 && (
+                        {testCallers.length > 1 && (
                           <button
                             type="button"
-                            onClick={(e) => { e.stopPropagation(); handleDeletePhone(phone); }}
-                            disabled={deletingPhone === phone}
+                            onClick={(e) => { e.stopPropagation(); handleDeleteCaller(caller.phone); }}
+                            disabled={deletingCaller === caller.phone}
                             className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors disabled:opacity-50"
-                            title="Delete this test phone"
+                            title="Delete this test caller"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
@@ -408,30 +569,52 @@ export default function LocalChat() {
                     ))}
                   </div>
                   <div className="border-t border-gray-100 px-3 py-2">
-                    <button
-                      type="button"
-                      onClick={handleGeneratePhone}
-                      disabled={generatingPhone || testPhones.length >= 10}
-                      className="flex items-center gap-2 w-full px-2 py-1.5 text-sm text-primary-600 hover:bg-primary-50 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      <Plus className="w-4 h-4" />
-                      {generatingPhone ? 'Generating…' : 'Generate new phone'}
-                      <span className="ml-auto text-xs text-gray-400">{testPhones.length}/10</span>
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={newCallerName}
+                        onChange={(e) => setNewCallerName(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleAddCaller(); } }}
+                        placeholder="New patient name..."
+                        className="flex-1 px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-teal-500 focus:border-teal-500"
+                        maxLength={50}
+                      />
+                      <button
+                        type="button"
+                        onClick={handleAddCaller}
+                        disabled={addingCaller || !newCallerName.trim() || testCallers.length >= 10}
+                        className="flex items-center gap-1 px-2 py-1.5 text-sm text-white bg-teal-500 hover:bg-teal-600 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        title="Add new test caller (phone auto-generated)"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        {addingCaller ? '...' : 'Add'}
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-gray-400 mt-1">Phone number auto-generated • {testCallers.length}/10</p>
                   </div>
                 </div>
               )}
             </div>
           )}
         </div>
-        <button
-          onClick={resetConversation}
-          className="flex items-center gap-2 px-3 py-2 text-sm text-gray-600 rounded-lg hover:bg-gray-50 hover:text-gray-900 border border-gray-200 transition-colors"
-          title="Start a new conversation (clears server-side session)"
-        >
-          <RotateCcw className="w-4 h-4" />
-          New chat
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={exportChat}
+            className="flex items-center gap-2 px-3 py-2 text-sm text-gray-600 rounded-lg hover:bg-gray-50 hover:text-gray-900 border border-gray-200 transition-colors"
+            title="Export conversation as JSON for debugging"
+          >
+            <Download className="w-4 h-4" />
+            Export
+          </button>
+          <button
+            onClick={resetConversation}
+            className="flex items-center gap-2 px-3 py-2 text-sm text-gray-600 rounded-lg hover:bg-gray-50 hover:text-gray-900 border border-gray-200 transition-colors"
+            title="Start a new conversation (clears server-side session)"
+          >
+            <RotateCcw className="w-4 h-4" />
+            New chat
+          </button>
+        </div>
       </div>
 
       {/* Message list */}

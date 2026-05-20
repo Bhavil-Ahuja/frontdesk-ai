@@ -51,7 +51,7 @@ export default function Landing() {
           Never miss a patient call <span className="text-primary-500">again</span>
         </h1>
         <p className="text-lg text-gray-500 mt-6 max-w-2xl mx-auto">
-          Scheduler.ai answers your front desk calls 24/7, books appointments through Cal.com,
+          Scheduler.ai answers your front desk calls 24/7, books appointments into your calendar,
           sends SMS reminders, and escalates emergencies — all automatically.
         </p>
         <div className="mt-8 flex items-center justify-center gap-3">
@@ -81,8 +81,8 @@ export default function Landing() {
           />
           <Feature
             icon={CalendarCheck}
-            title="Real Cal.com Booking"
-            description="Appointments are booked directly into your Cal.com calendar with conflict-free slot selection."
+            title="Smart Calendar Booking"
+            description="Appointments are booked directly into your Google Calendar with conflict-free slot selection."
           />
           <Feature
             icon={MessageSquare}
@@ -124,7 +124,7 @@ export default function Landing() {
           <Step
             number="3"
             title="Connect your integrations"
-            description="Link your Vapi account (for phone calls), Cal.com (for bookings), and Twilio (for SMS)."
+            description="Link your Vapi account (for phone calls), Google Calendar (for bookings), and Twilio (for SMS)."
           />
           <Step
             number="4"

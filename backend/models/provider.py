@@ -15,7 +15,7 @@ import enum
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String, Text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 
@@ -35,6 +35,11 @@ class Provider(Base):
     # Which appointment types this provider handles
     # e.g. ["consultation", "follow_up"]  — empty list means ALL types
     appointment_types = Column(JSONB, nullable=False, default=list)
+
+    # Maximum concurrent appointments this provider can handle at the same time.
+    # e.g., 2 means they can see 2 patients simultaneously in overlapping slots.
+    # Default 1 = single-booking (classic one-at-a-time scheduling).
+    max_concurrent = Column(Integer, nullable=False, default=1)
 
     # Optional Google Calendar ID for this specific provider.
     # If null, uses the tenant's primary calendar.

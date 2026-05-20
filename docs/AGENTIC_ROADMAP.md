@@ -10,7 +10,7 @@ a phone call), but background agents handle everything around the call.
 
 Single voice agent handling inbound calls with:
 - Caller recognition (patient lookup by phone)
-- Appointment booking / rescheduling / cancellation via Cal.com
+- Appointment booking / rescheduling / cancellation via Google Calendar or native scheduler
 - SMS confirmations and two-way SMS chat via Twilio
 - Automated reminders (24h + 2h before appointment)
 - Post-visit follow-ups and Google review solicitation

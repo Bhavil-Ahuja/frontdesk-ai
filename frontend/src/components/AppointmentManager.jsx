@@ -4,6 +4,8 @@ import {
   CalendarCheck,
   Clock,
   User,
+  UserCog,
+  Users,
   Phone as PhoneIcon,
   Mail,
   X,
@@ -43,19 +45,31 @@ export default function AppointmentManager() {
   const [syncResult, setSyncResult] = useState(null);
   const [weekOffset, setWeekOffset] = useState(0);
   const [error, setError] = useState(null);
+  const [providers, setProviders] = useState([]);
+  const [selectedProvider, setSelectedProvider] = useState(null);
 
   useEffect(() => {
     fetchAppointments();
-    // Auto-refresh every 60s so Cal.com bookings flow in live
+    fetchProviders();
+    // Auto-refresh every 60s so new bookings flow in live
     const interval = setInterval(fetchAppointments, 60000);
     return () => clearInterval(interval);
   }, []);
+
+  async function fetchProviders() {
+    try {
+      const data = await apiFetch('/api/providers');
+      setProviders(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error('Failed to fetch providers:', err);
+    }
+  }
 
   async function fetchAppointments(forceSync = false) {
     setError(null);
     if (forceSync) setRefreshing(true);
     try {
-      // ?sync=1 → backend pulls latest from Cal.com before returning
+      // ?sync=1 → backend pulls latest from Google Calendar before returning
       const path = forceSync ? '/api/appointments?sync=1' : '/api/appointments';
       const data = await apiFetch(path);
       setAppointments(Array.isArray(data) ? data : data.items || []);
@@ -111,7 +125,11 @@ export default function AppointmentManager() {
   });
 
   function getAppointmentsForDay(date) {
-    return appointments.filter((a) => isSameDay(a.scheduled_at, date, tz));
+    return appointments.filter((a) => {
+      if (!isSameDay(a.scheduled_at, date, tz)) return false;
+      if (selectedProvider && a.provider_id !== selectedProvider) return false;
+      return true;
+    });
   }
 
   if (loading) {
@@ -131,6 +149,22 @@ export default function AppointmentManager() {
           <p className="text-gray-500 mt-1">{appointments.length} total appointments</p>
         </div>
         <div className="flex items-center gap-3">
+          {/* Provider filter */}
+          <div className="relative flex items-center">
+            <Users className="absolute left-2.5 w-4 h-4 text-gray-400 pointer-events-none" />
+            <select
+              value={selectedProvider || ''}
+              onChange={(e) => setSelectedProvider(e.target.value || null)}
+              className="pl-8 pr-3 py-2 rounded-lg border border-gray-200 bg-white text-sm text-gray-700 hover:bg-gray-50 transition-colors appearance-none cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary-300 focus:border-primary-300"
+            >
+              <option value="">All Providers</option>
+              {providers.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </div>
           <button
             onClick={handleSyncGcal}
             disabled={syncing}
@@ -243,6 +277,7 @@ export default function AppointmentManager() {
                       </p>
                       <p className="text-xs text-gray-500 mt-0.5">
                         {formatTime(apt.scheduled_at, tz)}
+                        {apt.provider_name && <span className="ml-1">• {apt.provider_name}</span>}
                       </p>
                       <span
                         className={`inline-block mt-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${
@@ -278,6 +313,7 @@ export default function AppointmentManager() {
               <DetailRow icon={PhoneIcon} label="Phone" value={selectedApt.patient_phone} />
               <DetailRow icon={Mail} label="Email" value={selectedApt.patient_email || '—'} />
               <DetailRow icon={CalendarDays} label="Type" value={selectedApt.appointment_type} />
+              <DetailRow icon={UserCog} label="Provider" value={selectedApt.provider_name || '—'} />
               <DetailRow
                 icon={Clock}
                 label="Scheduled"

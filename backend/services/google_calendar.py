@@ -1,9 +1,8 @@
 """
 Google Calendar service — OAuth 2.0 token management and Calendar API operations.
 
-This is an alternative to Cal.com for scheduling. Tenants can connect their
-Google Calendar via OAuth and the AI agent will check availability and book
-directly into their calendar.
+Tenants can connect their Google Calendar via OAuth and the AI agent will
+check availability and book directly into their calendar.
 
 Architecture:
   - Platform owns ONE Google OAuth app (client_id + client_secret in .env).
@@ -11,7 +10,7 @@ Architecture:
   - We exchange/refresh tokens as needed and call Google Calendar API.
 
 No Google SDK dependency — we use plain httpx against the REST endpoints to
-keep the dependency tree small (same pattern as Cal.com integration).
+keep the dependency tree small.
 """
 
 import logging
@@ -317,6 +316,15 @@ async def get_available_slots(
                 if (slot_end_tz.hour > close_h or
                         (slot_end_tz.hour == close_h and slot_end_tz.minute > close_m)):
                     break
+
+                # Skip slots that are in the past (with 5-minute buffer)
+                now_tz = datetime.now(tz)
+                if slot_start_tz < now_tz - timedelta(minutes=5):
+                    slot_min += 30
+                    if slot_min >= 60:
+                        slot_hour += 1
+                        slot_min -= 60
+                    continue
 
                 # Count how many existing events overlap this candidate slot
                 overlap_count = 0

@@ -49,13 +49,14 @@ class Appointment(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     # ── Reminder / follow-up tracking ────────────────────────────────────
-    reminder_sent_at = Column(DateTime(timezone=True), nullable=True)      # 24h-before SMS
+    reminder_sent_at = Column(DateTime(timezone=True), nullable=True)      # legacy (was 24h-before SMS) — column kept, no longer used
     reminder_2h_sent_at = Column(DateTime(timezone=True), nullable=True)   # 2h-before SMS
     followup_sent_at = Column(DateTime(timezone=True), nullable=True)      # post-visit SMS
     review_requested_at = Column(DateTime(timezone=True), nullable=True)   # Google review request
 
     # ── Patient confirmation via SMS reply ───────────────────────────────
     confirmed_by_patient = Column(
+        Boolean,
         # None = not yet replied, True = confirmed, False = declined
         nullable=True,
     )

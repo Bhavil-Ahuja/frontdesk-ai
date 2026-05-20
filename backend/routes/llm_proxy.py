@@ -3,7 +3,7 @@ OpenAI-compatible LLM proxy endpoint for Vapi.
 
 Multi-tenant: extracts the assistant_id from Vapi's request, resolves it to a
 TenantContext, and threads that context through all service calls so each
-tenant uses their own Cal.com key, Twilio creds, timezone, KB, and prompts.
+tenant uses their own Twilio creds, timezone, KB, and prompts.
 
 Architecture:
   1. Vapi sends conversation → we resolve tenant + inject tenant-specific system prompt
@@ -136,8 +136,9 @@ async def chat_completions(request: Request):
     tenant_id = tenant_ctx.tenant_id if tenant_ctx else None
     if caller_phone:
         try:
+            tz_name = tenant_ctx.timezone if tenant_ctx else None
             patient_context = await patient_service.get_patient_history(
-                caller_phone, tenant_id=tenant_id,
+                caller_phone, tenant_id=tenant_id, tz_name=tz_name,
             )
             if patient_context:
                 pname = patient_context["patient"]["name"]
@@ -184,7 +185,9 @@ async def chat_completions(request: Request):
 
     try:
         # ── Route-level escalation short-circuit ─────────────────────────
-        if _is_explicit_human_request(messages):
+        # Only perform escalation if the tenant has configured emergency_guidance
+        has_escalation = bool(tenant_ctx and tenant_ctx.emergency_guidance)
+        if _is_explicit_human_request(messages) and has_escalation:
             logger.info("[LLM Proxy] Explicit human request detected at route level")
             try:
                 await _execute_tool(
@@ -220,6 +223,8 @@ async def chat_completions(request: Request):
                     ),
                     model,
                 )
+        elif _is_explicit_human_request(messages) and not has_escalation:
+            logger.info("[LLM Proxy] Explicit human request detected but escalation not configured — skipping short-circuit")
 
         # ── True streaming: tokens flow to Vapi as Ollama generates them ──
         async_client = _get_async_client()
@@ -537,6 +542,18 @@ async def _stream_with_tools_sse(
                             full_content += after
                         buf = ""
                         flushing = True
+                elif _has_tool_tag_start(buf):
+                    # Don't yield tool call text — wait for closing tag
+                    # Handles: <tool_call>, <function_call>, <|tool_call|>, etc.
+                    if _has_tool_tag_end(buf):
+                        # Strip the tool block, keep any text before/after
+                        before, after = _strip_tool_block(buf)
+                        if before.strip():
+                            yield _sse({"content": before})
+                            full_content += before
+                        buf = after.lstrip()
+                        # Don't set flushing yet — there might be more content
+                    # else: keep buffering until we see closing tag
                 elif len(buf) > 20:
                     yield _sse({"content": buf})
                     full_content += buf
@@ -551,6 +568,20 @@ async def _stream_with_tools_sse(
                 if clean:
                     yield _sse({"content": clean})
                     full_content += clean
+
+            # ── Detect text-based tool calls (Qwen3 quirk) ────────────────
+            # Sometimes models output <tool_call>...</tool_call> (or similar) as text
+            # instead of using the proper function calling API. Parse and execute.
+            if _has_tool_tag_start(round_content) and _has_tool_tag_end(round_content):
+                parsed = _parse_tool_call_text(round_content)
+                if parsed:
+                    logger.warning("[LLM Proxy]   ⚠️ Text-based tool call detected: %s — executing", parsed["name"])
+                    # Inject into tool_calls_acc so it gets executed
+                    tool_calls_acc[0] = {
+                        "id": f"text_tc_{round_num}",
+                        "name": parsed["name"],
+                        "arguments": json.dumps(parsed["arguments"]),
+                    }
 
             round_ms = (time.time() - t_round) * 1000
             logger.info("[LLM Proxy]   Round %d: %.0fms, content=%d chars, tool_calls=%d",
@@ -637,6 +668,65 @@ _DOW_MAP = {
 }
 
 
+# ── Tool call text detection (for models that output tool calls as text) ─────
+# Some models (Qwen3, etc.) sometimes output tool calls as text instead of using
+# the proper function calling API. These helpers detect and strip such patterns.
+
+_TOOL_TAG_PATTERNS = [
+    ("<tool_call>", "</tool_call>"),
+    ("<function_call>", "</function_call>"),
+    ("<|tool_call|>", "<|/tool_call|>"),
+    ("<|function|>", "<|/function|>"),
+    ("<tool>", "</tool>"),
+    ("<function>", "</function>"),
+]
+
+
+def _has_tool_tag_start(text: str) -> bool:
+    """Check if text contains the start of any tool call tag pattern."""
+    return any(start in text for start, _ in _TOOL_TAG_PATTERNS)
+
+
+def _has_tool_tag_end(text: str) -> bool:
+    """Check if text contains the end of any tool call tag pattern."""
+    return any(end in text for _, end in _TOOL_TAG_PATTERNS)
+
+
+def _strip_tool_block(text: str) -> tuple[str, str]:
+    """
+    Strip a tool call block from text, returning (before, after).
+    Handles multiple tag formats.
+    """
+    for start_tag, end_tag in _TOOL_TAG_PATTERNS:
+        if start_tag in text and end_tag in text:
+            before = text.split(start_tag, 1)[0]
+            after = text.split(end_tag, 1)[1] if end_tag in text else ""
+            return before, after
+    return text, ""
+
+
+def _parse_tool_call_text(text: str) -> dict | None:
+    """
+    Parse a tool call from text-based output (e.g., <tool_call>{...}</tool_call>).
+    Returns dict with 'name' and 'arguments' or None if parsing fails.
+    """
+    import re as _re_mod
+    for start_tag, end_tag in _TOOL_TAG_PATTERNS:
+        pattern = _re_mod.escape(start_tag) + r"\s*(\{.*?\})\s*" + _re_mod.escape(end_tag)
+        match = _re_mod.search(pattern, text, _re_mod.DOTALL)
+        if match:
+            try:
+                tc_json = json.loads(match.group(1))
+                fn_name = tc_json.get("name", "")
+                fn_args = tc_json.get("arguments", {})
+                if isinstance(fn_args, str):
+                    fn_args = json.loads(fn_args)
+                return {"name": fn_name, "arguments": fn_args}
+            except (json.JSONDecodeError, KeyError):
+                continue
+    return None
+
+
 def _last_user_message(messages: list) -> str:
     for m in reversed(messages):
         if m.get("role") == "user":
@@ -692,7 +782,16 @@ def _looks_like_simple_chat(messages: list) -> bool:
     """
     Heuristic: detect short greetings / generic small-talk where the model
     should NOT have tools available.
+
+    CRITICAL: Only applies to the FIRST user message. Once a multi-turn
+    conversation is underway, tools must ALWAYS be available — the user
+    might respond with short answers like "doc1", "yes", "2pm" that need tools.
     """
+    # Count user messages — if more than 1, conversation is in progress
+    user_msg_count = sum(1 for m in messages if m.get("role") == "user")
+    if user_msg_count > 1:
+        return False
+
     last_user = ""
     for m in reversed(messages):
         if m.get("role") == "user":
@@ -744,7 +843,8 @@ async def _call_with_tools(
     content = ""
 
     # ── Deterministic escalation short-circuit ──────────────────────────
-    if _is_explicit_human_request(messages):
+    has_escalation = bool(tenant_ctx and tenant_ctx.emergency_guidance)
+    if _is_explicit_human_request(messages) and has_escalation:
         logger.info("[LLM Proxy] Explicit human request — short-circuiting LLM in _call_with_tools")
         try:
             await _execute_tool(
@@ -755,6 +855,8 @@ async def _call_with_tools(
         except Exception as exc:
             logger.warning("[LLM Proxy] escalate_to_human side-effect failed: %s", exc)
         return "Of course — let me connect you with one of our team members. Please hold."
+    elif _is_explicit_human_request(messages) and not has_escalation:
+        logger.info("[LLM Proxy] Explicit human request but escalation not configured — skipping short-circuit")
 
     suppress_tools_round1 = _looks_like_simple_chat(messages)
     if suppress_tools_round1:
@@ -861,12 +963,7 @@ async def _execute_tool(
 
     try:
         if name == "get_available_slots":
-            # Resolve event type ID from tenant config or global settings
             appt_type = args.get("appointment_type", "consultation")
-            if tenant_ctx:
-                event_type_id = tenant_ctx.get_event_type_id(appt_type)
-            else:
-                event_type_id = settings.get_event_type_id(appt_type)
 
             date = args.get("date", "")
             if not date:
@@ -874,7 +971,6 @@ async def _execute_tool(
                 date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
 
             slots = await calendar_service.get_available_slots(
-                event_type_id=event_type_id,
                 date_from=date,
                 date_to=date,
                 tenant_ctx=tenant_ctx,
@@ -916,6 +1012,7 @@ async def _execute_tool(
                     f"Available times on {friendly_date}: {time_list}. "
                     f"Offer these to the patient in natural conversation (1-2 sentences). "
                     f"When they pick one, call book_appointment with the matching exact_slot_time. "
+                    f"Include provider_id if the patient chose a specific provider. "
                     f"Do NOT read JSON or field names aloud."
                 )
 
@@ -927,6 +1024,18 @@ async def _execute_tool(
             }
 
         elif name == "book_appointment":
+            # ── Validate provider_id is present ──────────────────────
+            if not args.get("provider_id", "").strip():
+                logger.warning("[Tool Exec] book_appointment rejected — no provider_id")
+                return {
+                    "ok": False,
+                    "error": "missing_provider",
+                    "summary_for_assistant": (
+                        "Provider is required — please ask the patient for their provider "
+                        "preference first, or assign any available provider."
+                    ),
+                }
+
             # ── Validate required fields ──────────────────────────────
             required = {
                 "patient_name": "the patient's full name",
@@ -956,13 +1065,25 @@ async def _execute_tool(
                 }
 
             appt_type = args.get("appointment_type", "new_patient")
-            if tenant_ctx:
-                event_type_id = tenant_ctx.get_event_type_id(appt_type)
-            else:
-                event_type_id = settings.get_event_type_id(appt_type)
 
             # Email: leave blank if patient didn't provide one
             email = args.get("email", "") or ""
+
+            # Provider: look up name for confirmation message
+            provider_id_str = args.get("provider_id", "")
+            provider_id = None
+            provider_name = None
+            if provider_id_str:
+                try:
+                    from backend.services import provider_service
+                    import uuid as uuid_mod
+                    provider_id = uuid_mod.UUID(provider_id_str)
+                    provider = await provider_service.get_provider(provider_id)
+                    if provider:
+                        provider_name = provider.get("name", "")
+                        logger.info("[Tool Exec] Provider selected: %s (%s)", provider_name, provider_id)
+                except Exception as prov_exc:
+                    logger.warning("[Tool Exec] Provider lookup failed: %s", prov_exc)
 
             patient_info = {
                 "name": args.get("patient_name", ""),
@@ -984,7 +1105,6 @@ async def _execute_tool(
                 date_str = correct_date.strftime("%Y-%m-%d")
 
                 available = await calendar_service.get_available_slots(
-                    event_type_id=event_type_id,
                     date_from=date_str,
                     date_to=date_str,
                     tenant_ctx=tenant_ctx,
@@ -1011,7 +1131,6 @@ async def _execute_tool(
                 logger.warning("[Tool Exec] Slot matching failed: %s — using original", match_exc)
 
             result = await calendar_service.book_appointment(
-                event_type_id=event_type_id,
                 patient_info=patient_info,
                 start_time=slot_time,
                 tenant_ctx=tenant_ctx,
@@ -1047,7 +1166,10 @@ async def _execute_tool(
                         patient_email=email,
                         dob=args.get("dob", ""),
                         tenant_id=tenant_id,
+                        provider_id=provider_id,
                     )
+                    logger.info("[Tool Exec] Appointment recorded in DB (uid=%s, provider=%s)",
+                                booking_uid, provider_id)
                 except Exception as db_exc:
                     logger.warning("[Tool Exec] Patient/appointment DB upsert failed: %s", db_exc)
 
@@ -1170,7 +1292,8 @@ async def _execute_tool(
                 }
 
             tenant_id = tenant_ctx.tenant_id if tenant_ctx else None
-            history = await patient_service.get_patient_history(phone, tenant_id=tenant_id)
+            tz_name = tenant_ctx.timezone if tenant_ctx else None
+            history = await patient_service.get_patient_history(phone, tenant_id=tenant_id, tz_name=tz_name)
             if not history:
                 return {
                     "ok": False,
@@ -1225,6 +1348,171 @@ async def _execute_tool(
             elapsed = (time.time() - t0) * 1000
             logger.info("[Tool Exec] add_to_waitlist → %s in %.0fms", result.get("status"), elapsed)
             return result
+
+        elif name == "lookup_patient":
+            phone = args.get("phone", "")
+            patient_name = args.get("name", "")
+
+            if not phone and not patient_name:
+                return {
+                    "ok": False,
+                    "summary_for_assistant": "I need either the patient's phone number or name to look them up.",
+                }
+
+            tenant_id = tenant_ctx.tenant_id if tenant_ctx else None
+            tz_name = tenant_ctx.timezone if tenant_ctx else None
+
+            # Primary: look up by phone
+            history = None
+            if phone:
+                history = await patient_service.get_patient_history(phone, tenant_id=tenant_id, tz_name=tz_name)
+
+            # Fallback: search by name
+            if not history and patient_name:
+                patient_record = await patient_service.get_patient_by_name(
+                    patient_name, tenant_id=tenant_id,
+                )
+                if patient_record:
+                    history = await patient_service.get_patient_history(
+                        patient_record.phone, tenant_id=tenant_id, tz_name=tz_name,
+                    )
+
+            if not history:
+                elapsed = (time.time() - t0) * 1000
+                logger.info("[Tool Exec] lookup_patient → not found in %.0fms (phone=%s, name=%s)",
+                            elapsed, phone, patient_name)
+                return {
+                    "ok": False,
+                    "summary_for_assistant": (
+                        f"No patient record found for {phone or patient_name}. "
+                        "This appears to be a new patient. You will need to collect their "
+                        "full name, date of birth, and reason for visit before booking."
+                    ),
+                }
+
+            p = history["patient"]
+            upcoming = history.get("upcoming_appointments", [])
+            past = history.get("past_appointments", [])
+            last_visit = history.get("last_visit")
+            months_since = history.get("months_since_last_visit")
+
+            summary_parts = [f"Patient found: {p['name']}, phone {p['phone']}."]
+            if p.get("dob"):
+                summary_parts.append(f"DOB: {p['dob']}.")
+            else:
+                summary_parts.append("DOB: not on file — ask the patient.")
+            if p.get("allergies"):
+                summary_parts.append(f"Allergies: {p['allergies']}.")
+            if p.get("notes"):
+                summary_parts.append(f"Notes: {p['notes']}.")
+            summary_parts.append(f"Visit count: {p.get('visit_count', 0)}.")
+
+            if last_visit:
+                ago = f" ({months_since} months ago)" if months_since is not None else ""
+                summary_parts.append(f"Last visit: {last_visit['type']} on {last_visit['date']}{ago}.")
+
+            if upcoming:
+                appt_lines = [f"{a['type']} on {a['date']} at {a['time']}" for a in upcoming]
+                summary_parts.append(f"Upcoming appointments: {'; '.join(appt_lines)}.")
+            else:
+                summary_parts.append("No upcoming appointments.")
+
+            if past:
+                past_lines = [f"{a['type']} on {a['date']} ({a['status']})" for a in past[:3]]
+                summary_parts.append(f"Recent history: {'; '.join(past_lines)}.")
+
+            summary_parts.append(
+                "Use this data when speaking to the patient. Do NOT ask for info you already have. "
+                "If DOB is missing, ask for it. If updating any info, use update_patient_info."
+            )
+
+            elapsed = (time.time() - t0) * 1000
+            logger.info("[Tool Exec] lookup_patient → found %s (%d upcoming, %d past) in %.0fms",
+                        p['name'], len(upcoming), len(past), elapsed)
+            return {
+                "ok": True,
+                "summary_for_assistant": " ".join(summary_parts),
+                "patient": p,
+                "upcoming_appointments": upcoming,
+                "past_appointments": past,
+                "last_visit": last_visit,
+                "months_since_last_visit": months_since,
+            }
+
+        elif name == "update_patient_info":
+            phone = args.get("phone", "")
+            if not phone:
+                return {
+                    "ok": False,
+                    "summary_for_assistant": "I need the patient's phone number to update their record.",
+                }
+
+            tenant_id = tenant_ctx.tenant_id if tenant_ctx else None
+
+            existing = await patient_service.get_patient_by_phone(phone, tenant_id=tenant_id)
+            if not existing:
+                return {
+                    "ok": False,
+                    "summary_for_assistant": (
+                        f"No patient record found for {phone}. Cannot update a non-existent record. "
+                        "If this is a new patient, their record will be created when you book their appointment."
+                    ),
+                }
+
+            updated_fields = []
+            from backend.database import async_session as get_async_session
+            async with get_async_session() as db_session:
+                from sqlalchemy import select as sa_select
+                from sqlalchemy import and_
+                from backend.models.patient import Patient
+
+                filters = [Patient.phone == patient_service._normalise_phone(phone)]
+                if tenant_id:
+                    filters.append(Patient.tenant_id == tenant_id)
+
+                result = await db_session.execute(
+                    sa_select(Patient).where(and_(*filters))
+                )
+                patient = result.scalar_one_or_none()
+
+                if not patient:
+                    return {"ok": False, "summary_for_assistant": "Patient record not found."}
+
+                if args.get("name", "").strip():
+                    patient.name = args["name"].strip()
+                    updated_fields.append("name")
+                if args.get("dob", "").strip():
+                    patient.date_of_birth = args["dob"].strip()
+                    updated_fields.append("date of birth")
+                if args.get("email", "").strip():
+                    patient.email = args["email"].strip()
+                    updated_fields.append("email")
+                if args.get("allergies", "").strip():
+                    patient.allergies = args["allergies"].strip()
+                    updated_fields.append("allergies")
+                if args.get("notes", "").strip():
+                    patient.notes = args["notes"].strip()
+                    updated_fields.append("notes")
+
+                if not updated_fields:
+                    return {
+                        "ok": False,
+                        "summary_for_assistant": "No fields to update were provided. Specify at least one of: name, dob, email, allergies, notes.",
+                    }
+
+                await db_session.commit()
+
+            elapsed = (time.time() - t0) * 1000
+            logger.info("[Tool Exec] update_patient_info → updated %s for %s in %.0fms",
+                        updated_fields, phone, elapsed)
+            return {
+                "ok": True,
+                "summary_for_assistant": (
+                    f"Updated {', '.join(updated_fields)} for patient {existing.name} ({phone}). "
+                    f"The changes are saved. Continue the conversation normally."
+                ),
+                "updated_fields": updated_fields,
+            }
 
         elif name == "get_providers":
             from backend.services import provider_service

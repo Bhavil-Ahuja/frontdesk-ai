@@ -33,6 +33,7 @@ _UPDATABLE_FIELDS = frozenset({
     "appointment_types",
     "calendar_id",
     "business_hours_override",
+    "max_concurrent",
     "is_active",
 })
 
@@ -54,6 +55,7 @@ def provider_to_dict(p) -> dict:
         "id": str(p.id),
         "name": p.name,
         "title": p.title,
+        "max_concurrent": p.max_concurrent or 1,
         "appointment_types": p.appointment_types or [],
         "calendar_id": p.calendar_id,
         "business_hours_override": p.business_hours_override,
@@ -70,6 +72,7 @@ async def create_provider(
     appointment_types: list[str] = None,
     calendar_id: str = None,
     business_hours_override: dict = None,
+    max_concurrent: int = 1,
 ) -> dict:
     """
     Create a new provider for a tenant.
@@ -84,6 +87,9 @@ async def create_provider(
             If omitted, the tenant's primary calendar is used.
         business_hours_override: Optional per-provider business hours that
             override the tenant defaults.  Same shape as ``tenant.business_hours``.
+        max_concurrent: Maximum overlapping appointments this provider can handle.
+            Default 1 (single-booking). Set higher for providers who can see
+            multiple patients in parallel slots.
 
     Returns:
         Dictionary representation of the newly created provider.
@@ -96,6 +102,7 @@ async def create_provider(
             appointment_types=appointment_types or [],
             calendar_id=calendar_id,
             business_hours_override=business_hours_override,
+            max_concurrent=max(1, max_concurrent),
             is_active=True,
         )
         session.add(provider)

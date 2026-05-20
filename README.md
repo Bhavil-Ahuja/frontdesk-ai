@@ -14,8 +14,8 @@ A production-demo-ready AI-powered voice agent platform for **any business type*
                           │                            │                │
                           ▼                            ▼                ▼
                   ┌───────────────┐          ┌────────────────┐  ┌──────────┐
-                  │  Ollama       │          │  Cal.com API   │  │  Twilio  │
-                  │  (Local LLM)  │          │  (Scheduling)  │  │  (SMS)   │
+                  │  Ollama       │          │  Google Cal /  │  │  Twilio  │
+                  │  (Local LLM)  │          │  Native Sched  │  │  (SMS)   │
                   └───────────────┘          └────────────────┘  └──────────┘
                           │
                           ▼
@@ -32,14 +32,14 @@ Each tenant (business) gets:
 - **Business-specific knowledge base** — services, pricing, FAQs, hours
 - **Per-vertical emergency guidance** — dental, hospital, veterinary, or custom
 - **Isolated data** — calls, appointments, patients scoped per tenant
-- **Independent integrations** — Vapi, Cal.com, Twilio, Google Calendar per tenant
+- **Independent integrations** — Vapi, Google Calendar, Twilio per tenant
 
 Supported business types: `dental`, `hospital`, `clinic`, `veterinary`, `physiotherapy`, `custom`
 
 ## Features
 
 - **AI Voice Receptionist** — Natural phone conversations powered by a local LLM (Ollama)
-- **Appointment Scheduling** — Book, reschedule, and cancel via Cal.com integration
+- **Appointment Scheduling** — Book, reschedule, and cancel via Google Calendar or built-in native scheduler
 - **SMS Notifications** — Automated confirmations, reminders, and follow-ups via Twilio
 - **Emergency Triage** — Handles urgent situations with appropriate guidance per business type
 - **Smart Escalation** — Transfers to humans when needed (billing disputes, distressed callers)
@@ -61,7 +61,7 @@ Supported business types: `dental`, `hospital`, `clinic`, `veterinary`, `physiot
 
 ### External accounts (for production — not needed in demo mode):
 - [Vapi.ai](https://vapi.ai) — Voice call handling
-- [Cal.com](https://cal.com) — Appointment scheduling
+- [Google Calendar](https://calendar.google.com) — Appointment scheduling (or use the built-in native scheduler)
 - [Twilio](https://twilio.com) — SMS notifications
 
 ## Quick Start
@@ -165,12 +165,8 @@ See the Deployment section below — no tunnel needed.
 4. Go to **Phone Numbers** → Buy or bring a number → Copy ID → `VAPI_PHONE_NUMBER_ID`
 5. The assistant ID will be auto-created on first startup
 
-### Cal.com
-1. Sign up at [cal.com](https://cal.com)
-2. Go to **Settings → Developer → API Keys**
-3. Create a key → `CALCOM_API_KEY`
-4. Create event types for each appointment type your business needs (e.g. Consultation, Follow-up, Emergency)
-5. Copy each event type ID from the URL (e.g., `/event-types/123`) into the corresponding `.env` variable
+### Google Calendar (Optional)
+Connect Google Calendar through the Agent Config dashboard (one-click OAuth). Alternatively, the built-in native scheduler uses your configured business hours to manage availability automatically.
 
 ### Twilio
 1. Sign up at [twilio.com](https://twilio.com)
@@ -283,7 +279,7 @@ Each tenant gets their own knowledge base, agent personality, and integrations.
 - **Backend:** Python 3.11+, FastAPI, SQLAlchemy (async), Pydantic
 - **LLM:** Ollama (local, OpenAI-compatible API)
 - **Voice:** Vapi.ai (STT, TTS, phone call orchestration)
-- **Scheduling:** Cal.com v2 API
+- **Scheduling:** Google Calendar API + built-in native scheduler
 - **SMS:** Twilio
 - **Database:** PostgreSQL 15 (Docker)
 - **Frontend:** React 18, Tailwind CSS, Recharts, Lucide Icons

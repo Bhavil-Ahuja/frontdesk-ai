@@ -1,13 +1,13 @@
 """
 Native scheduling engine — computes availability and creates bookings
 using the tenant's business_hours, appointment_types, and existing
-Appointment records in Postgres. No external Cal.com dependency.
+Appointment records in Postgres. No external calendar dependency.
 
 This is the platform-managed alternative: tenants just set their hours
 and appointment types in Agent Config, and the system handles the rest.
 
-If a tenant HAS configured a Cal.com API key, the caller (calendar_service)
-should prefer Cal.com. This module is the fallback for tenants without it.
+If a tenant has connected Google Calendar, the caller (calendar_service)
+should prefer Google Calendar. This module is the fallback for tenants without it.
 
 Usage:
     from backend.services.native_scheduling import (
@@ -177,7 +177,11 @@ async def get_native_slots(
         booked_ranges.append((appt_start, appt_end))
 
     available: list[str] = []
+    now_local = datetime.now(local_tz)
     for slot_utc, slot_local in zip(candidate_slots_utc, candidate_slots_local):
+        # Skip slots that are in the past (with 5-minute buffer)
+        if slot_local < now_local - timedelta(minutes=5):
+            continue
         slot_end_utc = slot_utc + timedelta(minutes=duration_minutes)
         overlap_count = 0
         for booked_start, booked_end in booked_ranges:
@@ -194,6 +198,189 @@ async def get_native_slots(
     logger.info("[NativeSched] %s: %d available slots (after filtering, max_concurrent=%d)",
                 date_str, len(available), max_concurrent)
     return available
+
+
+# ── Provider-aware availability ─────────────────────────────────────────────
+
+
+async def get_provider_aware_slots(
+    date_str: str,
+    duration_minutes: int = 60,
+    tenant_id: uuid.UUID | None = None,
+    business_hours: dict[str, Any] | None = None,
+    tz_name: str = "America/Chicago",
+    provider_id: uuid.UUID | None = None,
+) -> dict[str, Any]:
+    """
+    Get available slots with provider-level concurrency tracking.
+
+    Unlike get_native_slots (which checks global concurrency), this function:
+    - Considers each provider's max_concurrent limit separately
+    - Returns which providers are available for each slot
+    - Supports filtering to a specific provider
+
+    Returns:
+        {
+            "slots": [
+                {
+                    "time": "2026-05-20T10:00:00-05:00",
+                    "available_providers": [
+                        {"id": "...", "name": "Dr. Smith", "slots_remaining": 1}
+                    ]
+                },
+                ...
+            ],
+            "provider_filter": provider_id or None,
+        }
+    """
+    from backend.models.provider import Provider
+
+    try:
+        target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        logger.warning("[NativeSched] Invalid date: %s", date_str)
+        return {"slots": [], "provider_filter": None}
+
+    # Resolve timezone
+    try:
+        local_tz = ZoneInfo(tz_name)
+    except Exception:
+        local_tz = ZoneInfo("America/Chicago")
+
+    dow_key = _DOW_KEYS[target_date.weekday()]
+
+    # Default business hours
+    if not business_hours:
+        business_hours = {
+            "monday": {"open": "08:00", "close": "17:00"},
+            "tuesday": {"open": "08:00", "close": "17:00"},
+            "wednesday": {"open": "08:00", "close": "17:00"},
+            "thursday": {"open": "08:00", "close": "17:00"},
+            "friday": {"open": "08:00", "close": "17:00"},
+        }
+
+    day_hours = business_hours.get(dow_key)
+    if not day_hours:
+        logger.info("[NativeSched] %s (%s) is closed", date_str, dow_key)
+        return {"slots": [], "provider_filter": str(provider_id) if provider_id else None}
+
+    try:
+        open_h, open_m = map(int, day_hours["open"].split(":"))
+        close_h, close_m = map(int, day_hours["close"].split(":"))
+    except (KeyError, ValueError) as exc:
+        logger.warning("[NativeSched] Bad business hours for %s: %s", dow_key, exc)
+        return {"slots": [], "provider_filter": str(provider_id) if provider_id else None}
+
+    open_time = dtime(open_h, open_m)
+    close_time = dtime(close_h, close_m)
+
+    # Generate candidate slots
+    candidate_slots_local: list[datetime] = []
+    candidate_slots_utc: list[datetime] = []
+
+    current_local = datetime.combine(target_date, open_time, tzinfo=local_tz)
+    latest_start_local = datetime.combine(target_date, close_time, tzinfo=local_tz) - timedelta(minutes=duration_minutes)
+
+    while current_local <= latest_start_local:
+        candidate_slots_local.append(current_local)
+        candidate_slots_utc.append(current_local.astimezone(timezone.utc))
+        current_local += timedelta(minutes=_SLOT_INTERVAL)
+
+    if not candidate_slots_utc:
+        return {"slots": [], "provider_filter": str(provider_id) if provider_id else None}
+
+    # Get providers
+    async with async_session() as session:
+        provider_query = select(Provider).where(
+            and_(
+                Provider.tenant_id == tenant_id,
+                Provider.is_active == True,
+            )
+        )
+        if provider_id:
+            provider_query = provider_query.where(Provider.id == provider_id)
+
+        provider_result = await session.execute(provider_query)
+        providers = list(provider_result.scalars().all())
+
+    if not providers:
+        # No providers configured — fall back to global slot availability
+        logger.info("[NativeSched] No providers found, using global availability")
+        simple_slots = await get_native_slots(
+            date_str, duration_minutes, tenant_id, business_hours, tz_name, max_concurrent=1
+        )
+        return {
+            "slots": [{"time": s, "available_providers": []} for s in simple_slots],
+            "provider_filter": None,
+        }
+
+    # Get existing appointments for this day
+    day_start_utc = candidate_slots_utc[0] - timedelta(hours=1)
+    day_end_utc = candidate_slots_utc[-1] + timedelta(minutes=duration_minutes, hours=1)
+
+    async with async_session() as session:
+        appt_query = select(Appointment).where(
+            and_(
+                Appointment.tenant_id == tenant_id,
+                Appointment.scheduled_at >= day_start_utc,
+                Appointment.scheduled_at < day_end_utc,
+                Appointment.status == AppointmentStatus.CONFIRMED,
+            )
+        )
+        appt_result = await session.execute(appt_query)
+        existing_appointments = list(appt_result.scalars().all())
+
+    # Build lookup: provider_id → list of (start_utc, end_utc)
+    provider_bookings: dict[uuid.UUID, list[tuple[datetime, datetime]]] = {p.id: [] for p in providers}
+    for appt in existing_appointments:
+        if appt.provider_id and appt.provider_id in provider_bookings:
+            appt_start = appt.scheduled_at
+            if appt_start.tzinfo is None:
+                appt_start = appt_start.replace(tzinfo=timezone.utc)
+            appt_end = appt_start + timedelta(minutes=appt.duration_minutes or 60)
+            provider_bookings[appt.provider_id].append((appt_start, appt_end))
+
+    # For each slot, check each provider's availability
+    now_local = datetime.now(local_tz)
+    result_slots = []
+
+    for slot_utc, slot_local in zip(candidate_slots_utc, candidate_slots_local):
+        # Skip past slots
+        if slot_local < now_local - timedelta(minutes=5):
+            continue
+
+        slot_end_utc = slot_utc + timedelta(minutes=duration_minutes)
+        available_providers = []
+
+        for provider in providers:
+            bookings = provider_bookings.get(provider.id, [])
+            overlap_count = 0
+            for booked_start, booked_end in bookings:
+                if slot_utc < booked_end and slot_end_utc > booked_start:
+                    overlap_count += 1
+
+            max_conc = provider.max_concurrent or 1
+            if overlap_count < max_conc:
+                available_providers.append({
+                    "id": str(provider.id),
+                    "name": provider.name,
+                    "title": provider.title,
+                    "slots_remaining": max_conc - overlap_count,
+                })
+
+        if available_providers:
+            result_slots.append({
+                "time": slot_local.isoformat(),
+                "available_providers": available_providers,
+            })
+
+    logger.info("[NativeSched] %s: %d slots with provider availability (providers=%d, appts=%d)",
+                date_str, len(result_slots), len(providers), len(existing_appointments))
+
+    return {
+        "slots": result_slots,
+        "provider_filter": str(provider_id) if provider_id else None,
+    }
 
 
 # ── Booking ──────────────────────────────────────────────────────────────────

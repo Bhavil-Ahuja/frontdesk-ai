@@ -6,8 +6,7 @@ Multi-tenant: iterates over all ACTIVE tenants, resolves their TenantContext
 for per-tenant Twilio creds and business name, then sends reminders/followups
 scoped to each tenant.
 
-- 24h-before reminder: "Your appointment is tomorrow at 10 AM"
-- 2h-before reminder: "Your appointment is in 2 hours"
+- 2h-before reminder: "Your appointment is coming up today at {time}"
 - Post-visit follow-up: "How was your visit? Reply 1-5 to rate"
 - Google review solicitation: sent after follow-up with review link
 
@@ -36,70 +35,19 @@ CHECK_INTERVAL = 30 * 60  # 30 minutes
 # ── Per-tenant reminder cycle ───────────────────────────────────────────────
 
 
-async def _process_tenant_reminders(tenant: Tenant) -> tuple[int, int, int, int]:
+async def _process_tenant_reminders(tenant: Tenant) -> tuple[int, int, int]:
     """
     Send reminders, follow-ups, and review requests for a single tenant.
-    Returns (reminders_24h, reminders_2h, followups, reviews).
+    Returns (reminders_2h, followups, reviews).
     """
     ctx = _tenant_to_context(tenant)
     now = datetime.now(timezone.utc)
 
-    reminders_24h = await _send_upcoming_reminders(tenant.id, ctx, now)
     reminders_2h = await _send_2h_reminders(tenant.id, ctx, now)
     followups_sent = await _send_followups(tenant.id, ctx, now)
     reviews_sent = await _send_review_requests(tenant.id, ctx, now)
 
-    return reminders_24h, reminders_2h, followups_sent, reviews_sent
-
-
-# ── Reminder (24h before) ───────────────────────────────────────────────────
-
-async def _send_upcoming_reminders(tenant_id, tenant_ctx, now: datetime) -> int:
-    """
-    Find CONFIRMED appointments in the next 20-28h window that haven't
-    been reminded yet, scoped to a tenant. Send an SMS for each.
-    """
-    if tenant_ctx and tenant_ctx.reminder_settings.get("24h_enabled") is False:
-        return 0
-
-    window_start = now + timedelta(hours=20)
-    window_end = now + timedelta(hours=28)
-
-    filters = [
-        Appointment.status == AppointmentStatus.CONFIRMED,
-        Appointment.scheduled_at >= window_start,
-        Appointment.scheduled_at <= window_end,
-        Appointment.reminder_sent_at.is_(None),
-    ]
-    if tenant_id:
-        filters.append(Appointment.tenant_id == tenant_id)
-
-    async with async_session() as session:
-        result = await session.execute(
-            select(Appointment).where(and_(*filters))
-        )
-        appointments = result.scalars().all()
-
-        sent = 0
-        for appt in appointments:
-            ok = sms_service.send_reminder(
-                patient_name=appt.patient_name,
-                phone=appt.patient_phone,
-                appointment_type=appt.appointment_type.replace("_", " ").title(),
-                scheduled_at=appt.scheduled_at,
-                tenant_ctx=tenant_ctx,
-            )
-            if ok:
-                appt.reminder_sent_at = now
-                sent += 1
-                logger.info("[Reminders][%s] Sent 24h reminder to %s for %s",
-                            tenant_ctx.slug if tenant_ctx else "default",
-                            appt.patient_phone, appt.scheduled_at)
-
-        if sent:
-            await session.commit()
-
-    return sent
+    return reminders_2h, followups_sent, reviews_sent
 
 
 # ── Reminder (2h before) ───────────────────────────────────────────────────
@@ -212,7 +160,10 @@ def _send_review_sms(patient_name: str, phone: str, review_link: str,
         f"If you had a great experience, we'd love a quick review: "
         f"{review_link}. Thank you!"
     )
-    return sms_service._send_sms(phone, body, tenant_ctx)
+    ok = sms_service._send_sms(phone, body, tenant_ctx)
+    if ok:
+        sms_service._log_outbound_sms(tenant_ctx, to_number=phone, body=body, patient_phone=phone)
+    return ok
 
 
 async def _send_review_requests(tenant_id, tenant_ctx, now: datetime) -> int:
@@ -294,14 +245,12 @@ async def run_reminder_loop():
                 tenants = result.scalars().all()
 
             if tenants:
-                total_24h = 0
                 total_2h = 0
                 total_followups = 0
                 total_reviews = 0
                 for tenant in tenants:
                     try:
-                        r24, r2, f, rv = await _process_tenant_reminders(tenant)
-                        total_24h += r24
+                        r2, f, rv = await _process_tenant_reminders(tenant)
                         total_2h += r2
                         total_followups += f
                         total_reviews += rv
@@ -309,21 +258,21 @@ async def run_reminder_loop():
                         logger.error("[Reminders] Error processing tenant %s: %s",
                                      tenant.slug, exc, exc_info=True)
 
-                if total_24h or total_2h or total_followups or total_reviews:
+                if total_2h or total_followups or total_reviews:
                     logger.info(
-                        "[Reminders] Cycle complete: %d 24h, %d 2h reminders, "
+                        "[Reminders] Cycle complete: %d 2h reminders, "
                         "%d follow-ups, %d reviews across %d tenant(s)",
-                        total_24h, total_2h, total_followups, total_reviews,
+                        total_2h, total_followups, total_reviews,
                         len(tenants),
                     )
             else:
                 # No tenants in DB — fall back to unscoped (legacy mode)
                 now = datetime.now(timezone.utc)
-                reminders = await _send_upcoming_reminders(None, None, now)
+                reminders_2h = await _send_2h_reminders(None, None, now)
                 followups = await _send_followups(None, None, now)
-                if reminders or followups:
-                    logger.info("[Reminders] Legacy mode: %d reminders, %d follow-ups sent",
-                                reminders, followups)
+                if reminders_2h or followups:
+                    logger.info("[Reminders] Legacy mode: %d 2h reminders, %d follow-ups sent",
+                                reminders_2h, followups)
 
             # Expire stale waitlist entries each cycle
             try:

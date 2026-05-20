@@ -220,8 +220,9 @@ async def _handle_call_start(call_id: str, call_data: dict) -> dict[str, Any]:
     if caller_number:
         try:
             from backend.services import patient_service
+            tz_name = tenant_ctx.timezone if tenant_ctx else None
             patient_context = await patient_service.get_patient_history(
-                caller_number, tenant_id=tenant_id,
+                caller_number, tenant_id=tenant_id, tz_name=tz_name,
             )
             if patient_context:
                 logger.info("[CallStart] 🎯 RETURNING PATIENT: %s (%d visits)",

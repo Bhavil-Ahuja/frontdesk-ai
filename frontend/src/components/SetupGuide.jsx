@@ -19,7 +19,7 @@ import { Link } from 'react-router-dom';
 
 /**
  * SetupGuide — guided onboarding for new tenants.
- * Shows the 3 integrations (Vapi / Cal.com / Twilio) with explanations,
+ * Shows the 3 integrations (Vapi / Calendar / Twilio) with explanations,
  * what's configured, what's not, and links to set them up.
  */
 export default function SetupGuide() {
@@ -86,28 +86,21 @@ export default function SetupGuide() {
       key: 'calendar',
       icon: CalendarCheck,
       title: 'Calendar (Booking)',
-      configured: (config?.calcom_configured ?? user?.calcom_configured ?? false) ||
-                  (config?.google_calendar_connected ?? false),
-      shortDesc: 'Choose one: Google Calendar (free, 1-click) or Cal.com (full platform).',
+      configured: config?.google_calendar_connected ?? false,
+      shortDesc: 'Connect Google Calendar (free, 1-click) or use the built-in scheduler.',
       whatItDoes: [
         'Lets the agent check available slots in real time',
         'Creates actual bookings in your calendar (no double-bookings)',
         'Google Calendar: free, connects with one click — no API keys needed',
-        'Cal.com: full scheduling platform with custom event types and email confirmations',
       ],
       howToSetup: [
         {
-          step: 'Option A: Connect Google Calendar (Recommended)',
+          step: 'Connect Google Calendar (Recommended)',
           detail: 'Go to Agent Config → Google Calendar section → click "Connect Google Calendar". One-click OAuth — no API keys needed.',
         },
         {
-          step: 'Option B: Use Cal.com instead',
-          detail: 'Sign up at cal.com (free tier). Get an API key from Settings → Developer → API Keys.',
-          link: 'https://cal.com',
-        },
-        {
-          step: 'Or skip both',
-          detail: 'Without either, the built-in scheduler uses your Business Hours to manage availability automatically.',
+          step: 'Or skip it',
+          detail: 'Without Google Calendar, the built-in scheduler uses your Business Hours to manage availability automatically.',
         },
       ],
       bgColor: 'bg-emerald-50',
@@ -153,7 +146,7 @@ export default function SetupGuide() {
   ];
 
   const configuredCount = integrations.filter((i) => i.configured).length;
-  const requiredCount = 2; // Vapi + Cal.com are required
+  const requiredCount = 2; // Vapi + Calendar are required
   const requiredConfigured = integrations.slice(0, 2).filter((i) => i.configured).length;
   const allReady = requiredConfigured === requiredCount;
 
@@ -213,7 +206,7 @@ export default function SetupGuide() {
             >
               {allReady
                 ? 'All required services are connected. Your AI agent can now answer calls and book appointments.'
-                : 'Connect Vapi (for phone calls) and a calendar (Google Calendar or Cal.com) to activate your agent. Twilio is optional.'}
+                : 'Connect Vapi (for phone calls) and a calendar (Google Calendar or built-in scheduler) to activate your agent. Twilio is optional.'}
             </p>
             <div className="mt-3 flex items-center gap-3">
               <Link
