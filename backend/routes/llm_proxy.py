@@ -1369,12 +1369,31 @@ async def _execute_tool(
 
             # Fallback: search by name
             if not history and patient_name:
-                patient_record = await patient_service.get_patient_by_name(
+                matches = await patient_service.get_patient_by_name(
                     patient_name, tenant_id=tenant_id,
                 )
-                if patient_record:
+                if len(matches) > 1:
+                    # Multiple patients share this name — ask for phone to disambiguate
+                    elapsed = (time.time() - t0) * 1000
+                    match_lines = [
+                        f"- {m.name} (phone ending ...{m.phone[-4:]})"
+                        for m in matches
+                    ]
+                    logger.info("[Tool Exec] lookup_patient → %d name matches for '%s' in %.0fms — disambiguation needed",
+                                len(matches), patient_name, elapsed)
+                    return {
+                        "ok": False,
+                        "multiple_matches": True,
+                        "match_count": len(matches),
+                        "summary_for_assistant": (
+                            f"Found {len(matches)} patients matching the name '{patient_name}': "
+                            + "; ".join(match_lines) + ". "
+                            "Ask the patient for their phone number or date of birth to identify the correct record."
+                        ),
+                    }
+                elif len(matches) == 1:
                     history = await patient_service.get_patient_history(
-                        patient_record.phone, tenant_id=tenant_id, tz_name=tz_name,
+                        matches[0].phone, tenant_id=tenant_id, tz_name=tz_name,
                     )
 
             if not history:

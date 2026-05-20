@@ -87,13 +87,14 @@ async def get_patient_by_phone(
 async def get_patient_by_name(
     name: str,
     tenant_id: _uuid.UUID | None = None,
-) -> Patient | None:
-    """Look up a patient by name (case-insensitive), scoped to a tenant.
+) -> list[Patient]:
+    """Look up patients by name (case-insensitive), scoped to a tenant.
 
-    Returns the first match. Used as fallback when phone is not available.
+    Returns ALL matches (up to 10) so callers can disambiguate when
+    multiple patients share the same name.
     """
     if not name or not name.strip():
-        return None
+        return []
 
     async with async_session() as session:
         filters = [Patient.name.ilike(f"%{name.strip()}%")]
@@ -101,9 +102,9 @@ async def get_patient_by_name(
             filters.append(Patient.tenant_id == tenant_id)
 
         result = await session.execute(
-            select(Patient).where(and_(*filters)).limit(1)
+            select(Patient).where(and_(*filters)).limit(10)
         )
-        return result.scalar_one_or_none()
+        return list(result.scalars().all())
 
 
 async def get_patient_history(
