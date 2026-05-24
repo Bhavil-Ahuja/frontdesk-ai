@@ -1,10 +1,12 @@
 """
 Authentication API — login, logout, registration with password, and current user info.
 
-POST /api/auth/login        → email + password → JWT
-POST /api/auth/register     → register a new tenant (PENDING) with password
-GET  /api/auth/me           → current authenticated user
-POST /api/auth/change-password → change own password
+POST  /api/auth/login            → email + password → JWT
+POST  /api/auth/register         → register a new tenant (PENDING) with password
+GET   /api/auth/me               → current authenticated user
+PATCH /api/auth/profile          → update own profile (name only, email immutable)
+POST  /api/auth/change-password  → change own password
+GET   /api/auth/profile-changes  → change history (admin sees all, tenant sees own)
 """
 
 import logging
@@ -206,12 +208,58 @@ async def me(current_user: Tenant = Depends(auth_service.get_current_user)):
     return UserResponse(**_user_to_dict(current_user))
 
 
+class ProfileUpdateRequest(BaseModel):
+    owner_name: Optional[str] = Field(None, min_length=2, max_length=255)
+
+
+@router.patch("/profile")
+async def update_profile(
+    req: ProfileUpdateRequest,
+    current_user: Tenant = Depends(auth_service.get_current_user),
+):
+    """
+    Update own profile. Only owner_name is editable — email is immutable.
+    All changes are logged for admin audit trail.
+    """
+    from backend.models.profile_change_log import ProfileChangeLog
+
+    updated = []
+    async with async_session() as session:
+        result = await session.execute(select(Tenant).where(Tenant.id == current_user.id))
+        user = result.scalar_one_or_none()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found.")
+
+        if req.owner_name is not None and req.owner_name.strip() != user.owner_name:
+            old_name = user.owner_name
+            user.owner_name = req.owner_name.strip()
+            updated.append("owner_name")
+            session.add(ProfileChangeLog(
+                tenant_id=user.id,
+                field_name="owner_name",
+                old_value=old_name,
+                new_value=user.owner_name,
+                changed_by=user.owner_email,
+            ))
+
+        if not updated:
+            raise HTTPException(status_code=400, detail="Nothing to update.")
+
+        await session.commit()
+        await session.refresh(user)
+
+    logger.info("[Auth] Profile updated for %s: %s", current_user.owner_email, updated)
+    return {"status": "profile_updated", "changes": updated, "user": _user_to_dict(user)}
+
+
 @router.post("/change-password")
 async def change_password(
     req: ChangePasswordRequest,
     current_user: Tenant = Depends(auth_service.get_current_user),
 ):
     """Change the current user's password."""
+    from backend.models.profile_change_log import ProfileChangeLog
+
     if not current_user.password_hash or not auth_service.verify_password(
         req.current_password, current_user.password_hash
     ):
@@ -222,7 +270,58 @@ async def change_password(
         u = result.scalar_one_or_none()
         if u:
             u.password_hash = auth_service.hash_password(req.new_password)
+            # Log password change (no values stored for security)
+            session.add(ProfileChangeLog(
+                tenant_id=u.id,
+                field_name="password",
+                old_value=None,
+                new_value=None,
+                changed_by=u.owner_email,
+            ))
             await session.commit()
 
     logger.info("[Auth] Password changed for %s", current_user.owner_email)
     return {"status": "password_updated"}
+
+
+@router.get("/profile-changes")
+async def get_profile_changes(
+    tenant_id: Optional[str] = None,
+    current_user: Tenant = Depends(auth_service.get_current_user),
+):
+    """
+    Get profile change history.
+    - Tenants see their own change history.
+    - Admins can see any tenant's changes (pass tenant_id), or all changes.
+    """
+    from backend.models.profile_change_log import ProfileChangeLog
+    from sqlalchemy import desc
+
+    async with async_session() as session:
+        filters = []
+        if current_user.is_admin and tenant_id:
+            from uuid import UUID
+            filters.append(ProfileChangeLog.tenant_id == UUID(tenant_id))
+        elif not current_user.is_admin:
+            filters.append(ProfileChangeLog.tenant_id == current_user.id)
+        # Admin with no tenant_id filter → see all changes
+
+        query = select(ProfileChangeLog).order_by(desc(ProfileChangeLog.created_at)).limit(50)
+        if filters:
+            query = query.where(*filters)
+
+        result = await session.execute(query)
+        logs = result.scalars().all()
+
+    return [
+        {
+            "id": str(log.id),
+            "tenant_id": str(log.tenant_id),
+            "field_name": log.field_name,
+            "old_value": log.old_value,
+            "new_value": log.new_value,
+            "changed_by": log.changed_by,
+            "created_at": log.created_at.isoformat() if log.created_at else None,
+        }
+        for log in logs
+    ]

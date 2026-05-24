@@ -19,7 +19,8 @@ class AppointmentStatus(str, enum.Enum):
     CONFIRMED = "CONFIRMED"
     CANCELLED = "CANCELLED"
     RESCHEDULED = "RESCHEDULED"
-    COMPLETED = "COMPLETED"
+    COMPLETED = "COMPLETED"      # Attended — visit completed
+    NO_SHOW = "NO_SHOW"          # Patient didn't show up
 
 
 class BookedVia(str, enum.Enum):

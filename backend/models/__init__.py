@@ -5,6 +5,7 @@ from backend.models.patient import Patient
 from backend.models.provider import Provider
 from backend.models.waitlist import WaitlistEntry, WaitlistStatus
 from backend.models.sms_message import SMSMessage, SMSDirection
+from backend.models.profile_change_log import ProfileChangeLog
 
 __all__ = [
     "Tenant",
@@ -22,4 +23,5 @@ __all__ = [
     "WaitlistStatus",
     "SMSMessage",
     "SMSDirection",
+    "ProfileChangeLog",
 ]

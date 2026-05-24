@@ -1,9 +1,10 @@
 """
 Appointment CRUD API routes.
 
-GET  /api/appointments              → list with filters
-POST /api/appointments/{id}/cancel  → manual cancellation
-POST /api/appointments/sync-gcal    → bidirectional Google Calendar sync
+GET   /api/appointments              → list with filters
+PATCH /api/appointments/{id}         → update status / notes (post-visit management)
+POST  /api/appointments/{id}/cancel  → manual cancellation
+POST  /api/appointments/sync-gcal    → bidirectional Google Calendar sync
 """
 
 import logging
@@ -200,6 +201,121 @@ async def cancel_appointment(
 
     logger.info("Appointment %s manually cancelled.", appointment_id)
     return {"status": "cancelled", "id": appointment_id, "gcal_cancelled": gcal_cancelled}
+
+
+# ── Update appointment status / notes (post-visit management) ────────────────
+
+
+class AppointmentUpdateRequest(BaseModel):
+    status: Optional[str] = None
+    notes: Optional[str] = None
+
+
+_ALLOWED_STATUS_TRANSITIONS = {
+    # From CONFIRMED: can mark attended (COMPLETED), no-show, cancel, reschedule
+    "CONFIRMED": {"COMPLETED", "NO_SHOW", "CANCELLED", "RESCHEDULED"},
+    # From NO_SHOW: can correct to attended
+    "NO_SHOW": {"COMPLETED"},
+    # From COMPLETED: can correct to no-show
+    "COMPLETED": {"NO_SHOW"},
+    # CANCELLED/RESCHEDULED are terminal for now
+    "CANCELLED": set(),
+    "RESCHEDULED": set(),
+}
+
+
+@router.patch("/{appointment_id}")
+async def update_appointment(
+    appointment_id: str,
+    body: AppointmentUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: Tenant = Depends(auth_service.get_current_user),
+):
+    """
+    Update an appointment's status and/or notes.
+    Used by clinic owners to mark past appointments as attended / no-show
+    and to add visit notes that the AI will reference on future calls.
+    """
+    try:
+        uid = uuid.UUID(appointment_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid appointment ID format.")
+
+    result = await db.execute(select(Appointment).where(Appointment.id == uid))
+    apt = result.scalar_one_or_none()
+    if apt is None:
+        raise HTTPException(status_code=404, detail="Appointment not found.")
+    if not current_user.is_admin and apt.tenant_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied.")
+
+    updated = []
+
+    # ── Status transition ────────────────────────────────────────────────
+    if body.status is not None:
+        new_status_str = body.status.upper().strip()
+        try:
+            new_status = AppointmentStatus(new_status_str)
+        except ValueError:
+            valid = ", ".join(s.value for s in AppointmentStatus)
+            raise HTTPException(status_code=400, detail=f"Invalid status. Valid: {valid}")
+
+        current_status = apt.status.value if apt.status else "CONFIRMED"
+        allowed = _ALLOWED_STATUS_TRANSITIONS.get(current_status, set())
+        if new_status_str not in allowed:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot transition from {current_status} to {new_status_str}. Allowed: {allowed or 'none'}",
+            )
+
+        old_status = apt.status
+        apt.status = new_status
+        updated.append(f"status: {old_status.value} → {new_status.value}")
+
+        # Side effects: update patient record based on outcome
+        try:
+            from backend.models.patient import Patient
+            patient_result = await db.execute(
+                select(Patient).where(
+                    Patient.phone == apt.patient_phone,
+                    Patient.tenant_id == apt.tenant_id,
+                )
+            )
+            patient = patient_result.scalar_one_or_none()
+            if patient:
+                if new_status == AppointmentStatus.NO_SHOW:
+                    patient.no_show_count = (patient.no_show_count or 0) + 1
+                    # If correcting from COMPLETED back to NO_SHOW, undo the visit_count
+                    if old_status == AppointmentStatus.COMPLETED:
+                        patient.visit_count = max(0, (patient.visit_count or 1) - 1)
+                    logger.info("Patient %s no-show count → %d", patient.name, patient.no_show_count)
+                elif new_status == AppointmentStatus.COMPLETED:
+                    patient.visit_count = (patient.visit_count or 0) + 1
+                    patient.last_appointment_at = apt.scheduled_at
+                    patient.is_new_patient = False
+                    # If correcting from NO_SHOW back to COMPLETED, undo the no-show count
+                    if old_status == AppointmentStatus.NO_SHOW:
+                        patient.no_show_count = max(0, (patient.no_show_count or 1) - 1)
+                    logger.info("Patient %s visit count → %d", patient.name, patient.visit_count)
+        except Exception as exc:
+            logger.warning("Patient record update on status change failed: %s", exc)
+
+    # ── Notes update ─────────────────────────────────────────────────────
+    if body.notes is not None:
+        apt.notes = body.notes.strip() if body.notes.strip() else None
+        updated.append("notes")
+
+    if not updated:
+        raise HTTPException(status_code=400, detail="Nothing to update. Provide status and/or notes.")
+
+    await db.flush()
+    logger.info("Appointment %s updated: %s", appointment_id, ", ".join(updated))
+    return {
+        "status": "updated",
+        "id": appointment_id,
+        "changes": updated,
+        "current_status": apt.status.value,
+        "notes": apt.notes,
+    }
 
 
 # ── Google Calendar bidirectional sync ────────────────────────────────────────

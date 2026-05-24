@@ -446,7 +446,10 @@ def _build_patient_section(ctx: dict, business_name: str = "") -> str:
         lines.append(f"Receptionist notes: {p['notes']}")
 
     visit_count = p.get("visit_count", 0)
+    no_show_count = p.get("no_show_count", 0)
     lines.append(f"Total visits: {visit_count}")
+    if no_show_count > 0:
+        lines.append(f"No-shows: {no_show_count}")
 
     if last_visit:
         ago = f" ({months_since} months ago)" if months_since is not None else ""
@@ -465,11 +468,12 @@ def _build_patient_section(ctx: dict, business_name: str = "") -> str:
     else:
         lines.append("\nNo upcoming appointments on file.")
 
-    # Past visits summary
+    # Past visits summary (includes visit notes added by clinic staff)
     if past:
         lines.append("\nRECENT VISIT HISTORY:")
         for a in past[:3]:
-            lines.append(f"  - {a['type']} — {a['date']} ({a['status']})")
+            note_suffix = f" — Note: {a['notes']}" if a.get("notes") else ""
+            lines.append(f"  - {a['type']} — {a['date']} ({a['status']}){note_suffix}")
 
     # Behaviour instructions for returning patients
     pref = p.get("preferred_type")

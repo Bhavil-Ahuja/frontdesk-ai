@@ -231,6 +231,7 @@ async def get_patient_history(
             "dob": patient.date_of_birth,
             "is_new_patient": patient.is_new_patient,
             "visit_count": patient.visit_count or 0,
+            "no_show_count": patient.no_show_count or 0,
             "preferred_type": patient.preferred_appointment_type,
             "allergies": patient.allergies,
             "notes": patient.notes,
@@ -250,6 +251,7 @@ async def get_patient_history(
                 "type": a.appointment_type.replace("_", " ").title(),
                 "date": _to_local(a.scheduled_at).strftime("%B %d, %Y"),
                 "status": a.status.value if a.status else "UNKNOWN",
+                **({"notes": a.notes} if a.notes else {}),
             }
             for a in past[:5]  # limit context size
         ],
