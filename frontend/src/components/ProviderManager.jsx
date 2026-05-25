@@ -177,11 +177,11 @@ export default function ProviderManager() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+          <h2 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
             <Users className="w-7 h-7 text-primary-500" />
             Providers
           </h2>
-          <p className="text-gray-500 mt-1">
+          <p className="text-gray-500 dark:text-gray-400 mt-1">
             Manage practitioners and staff members. Each provider can have
             their own calendar and appointment types.
           </p>
@@ -198,28 +198,28 @@ export default function ProviderManager() {
       </div>
 
       {saved && (
-        <div className="bg-green-50 border border-green-200 rounded-xl p-4 flex items-center gap-3">
+        <div className="bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 rounded-xl p-4 flex items-center gap-3">
           <CheckCircle className="w-5 h-5 text-green-500 shrink-0" />
-          <p className="text-sm text-green-700">Provider saved successfully.</p>
+          <p className="text-sm text-green-700 dark:text-green-400">Provider saved successfully.</p>
         </div>
       )}
 
       {error && (
-        <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3">
+        <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-xl p-4 flex items-start gap-3">
           <AlertCircle className="w-5 h-5 text-red-500 mt-0.5 shrink-0" />
-          <p className="text-sm text-red-700">{error}</p>
+          <p className="text-sm text-red-700 dark:text-red-400">{error}</p>
         </div>
       )}
 
       {/* Create / Edit form */}
       {editingId !== null && (
-        <div className="bg-white rounded-xl border border-primary-200 p-6 space-y-4 shadow-sm">
-          <h3 className="text-lg font-semibold text-gray-900">
+        <div className="bg-white dark:bg-gray-800 rounded-xl border border-primary-200 dark:border-primary-800 p-6 space-y-4 shadow-sm">
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
             {editingId === '__new__' ? 'New Provider' : 'Edit Provider'}
           </h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">
                 Name <span className="text-red-400">*</span>
               </label>
               <input
@@ -227,11 +227,11 @@ export default function ProviderManager() {
                 value={form.name}
                 onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
                 placeholder="Dr. Sarah Patel"
-                className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-sm outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20"
+                className="w-full px-4 py-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 dark:bg-gray-700 dark:text-white"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">
                 Title / Credentials
               </label>
               <input
@@ -239,14 +239,14 @@ export default function ProviderManager() {
                 value={form.title}
                 onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
                 placeholder="DDS, DMD, RDH, etc."
-                className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-sm outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20"
+                className="w-full px-4 py-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 dark:bg-gray-700 dark:text-white"
               />
             </div>
           </div>
 
           {/* Appointment types */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5 flex items-center gap-1.5">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5 flex items-center gap-1.5">
               <Stethoscope className="w-4 h-4 text-gray-400" />
               Appointment Types
             </label>
@@ -254,7 +254,7 @@ export default function ProviderManager() {
               Select which appointment types this provider handles. Leave empty for all types.
             </p>
             {tenantAppointmentTypes.length === 0 ? (
-              <p className="text-xs text-amber-600 bg-amber-50 px-3 py-2 rounded-lg">
+              <p className="text-xs text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/30 px-3 py-2 rounded-lg">
                 No appointment types configured yet. Go to Agent Config → Appointment Types to add some.
               </p>
             ) : (
@@ -268,8 +268,8 @@ export default function ProviderManager() {
                       onClick={() => toggleAppointmentType(at.code)}
                       className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors border ${
                         selected
-                          ? 'bg-primary-50 border-primary-300 text-primary-700'
-                          : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'
+                          ? 'bg-primary-50 dark:bg-primary-900/30 border-primary-300 dark:border-primary-800 text-primary-700 dark:text-primary-400'
+                          : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:border-gray-300'
                       }`}
                     >
                       {at.name || at.code}
@@ -283,7 +283,7 @@ export default function ProviderManager() {
 
           {/* Calendar ID */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5 flex items-center gap-1.5">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5 flex items-center gap-1.5">
               <Calendar className="w-4 h-4 text-gray-400" />
               Google Calendar ID (optional)
             </label>
@@ -292,7 +292,7 @@ export default function ProviderManager() {
               value={form.calendar_id}
               onChange={(e) => setForm((f) => ({ ...f, calendar_id: e.target.value }))}
               placeholder="provider-email@gmail.com or calendar ID"
-              className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-sm outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20"
+              className="w-full px-4 py-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 dark:bg-gray-700 dark:text-white"
             />
             <p className="text-xs text-gray-400 mt-1">
               If blank, this provider shares the practice's primary Google Calendar.
@@ -301,7 +301,7 @@ export default function ProviderManager() {
 
           {/* Max Concurrent Appointments */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5 flex items-center gap-1.5">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5 flex items-center gap-1.5">
               <Users className="w-4 h-4 text-gray-400" />
               Max Concurrent Appointments
             </label>
@@ -311,7 +311,7 @@ export default function ProviderManager() {
               max="10"
               value={form.max_concurrent}
               onChange={(e) => setForm((f) => ({ ...f, max_concurrent: Math.max(1, parseInt(e.target.value) || 1) }))}
-              className="w-24 px-4 py-2.5 border border-gray-200 rounded-lg text-sm outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20"
+              className="w-24 px-4 py-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 dark:bg-gray-700 dark:text-white"
             />
             <p className="text-xs text-gray-400 mt-1">
               How many patients this provider can see at overlapping times. Set to 1 for single-booking (one patient at a time).
@@ -322,27 +322,27 @@ export default function ProviderManager() {
           <div>
             <div className="flex items-center gap-2 mb-2">
               <Clock className="w-4 h-4 text-gray-400" />
-              <label className="text-sm font-medium text-gray-700">Custom Business Hours</label>
+              <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Custom Business Hours</label>
               <button
                 type="button"
                 onClick={toggleHoursOverride}
                 className={`ml-2 px-3 py-1 rounded-full text-xs font-medium transition-colors ${
                   form.business_hours_override
-                    ? 'bg-primary-50 text-primary-700 border border-primary-200'
-                    : 'bg-gray-100 text-gray-500 border border-gray-200 hover:bg-gray-200'
+                    ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-400 border border-primary-200 dark:border-primary-800'
+                    : 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'
                 }`}
               >
                 {form.business_hours_override ? 'Custom Hours Enabled' : 'Use Practice Default'}
               </button>
             </div>
             {form.business_hours_override && (
-              <div className="space-y-2 bg-gray-50 rounded-lg p-3 border border-gray-100">
+              <div className="space-y-2 bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3 border border-gray-100 dark:border-gray-700">
                 {DAYS.map((day) => {
                   const hours = form.business_hours_override?.[day];
                   const isOpen = hours !== null && hours !== undefined;
                   return (
                     <div key={day} className="flex items-center gap-3">
-                      <span className="w-20 text-xs font-medium text-gray-600 capitalize">
+                      <span className="w-20 text-xs font-medium text-gray-600 dark:text-gray-400 capitalize">
                         {day}
                       </span>
                       <button
@@ -354,8 +354,8 @@ export default function ProviderManager() {
                         }}
                         className={`px-2 py-0.5 rounded-full text-xs font-medium transition-colors ${
                           isOpen
-                            ? 'bg-green-100 text-green-700 hover:bg-green-200'
-                            : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                            ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 hover:bg-green-200 dark:hover:bg-green-900/50'
+                            : 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
                         }`}
                       >
                         {isOpen ? 'Open' : 'Off'}
@@ -370,7 +370,7 @@ export default function ProviderManager() {
                               bh[day] = { ...bh[day], open: e.target.value };
                               setForm((f) => ({ ...f, business_hours_override: bh }));
                             }}
-                            className="px-2 py-1 border border-gray-200 rounded-lg text-xs focus:ring-2 focus:ring-primary-500 outline-none"
+                            className="px-2 py-1 border border-gray-200 dark:border-gray-600 rounded-lg text-xs focus:ring-2 focus:ring-primary-500 outline-none dark:bg-gray-700 dark:text-white"
                           />
                           <span className="text-gray-400 text-xs">to</span>
                           <input
@@ -381,7 +381,7 @@ export default function ProviderManager() {
                               bh[day] = { ...bh[day], close: e.target.value };
                               setForm((f) => ({ ...f, business_hours_override: bh }));
                             }}
-                            className="px-2 py-1 border border-gray-200 rounded-lg text-xs focus:ring-2 focus:ring-primary-500 outline-none"
+                            className="px-2 py-1 border border-gray-200 dark:border-gray-600 rounded-lg text-xs focus:ring-2 focus:ring-primary-500 outline-none dark:bg-gray-700 dark:text-white"
                           />
                         </>
                       )}
@@ -404,7 +404,7 @@ export default function ProviderManager() {
             </button>
             <button
               onClick={cancelEdit}
-              className="flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-200 text-gray-600 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors"
+              className="flex items-center gap-2 px-4 py-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 rounded-lg text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
             >
               <X className="w-4 h-4" />
               Cancel
@@ -415,10 +415,10 @@ export default function ProviderManager() {
 
       {/* Provider list */}
       {providers.length === 0 && editingId === null ? (
-        <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
+        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-12 text-center">
           <Users className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-          <h3 className="text-lg font-semibold text-gray-900 mb-1">No providers yet</h3>
-          <p className="text-sm text-gray-500 mb-4">
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-1">No providers yet</h3>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
             Add your practitioners so the AI agent can schedule appointments with specific providers.
           </p>
           <button
@@ -436,48 +436,48 @@ export default function ProviderManager() {
             return (
               <div
                 key={p.id}
-                className={`bg-white rounded-xl border ${
-                  p.is_active ? 'border-gray-200' : 'border-red-100 bg-red-50/30'
+                className={`bg-white dark:bg-gray-800 rounded-xl border ${
+                  p.is_active ? 'border-gray-200 dark:border-gray-700' : 'border-red-100 dark:border-red-800 bg-red-50/30 dark:bg-red-900/20'
                 } overflow-hidden transition-all`}
               >
                 {/* Summary row */}
                 <div
-                  className="flex items-center gap-4 p-4 cursor-pointer hover:bg-gray-50/50 transition-colors"
+                  className="flex items-center gap-4 p-4 cursor-pointer hover:bg-gray-50/50 dark:hover:bg-gray-700/50 transition-colors"
                   onClick={() => setExpandedId(isExpanded ? null : p.id)}
                 >
                   <div
                     className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold shrink-0 ${
                       p.is_active
-                        ? 'bg-primary-100 text-primary-700'
-                        : 'bg-gray-200 text-gray-500'
+                        ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-400'
+                        : 'bg-gray-200 dark:bg-gray-700 text-gray-500 dark:text-gray-400'
                     }`}
                   >
                     {(p.name || '?').charAt(0).toUpperCase()}
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="font-semibold text-gray-900 truncate">{p.name}</span>
+                      <span className="font-semibold text-gray-900 dark:text-white truncate">{p.name}</span>
                       {p.title && (
-                        <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">
+                        <span className="text-xs text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-700 px-2 py-0.5 rounded-full">
                           {p.title}
                         </span>
                       )}
                       {!p.is_active && (
-                        <span className="text-xs text-red-600 bg-red-100 px-2 py-0.5 rounded-full">
+                        <span className="text-xs text-red-600 dark:text-red-400 bg-red-100 dark:bg-red-900/30 px-2 py-0.5 rounded-full">
                           Inactive
                         </span>
                       )}
                     </div>
                     <div className="flex items-center gap-3 mt-0.5">
                       {(p.appointment_types || []).length > 0 ? (
-                        <span className="text-xs text-gray-500">
+                        <span className="text-xs text-gray-500 dark:text-gray-400">
                           {p.appointment_types.join(', ')}
                         </span>
                       ) : (
                         <span className="text-xs text-gray-400 italic">All appointment types</span>
                       )}
                       {(p.max_concurrent || 1) > 1 && (
-                        <span className="text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full">
+                        <span className="text-xs text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 px-2 py-0.5 rounded-full">
                           {p.max_concurrent} concurrent
                         </span>
                       )}
@@ -495,7 +495,7 @@ export default function ProviderManager() {
                         e.stopPropagation();
                         startEdit(p);
                       }}
-                      className="p-2 text-gray-400 hover:text-primary-600 hover:bg-primary-50 rounded-lg transition-colors"
+                      className="p-2 text-gray-400 hover:text-primary-600 hover:bg-primary-50 dark:hover:bg-primary-900/30 rounded-lg transition-colors"
                       title="Edit"
                     >
                       <Pencil className="w-4 h-4" />
@@ -506,7 +506,7 @@ export default function ProviderManager() {
                           e.stopPropagation();
                           handleDelete(p.id);
                         }}
-                        className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                        className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"
                         title="Deactivate"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -522,23 +522,23 @@ export default function ProviderManager() {
 
                 {/* Expanded details */}
                 {isExpanded && (
-                  <div className="border-t border-gray-100 px-4 py-3 bg-gray-50/50 text-sm space-y-2">
+                  <div className="border-t border-gray-100 dark:border-gray-700 px-4 py-3 bg-gray-50/50 dark:bg-gray-700/50 text-sm space-y-2">
                     <div className="grid grid-cols-2 gap-4">
                       <div>
-                        <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">
+                        <span className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
                           Calendar ID
                         </span>
-                        <p className="text-gray-700 mt-0.5">
+                        <p className="text-gray-700 dark:text-gray-300 mt-0.5">
                           {p.calendar_id || (
                             <span className="italic text-gray-400">Using practice default</span>
                           )}
                         </p>
                       </div>
                       <div>
-                        <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">
+                        <span className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
                           Custom Hours
                         </span>
-                        <p className="text-gray-700 mt-0.5">
+                        <p className="text-gray-700 dark:text-gray-300 mt-0.5">
                           {p.business_hours_override ? 'Yes — custom schedule' : (
                             <span className="italic text-gray-400">Using practice default</span>
                           )}
@@ -553,7 +553,7 @@ export default function ProviderManager() {
                             <div
                               key={day}
                               className={`text-center px-1 py-1.5 rounded text-xs ${
-                                h ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-400'
+                                h ? 'bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400' : 'bg-gray-100 dark:bg-gray-700 text-gray-400'
                               }`}
                             >
                               <div className="font-medium capitalize">{day.slice(0, 3)}</div>

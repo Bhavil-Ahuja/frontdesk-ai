@@ -209,7 +209,7 @@ export default function AgentConfig() {
 
   if (!config) {
     return (
-      <div className="p-8 text-center text-gray-500">
+      <div className="p-8 text-center text-gray-500 dark:text-gray-400">
         Unable to load agent configuration.
       </div>
     );
@@ -218,10 +218,10 @@ export default function AgentConfig() {
   return (
     <div className="p-8 space-y-6 max-w-4xl mx-auto">
       {/* Header */}
-      <div className="flex items-center justify-between sticky top-0 bg-gray-50 -mx-8 px-8 py-4 border-b border-gray-200 z-10">
+      <div className="flex items-center justify-between sticky top-0 bg-gray-50 dark:bg-gray-900 -mx-8 px-8 py-4 border-b border-gray-200 dark:border-gray-700 z-10">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900">Agent Configuration</h2>
-          <p className="text-gray-500 mt-1">Manage your AI receptionist settings</p>
+          <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Agent Configuration</h2>
+          <p className="text-gray-500 dark:text-gray-400 mt-1">Manage your AI receptionist settings</p>
         </div>
         <button
           onClick={saveConfig}
@@ -241,25 +241,25 @@ export default function AgentConfig() {
       </div>
 
       {error && (
-        <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3">
+        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl p-4 flex items-start gap-3">
           <AlertCircle className="w-5 h-5 text-red-500 mt-0.5 shrink-0" />
-          <p className="text-sm text-red-700">{error}</p>
+          <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
         </div>
       )}
 
       {/* Agent status (read-only — derived from tenant.status) */}
-      <div className="bg-white rounded-xl border border-gray-200 p-6">
+      <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
         <div className="flex items-center gap-3">
           <div
-            className={`p-3 rounded-lg ${config.agent_active ? 'bg-green-50' : 'bg-red-50'}`}
+            className={`p-3 rounded-lg ${config.agent_active ? 'bg-green-50 dark:bg-green-900/30' : 'bg-red-50 dark:bg-red-900/30'}`}
           >
             <Power
               className={`w-6 h-6 ${config.agent_active ? 'text-green-600' : 'text-red-600'}`}
             />
           </div>
           <div>
-            <h3 className="text-lg font-semibold text-gray-900">Agent Status</h3>
-            <p className="text-sm text-gray-500">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Agent Status</h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400">
               {config.agent_active
                 ? 'Your agent is ACTIVE and answering calls.'
                 : 'Your agent is paused (status set by admin).'}
@@ -333,7 +333,7 @@ export default function AgentConfig() {
             />
           </Field>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Agent Voice</label>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Agent Voice</label>
             <p className="text-xs text-gray-400 mb-3">Select a voice for your AI agent. Click the play button to preview each voice.</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               {VOICE_OPTIONS.map((v) => {
@@ -346,15 +346,15 @@ export default function AgentConfig() {
                     onClick={() => update('voice_id', v.id)}
                     className={`relative flex items-start gap-3 p-3.5 rounded-xl border-2 cursor-pointer transition-all ${
                       isSelected
-                        ? 'border-primary-500 bg-primary-50 shadow-sm'
-                        : 'border-gray-200 bg-white hover:border-gray-300 hover:shadow-sm'
+                        ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20 shadow-sm'
+                        : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 hover:border-gray-300 dark:hover:border-gray-600 hover:shadow-sm'
                     }`}
                   >
                     {/* Radio indicator */}
                     <div className="mt-0.5 shrink-0">
                       <div
                         className={`w-4 h-4 rounded-full border-2 flex items-center justify-center transition-colors ${
-                          isSelected ? 'border-primary-500' : 'border-gray-300'
+                          isSelected ? 'border-primary-500' : 'border-gray-300 dark:border-gray-500'
                         }`}
                       >
                         {isSelected && (
@@ -366,14 +366,14 @@ export default function AgentConfig() {
                     {/* Voice info */}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
-                        <span className={`text-sm font-semibold ${isSelected ? 'text-primary-700' : 'text-gray-900'}`}>
+                        <span className={`text-sm font-semibold ${isSelected ? 'text-primary-700 dark:text-primary-300' : 'text-gray-900 dark:text-white'}`}>
                           {v.name}
                         </span>
                         {isPlaying && (
                           <Volume2 className="w-3.5 h-3.5 text-primary-500 animate-pulse" />
                         )}
                       </div>
-                      <p className="text-xs text-gray-500 mt-0.5 leading-snug">{v.description}</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 leading-snug">{v.description}</p>
                     </div>
 
                     {/* Play/Stop button */}
@@ -387,8 +387,8 @@ export default function AgentConfig() {
                         isPlaying
                           ? 'bg-primary-500 text-white hover:bg-primary-600 shadow-md'
                           : isLoading
-                          ? 'bg-gray-100 text-gray-400'
-                          : 'bg-gray-100 text-gray-600 hover:bg-primary-100 hover:text-primary-600'
+                          ? 'bg-gray-100 dark:bg-gray-700 text-gray-400'
+                          : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-primary-100 dark:hover:bg-primary-900/30 hover:text-primary-600'
                       }`}
                       title={isPlaying ? 'Stop preview' : 'Play voice preview'}
                       disabled={isLoading}
@@ -448,7 +448,7 @@ export default function AgentConfig() {
             return (
               <div key={day} className="flex items-center gap-4">
                 <div className="w-24">
-                  <span className="text-sm font-medium text-gray-700 capitalize">{day}</span>
+                  <span className="text-sm font-medium text-gray-700 dark:text-gray-300 capitalize">{day}</span>
                 </div>
                 <button
                   type="button"
@@ -459,8 +459,8 @@ export default function AgentConfig() {
                   }}
                   className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
                     isOpen
-                      ? 'bg-green-100 text-green-700 hover:bg-green-200'
-                      : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                      ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 hover:bg-green-200 dark:hover:bg-green-900/50'
+                      : 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
                   }`}
                 >
                   {isOpen ? 'Open' : 'Closed'}
@@ -475,7 +475,7 @@ export default function AgentConfig() {
                         bh[day] = { ...bh[day], open: e.target.value };
                         update('business_hours', bh);
                       }}
-                      className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 outline-none"
+                      className="px-3 py-1.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 dark:text-white focus:ring-2 focus:ring-primary-500 outline-none"
                     />
                     <span className="text-gray-400">to</span>
                     <input
@@ -486,7 +486,7 @@ export default function AgentConfig() {
                         bh[day] = { ...bh[day], close: e.target.value };
                         update('business_hours', bh);
                       }}
-                      className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 outline-none"
+                      className="px-3 py-1.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 dark:text-white focus:ring-2 focus:ring-primary-500 outline-none"
                     />
                   </>
                 )}
@@ -498,14 +498,14 @@ export default function AgentConfig() {
 
       {/* Appointment Types */}
       <Section icon={Stethoscope} title="Appointment Types">
-        <p className="text-sm text-gray-500 -mt-2 mb-3">
+        <p className="text-sm text-gray-500 dark:text-gray-400 -mt-2 mb-3">
           Define the types of appointments your agent can book. <strong>Max Concurrent</strong> controls
           how many overlapping bookings are allowed per time slot (e.g. 3 means three patients can be
           booked at 10:00 AM simultaneously).
         </p>
         <div className="space-y-3">
           {(config.appointment_types || []).map((at, idx) => (
-            <div key={idx} className="flex items-start gap-3 bg-gray-50 rounded-lg p-3 border border-gray-100">
+            <div key={idx} className="flex items-start gap-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3 border border-gray-100 dark:border-gray-700">
               <div className="flex-1 grid grid-cols-2 md:grid-cols-4 gap-3">
                 <Field label="Short Code">
                   <input
@@ -568,7 +568,7 @@ export default function AgentConfig() {
                   const types = (config.appointment_types || []).filter((_, i) => i !== idx);
                   update('appointment_types', types);
                 }}
-                className="mt-6 p-1.5 text-gray-400 hover:text-red-500 transition-colors"
+                className="mt-6 p-1.5 text-gray-400 dark:text-gray-500 hover:text-red-500 transition-colors"
                 title="Remove appointment type"
               >
                 <Trash2 className="w-4 h-4" />
@@ -582,7 +582,7 @@ export default function AgentConfig() {
               types.push({ code: '', name: '', duration_minutes: 60, max_concurrent: 1 });
               update('appointment_types', types);
             }}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-primary-600 bg-primary-50 rounded-lg hover:bg-primary-100 transition-colors"
+            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-primary-600 bg-primary-50 dark:bg-primary-900/20 rounded-lg hover:bg-primary-100 dark:hover:bg-primary-900/40 transition-colors"
           >
             <Plus className="w-4 h-4" />
             Add Appointment Type
@@ -673,7 +673,7 @@ export default function AgentConfig() {
 
       {/* Appointment Reminders */}
       <Section icon={Bell} title="Appointment Reminders">
-        <p className="text-sm text-gray-500 -mt-2 mb-3">
+        <p className="text-sm text-gray-500 dark:text-gray-400 -mt-2 mb-3">
           Automated SMS reminders sent before appointments. Patients can reply <strong>C</strong> to confirm,
           <strong> R</strong> to reschedule, or <strong>X</strong> to cancel — all handled by the AI agent.
         </p>
@@ -705,7 +705,7 @@ export default function AgentConfig() {
 
       {/* Google Review Solicitation */}
       <Section icon={Star} title="Google Review Solicitation">
-        <p className="text-sm text-gray-500 -mt-2 mb-3">
+        <p className="text-sm text-gray-500 dark:text-gray-400 -mt-2 mb-3">
           Automatically send a friendly SMS asking patients to leave a Google review after their appointment.
           Only sent after the follow-up message, with a configurable delay.
         </p>
@@ -792,6 +792,15 @@ export default function AgentConfig() {
           border-color: #14b8a6;
           box-shadow: 0 0 0 2px rgba(20,184,166,0.2);
         }
+        .dark .input {
+          background: #374151;
+          border-color: #4b5563;
+          color: #f3f4f6;
+        }
+        .dark .input:focus {
+          border-color: #14b8a6;
+          box-shadow: 0 0 0 2px rgba(20,184,166,0.3);
+        }
       `}</style>
     </div>
   );
@@ -801,8 +810,8 @@ export default function AgentConfig() {
 
 function Section({ icon: Icon, title, children }) {
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
-      <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 space-y-4">
+      <h3 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
         <Icon className="w-5 h-5 text-primary-500" />
         {title}
       </h3>
@@ -814,7 +823,7 @@ function Section({ icon: Icon, title, children }) {
 function Field({ label, help, children, className = '' }) {
   return (
     <div className={className}>
-      <label className="block text-sm font-medium text-gray-700 mb-1.5">{label}</label>
+      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">{label}</label>
       {children}
       {help && <p className="text-xs text-gray-400 mt-1">{help}</p>}
     </div>
@@ -831,33 +840,33 @@ function IntegrationSection({
   children,
 }) {
   const accentMap = {
-    indigo: { bg: 'bg-indigo-50', border: 'border-indigo-200', text: 'text-indigo-600', iconBg: 'bg-indigo-100' },
-    emerald: { bg: 'bg-emerald-50', border: 'border-emerald-200', text: 'text-emerald-600', iconBg: 'bg-emerald-100' },
-    pink: { bg: 'bg-pink-50', border: 'border-pink-200', text: 'text-pink-600', iconBg: 'bg-pink-100' },
+    indigo: { bg: 'bg-indigo-50', border: 'border-indigo-200 dark:border-indigo-800', text: 'text-indigo-600', iconBg: 'bg-indigo-100 dark:bg-indigo-900/30' },
+    emerald: { bg: 'bg-emerald-50', border: 'border-emerald-200 dark:border-emerald-800', text: 'text-emerald-600', iconBg: 'bg-emerald-100 dark:bg-emerald-900/30' },
+    pink: { bg: 'bg-pink-50', border: 'border-pink-200 dark:border-pink-800', text: 'text-pink-600', iconBg: 'bg-pink-100 dark:bg-pink-900/30' },
   };
   const a = accentMap[accent] || accentMap.indigo;
 
   return (
-    <div className={`bg-white rounded-xl border ${a.border} p-6 space-y-4`}>
+    <div className={`bg-white dark:bg-gray-800 rounded-xl border ${a.border} p-6 space-y-4`}>
       <div className="flex items-start gap-3">
         <div className={`w-10 h-10 rounded-lg ${a.iconBg} flex items-center justify-center shrink-0`}>
           <Icon className={`w-5 h-5 ${a.text}`} />
         </div>
         <div className="flex-1">
           <div className="flex items-center gap-2 flex-wrap">
-            <h3 className="text-lg font-semibold text-gray-900">{title}</h3>
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">{title}</h3>
             {configured ? (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-green-100 text-green-700 rounded-full text-xs font-medium">
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-full text-xs font-medium">
                 <CheckCircle className="w-3 h-3" />
                 Connected
               </span>
             ) : (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full text-xs font-medium">
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 rounded-full text-xs font-medium">
                 Not connected
               </span>
             )}
           </div>
-          <p className="text-sm text-gray-500 mt-0.5">{description}</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">{description}</p>
           {learnMore && (
             <a
               href={learnMore}
@@ -908,26 +917,26 @@ function GoogleCalendarSection({ config, onUpdate }) {
   }
 
   return (
-    <div className="bg-white rounded-xl border border-blue-200 p-6 space-y-4">
+    <div className="bg-white dark:bg-gray-800 rounded-xl border border-blue-200 dark:border-blue-800 p-6 space-y-4">
       <div className="flex items-start gap-3">
-        <div className="w-10 h-10 rounded-lg bg-blue-100 flex items-center justify-center shrink-0">
+        <div className="w-10 h-10 rounded-lg bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center shrink-0">
           <CalendarCheck className="w-5 h-5 text-blue-600" />
         </div>
         <div className="flex-1">
           <div className="flex items-center gap-2 flex-wrap">
-            <h3 className="text-lg font-semibold text-gray-900">Google Calendar</h3>
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Google Calendar</h3>
             {connected ? (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-green-100 text-green-700 rounded-full text-xs font-medium">
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-full text-xs font-medium">
                 <CheckCircle className="w-3 h-3" />
                 Connected
               </span>
             ) : (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full text-xs font-medium">
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 rounded-full text-xs font-medium">
                 Not connected
               </span>
             )}
           </div>
-          <p className="text-sm text-gray-500 mt-0.5">
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
             Connect your Google Calendar and the AI agent will
             check your real availability and book directly into your calendar.
           </p>
@@ -935,33 +944,33 @@ function GoogleCalendarSection({ config, onUpdate }) {
       </div>
 
       {connected ? (
-        <div className="bg-blue-50 border border-blue-100 rounded-lg p-4 space-y-3">
+        <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-800 rounded-lg p-4 space-y-3">
           <div className="flex items-center gap-2">
             <Mail className="w-4 h-4 text-blue-600" />
-            <span className="text-sm font-medium text-gray-900">{email}</span>
+            <span className="text-sm font-medium text-gray-900 dark:text-white">{email}</span>
           </div>
-          <p className="text-xs text-gray-500">
+          <p className="text-xs text-gray-500 dark:text-gray-400">
             Your AI agent is using this Google Calendar for availability checks and bookings.
             Appointments will appear directly in your calendar.
           </p>
           <button
             onClick={handleDisconnect}
             disabled={disconnecting}
-            className="px-4 py-2 bg-white border border-red-200 text-red-600 rounded-lg text-sm font-medium hover:bg-red-50 disabled:opacity-50 transition-colors"
+            className="px-4 py-2 bg-white dark:bg-gray-800 border border-red-200 dark:border-red-700 text-red-600 rounded-lg text-sm font-medium hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50 transition-colors"
           >
             {disconnecting ? 'Disconnecting...' : 'Disconnect Google Calendar'}
           </button>
         </div>
       ) : (
-        <div className="bg-gray-50 border border-gray-100 rounded-lg p-4 space-y-3">
-          <p className="text-sm text-gray-600">
+        <div className="bg-gray-50 dark:bg-gray-700/50 border border-gray-100 dark:border-gray-700 rounded-lg p-4 space-y-3">
+          <p className="text-sm text-gray-600 dark:text-gray-400">
             Click the button below to sign in with Google and grant calendar access.
             This is a one-time setup — no API keys needed.
           </p>
           <button
             onClick={handleConnect}
             disabled={connecting}
-            className="inline-flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 disabled:opacity-50 transition-colors shadow-sm"
+            className="inline-flex items-center gap-2 px-4 py-2.5 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 rounded-lg text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50 transition-colors shadow-sm"
           >
             <svg className="w-4 h-4" viewBox="0 0 24 24">
               <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"/>
@@ -971,7 +980,7 @@ function GoogleCalendarSection({ config, onUpdate }) {
             </svg>
             {connecting ? 'Redirecting...' : 'Connect Google Calendar'}
           </button>
-          <p className="text-xs text-gray-400">
+          <p className="text-xs text-gray-400 dark:text-gray-500">
             Requires the platform admin to have configured Google OAuth credentials.
           </p>
         </div>
@@ -992,11 +1001,11 @@ function Toggle({ label, help, checked, onChange }) {
         {checked ? (
           <ToggleRight className="w-8 h-8 text-primary-500" />
         ) : (
-          <ToggleLeft className="w-8 h-8 text-gray-300" />
+          <ToggleLeft className="w-8 h-8 text-gray-300 dark:text-gray-500" />
         )}
       </button>
       <div>
-        <p className="text-sm font-medium text-gray-700">{label}</p>
+        <p className="text-sm font-medium text-gray-700 dark:text-gray-300">{label}</p>
         {help && <p className="text-xs text-gray-400 mt-0.5">{help}</p>}
       </div>
     </div>
@@ -1033,7 +1042,7 @@ function SecretField({
           onClick={() =>
             setShowSecrets((prev) => ({ ...prev, [fieldKey]: !prev[fieldKey] }))
           }
-          className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-gray-400 hover:text-gray-600"
+          className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
           aria-label={visible ? 'Hide' : 'Show'}
         >
           {visible ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}

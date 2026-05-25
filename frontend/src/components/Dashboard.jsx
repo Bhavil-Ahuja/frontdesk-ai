@@ -61,7 +61,7 @@ export default function Dashboard() {
 
   if (!stats) {
     return (
-      <div className="p-8 text-center text-gray-500">
+      <div className="p-8 text-center text-gray-500 dark:text-gray-400">
         Unable to load dashboard data. Is the backend running?
       </div>
     );
@@ -76,8 +76,8 @@ export default function Dashboard() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900">Dashboard</h2>
-          <p className="text-gray-500 mt-1">Real-time overview of your AI agent</p>
+          <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Dashboard</h2>
+          <p className="text-gray-500 dark:text-gray-400 mt-1">Real-time overview of your AI agent</p>
         </div>
         <div className="flex items-center gap-2">
           <div
@@ -126,8 +126,8 @@ export default function Dashboard() {
       {/* Charts row */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Calls per day */}
-        <div className="bg-white rounded-xl border border-gray-200 p-6">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
             <TrendingUp className="w-5 h-5 text-primary-500" />
             Calls This Week
           </h3>
@@ -141,6 +141,7 @@ export default function Dashboard() {
                   borderRadius: '8px',
                   border: '1px solid #e2e8f0',
                   boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)',
+                  background: '#fff',
                 }}
               />
               <Line
@@ -157,8 +158,8 @@ export default function Dashboard() {
         </div>
 
         {/* Outcome breakdown */}
-        <div className="bg-white rounded-xl border border-gray-200 p-6">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
             <Activity className="w-5 h-5 text-primary-500" />
             Call Outcomes
           </h3>
@@ -192,7 +193,7 @@ export default function Dashboard() {
                       className="w-3 h-3 rounded-full"
                       style={{ backgroundColor: OUTCOME_COLORS[entry.name] }}
                     ></div>
-                    <span className="text-sm text-gray-600">
+                    <span className="text-sm text-gray-600 dark:text-gray-400">
                       {entry.name} ({entry.value})
                     </span>
                   </div>
@@ -210,22 +211,22 @@ export default function Dashboard() {
 
 function StatCard({ icon: Icon, label, value, subtitle, color }) {
   const colorMap = {
-    blue: 'bg-blue-50 text-blue-600',
-    green: 'bg-green-50 text-green-600',
-    amber: 'bg-amber-50 text-amber-600',
-    purple: 'bg-purple-50 text-purple-600',
+    blue: 'bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400',
+    green: 'bg-green-50 text-green-600 dark:bg-green-900/30 dark:text-green-400',
+    amber: 'bg-amber-50 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400',
+    purple: 'bg-purple-50 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400',
   };
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-6">
+    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
       <div className="flex items-center justify-between">
         <div className={`p-3 rounded-lg ${colorMap[color]}`}>
           <Icon className="w-6 h-6" />
         </div>
       </div>
       <div className="mt-4">
-        <p className="text-3xl font-bold text-gray-900">{value}</p>
-        <p className="text-sm text-gray-500 mt-1">{label}</p>
+        <p className="text-3xl font-bold text-gray-900 dark:text-white">{value}</p>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">{label}</p>
         {subtitle && <p className="text-xs text-gray-400 mt-0.5">{subtitle}</p>}
       </div>
     </div>

@@ -77,10 +77,10 @@ export default function SetupGuide() {
           detail: 'Open Agent Config below and enter your Vapi API key + phone number ID.',
         },
       ],
-      bgColor: 'bg-indigo-50',
-      borderColor: 'border-indigo-200',
-      iconColor: 'text-indigo-600',
-      iconBg: 'bg-indigo-100',
+      bgColor: 'bg-indigo-50 dark:bg-indigo-900/30',
+      borderColor: 'border-indigo-200 dark:border-indigo-800',
+      iconColor: 'text-indigo-600 dark:text-indigo-400',
+      iconBg: 'bg-indigo-100 dark:bg-indigo-900/30',
     },
     {
       key: 'calendar',
@@ -103,10 +103,10 @@ export default function SetupGuide() {
           detail: 'Without Google Calendar, the built-in scheduler uses your Business Hours to manage availability automatically.',
         },
       ],
-      bgColor: 'bg-emerald-50',
-      borderColor: 'border-emerald-200',
-      iconColor: 'text-emerald-600',
-      iconBg: 'bg-emerald-100',
+      bgColor: 'bg-emerald-50 dark:bg-emerald-900/30',
+      borderColor: 'border-emerald-200 dark:border-emerald-800',
+      iconColor: 'text-emerald-600 dark:text-emerald-400',
+      iconBg: 'bg-emerald-100 dark:bg-emerald-900/30',
     },
     {
       key: 'twilio',
@@ -138,10 +138,10 @@ export default function SetupGuide() {
           detail: 'Open Agent Config and enter Twilio SID, auth token, and SMS-from number.',
         },
       ],
-      bgColor: 'bg-pink-50',
-      borderColor: 'border-pink-200',
-      iconColor: 'text-pink-600',
-      iconBg: 'bg-pink-100',
+      bgColor: 'bg-pink-50 dark:bg-pink-900/30',
+      borderColor: 'border-pink-200 dark:border-pink-800',
+      iconColor: 'text-pink-600 dark:text-pink-400',
+      iconBg: 'bg-pink-100 dark:bg-pink-900/30',
     },
   ];
 
@@ -163,12 +163,12 @@ export default function SetupGuide() {
       {/* Header */}
       <div>
         <div className="flex items-center gap-3 mb-2">
-          <div className="w-10 h-10 bg-primary-50 rounded-xl flex items-center justify-center">
+          <div className="w-10 h-10 bg-primary-50 dark:bg-primary-900/30 rounded-xl flex items-center justify-center">
             <Sparkles className="w-5 h-5 text-primary-500" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">Welcome, {user?.business_name}!</h1>
-            <p className="text-sm text-gray-500">
+            <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Welcome, {user?.business_name}!</h1>
+            <p className="text-sm text-gray-500 dark:text-gray-400">
               Let's get your AI voice agent set up. It takes about 10 minutes.
             </p>
           </div>
@@ -179,8 +179,8 @@ export default function SetupGuide() {
       <div
         className={`rounded-2xl border p-5 ${
           allReady
-            ? 'bg-green-50 border-green-200'
-            : 'bg-amber-50 border-amber-200'
+            ? 'bg-green-50 dark:bg-green-900/30 border-green-200 dark:border-green-800'
+            : 'bg-amber-50 dark:bg-amber-900/30 border-amber-200 dark:border-amber-800'
         }`}
       >
         <div className="flex items-start gap-3">
@@ -192,7 +192,7 @@ export default function SetupGuide() {
           <div className="flex-1">
             <p
               className={`font-semibold ${
-                allReady ? 'text-green-900' : 'text-amber-900'
+                allReady ? 'text-green-900 dark:text-green-400' : 'text-amber-900 dark:text-amber-400'
               }`}
             >
               {allReady
@@ -201,7 +201,7 @@ export default function SetupGuide() {
             </p>
             <p
               className={`text-sm mt-1 ${
-                allReady ? 'text-green-700' : 'text-amber-700'
+                allReady ? 'text-green-700 dark:text-green-400' : 'text-amber-700 dark:text-amber-400'
               }`}
             >
               {allReady
@@ -211,7 +211,7 @@ export default function SetupGuide() {
             <div className="mt-3 flex items-center gap-3">
               <Link
                 to="/settings"
-                className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors"
+                className="inline-flex items-center gap-2 px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 rounded-lg text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
               >
                 <Settings className="w-4 h-4" />
                 Open Agent Config
@@ -238,7 +238,7 @@ export default function SetupGuide() {
           return (
             <div
               key={integration.key}
-              className={`rounded-2xl border ${integration.borderColor} bg-white overflow-hidden`}
+              className={`rounded-2xl border ${integration.borderColor} bg-white dark:bg-gray-800 overflow-hidden`}
             >
               {/* Header */}
               <button
@@ -248,7 +248,7 @@ export default function SetupGuide() {
                     [integration.key]: !prev[integration.key],
                   }))
                 }
-                className="w-full p-5 flex items-center gap-4 text-left hover:bg-gray-50 transition-colors"
+                className="w-full p-5 flex items-center gap-4 text-left hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
               >
                 <div
                   className={`w-12 h-12 rounded-xl ${integration.iconBg} flex items-center justify-center shrink-0`}
@@ -257,20 +257,20 @@ export default function SetupGuide() {
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="font-semibold text-gray-900">{integration.title}</h3>
+                    <h3 className="font-semibold text-gray-900 dark:text-white">{integration.title}</h3>
                     {integration.configured ? (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-green-100 text-green-700 rounded-full text-xs font-medium">
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-full text-xs font-medium">
                         <CheckCircle2 className="w-3 h-3" />
                         Connected
                       </span>
                     ) : (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full text-xs font-medium">
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 rounded-full text-xs font-medium">
                         <Circle className="w-3 h-3" />
                         Not connected
                       </span>
                     )}
                   </div>
-                  <p className="text-sm text-gray-500 mt-0.5">{integration.shortDesc}</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">{integration.shortDesc}</p>
                 </div>
                 {isOpen ? (
                   <ChevronUp className="w-5 h-5 text-gray-400 shrink-0" />
@@ -284,10 +284,10 @@ export default function SetupGuide() {
                 <div className={`border-t ${integration.borderColor} ${integration.bgColor} p-5 space-y-4`}>
                   {/* What it does */}
                   <div>
-                    <h4 className="text-sm font-semibold text-gray-900 mb-2">What it does</h4>
+                    <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-2">What it does</h4>
                     <ul className="space-y-1.5">
                       {integration.whatItDoes.map((item, idx) => (
-                        <li key={idx} className="flex items-start gap-2 text-sm text-gray-700">
+                        <li key={idx} className="flex items-start gap-2 text-sm text-gray-700 dark:text-gray-300">
                           <CheckCircle2
                             className={`w-4 h-4 ${integration.iconColor} mt-0.5 shrink-0`}
                           />
@@ -299,7 +299,7 @@ export default function SetupGuide() {
 
                   {/* How to set up */}
                   <div>
-                    <h4 className="text-sm font-semibold text-gray-900 mb-2">
+                    <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-2">
                       How to set it up
                     </h4>
                     <ol className="space-y-3">
@@ -311,8 +311,8 @@ export default function SetupGuide() {
                             {idx + 1}
                           </span>
                           <div className="flex-1">
-                            <p className="text-sm font-medium text-gray-900">{s.step}</p>
-                            <p className="text-xs text-gray-600 mt-0.5">{s.detail}</p>
+                            <p className="text-sm font-medium text-gray-900 dark:text-white">{s.step}</p>
+                            <p className="text-xs text-gray-600 dark:text-gray-400 mt-0.5">{s.detail}</p>
                             {s.link && (
                               <a
                                 href={s.link}
@@ -334,7 +334,7 @@ export default function SetupGuide() {
                   <div className="pt-2">
                     <Link
                       to="/settings"
-                      className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors"
+                      className="inline-flex items-center gap-2 px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 rounded-lg text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
                     >
                       <Settings className="w-4 h-4" />
                       Configure {integration.title.split(' ')[0]} in Agent Config

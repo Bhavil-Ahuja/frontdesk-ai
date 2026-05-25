@@ -29,18 +29,18 @@ import { formatDateTime, formatDate, formatRelativeTime as fmtRelative } from '.
 
 // ── Status badge colors ────────────────────────────────────────────────────
 const STATUS_COLORS = {
-  CONFIRMED: { bg: 'bg-green-50', text: 'text-green-700', dot: 'bg-green-500' },
-  COMPLETED: { bg: 'bg-blue-50', text: 'text-blue-700', dot: 'bg-blue-500' },
-  CANCELLED: { bg: 'bg-red-50', text: 'text-red-600', dot: 'bg-red-400' },
-  RESCHEDULED: { bg: 'bg-amber-50', text: 'text-amber-700', dot: 'bg-amber-500' },
+  CONFIRMED: { bg: 'bg-green-50 dark:bg-green-900/30', text: 'text-green-700 dark:text-green-400', dot: 'bg-green-500' },
+  COMPLETED: { bg: 'bg-blue-50 dark:bg-blue-900/30', text: 'text-blue-700 dark:text-blue-400', dot: 'bg-blue-500' },
+  CANCELLED: { bg: 'bg-red-50 dark:bg-red-900/30', text: 'text-red-600 dark:text-red-400', dot: 'bg-red-400' },
+  RESCHEDULED: { bg: 'bg-amber-50 dark:bg-amber-900/30', text: 'text-amber-700 dark:text-amber-400', dot: 'bg-amber-500' },
 };
 
 const OUTCOME_COLORS = {
-  BOOKED: { bg: 'bg-green-50', text: 'text-green-700' },
-  ESCALATED: { bg: 'bg-red-50', text: 'text-red-600' },
-  INQUIRY: { bg: 'bg-blue-50', text: 'text-blue-700' },
-  CANCELLED: { bg: 'bg-gray-50', text: 'text-gray-600' },
-  ABANDONED: { bg: 'bg-gray-50', text: 'text-gray-400' },
+  BOOKED: { bg: 'bg-green-50 dark:bg-green-900/30', text: 'text-green-700 dark:text-green-400' },
+  ESCALATED: { bg: 'bg-red-50 dark:bg-red-900/30', text: 'text-red-600 dark:text-red-400' },
+  INQUIRY: { bg: 'bg-blue-50 dark:bg-blue-900/30', text: 'text-blue-700 dark:text-blue-400' },
+  CANCELLED: { bg: 'bg-gray-50 dark:bg-gray-700/50', text: 'text-gray-600 dark:text-gray-400' },
+  ABANDONED: { bg: 'bg-gray-50 dark:bg-gray-700/50', text: 'text-gray-400' },
 };
 
 export default function PatientCRM() {
@@ -95,11 +95,11 @@ export default function PatientCRM() {
     <div className="p-8 space-y-6 max-w-5xl mx-auto">
       {/* Header */}
       <div>
-        <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+        <h2 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
           <Users className="w-7 h-7 text-primary-500" />
           Patients
         </h2>
-        <p className="text-gray-500 mt-1">
+        <p className="text-gray-500 dark:text-gray-400 mt-1">
           Your patient database — built automatically from AI bookings, calls, and SMS conversations.
         </p>
       </div>
@@ -113,13 +113,13 @@ export default function PatientCRM() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search by name or phone..."
-            className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-lg text-sm outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20"
+            className="w-full pl-10 pr-4 py-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 dark:bg-gray-700 dark:text-white"
           />
         </div>
         <select
           value={sort}
           onChange={(e) => setSort(e.target.value)}
-          className="px-3 py-2.5 border border-gray-200 rounded-lg text-sm outline-none focus:border-primary-500 bg-white"
+          className="px-3 py-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm outline-none focus:border-primary-500 bg-white dark:bg-gray-700 dark:text-white"
         >
           <option value="recent">Most Recent</option>
           <option value="name">Name A-Z</option>
@@ -128,9 +128,9 @@ export default function PatientCRM() {
       </div>
 
       {error && (
-        <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3">
+        <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-xl p-4 flex items-start gap-3">
           <AlertCircle className="w-5 h-5 text-red-500 mt-0.5 shrink-0" />
-          <p className="text-sm text-red-700">{error}</p>
+          <p className="text-sm text-red-700 dark:text-red-400">{error}</p>
         </div>
       )}
 
@@ -139,21 +139,21 @@ export default function PatientCRM() {
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500"></div>
         </div>
       ) : patients.length === 0 ? (
-        <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
+        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-12 text-center">
           <Users className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-          <h3 className="text-lg font-semibold text-gray-900 mb-1">
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-1">
             {search ? 'No patients match your search' : 'No patients yet'}
           </h3>
-          <p className="text-sm text-gray-500">
+          <p className="text-sm text-gray-500 dark:text-gray-400">
             {search
               ? 'Try a different name or phone number.'
               : 'Patient records are created automatically when the AI books appointments.'}
           </p>
         </div>
       ) : (
-        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
           {/* Table header */}
-          <div className="grid grid-cols-12 gap-3 px-4 py-3 bg-gray-50 border-b border-gray-200 text-xs font-medium text-gray-500 uppercase tracking-wide">
+          <div className="grid grid-cols-12 gap-3 px-4 py-3 bg-gray-50 dark:bg-gray-700/50 border-b border-gray-200 dark:border-gray-700 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
             <div className="col-span-4">Patient</div>
             <div className="col-span-2">Contact</div>
             <div className="col-span-2 text-center">Visits</div>
@@ -166,8 +166,8 @@ export default function PatientCRM() {
             <button
               key={p.id}
               onClick={() => setSelectedPatientId(p.id)}
-              className={`w-full grid grid-cols-12 gap-3 px-4 py-3.5 items-center text-left hover:bg-primary-50/50 transition-colors ${
-                idx > 0 ? 'border-t border-gray-100' : ''
+              className={`w-full grid grid-cols-12 gap-3 px-4 py-3.5 items-center text-left hover:bg-primary-50/50 dark:hover:bg-primary-900/20 transition-colors ${
+                idx > 0 ? 'border-t border-gray-100 dark:border-gray-700' : ''
               }`}
             >
               {/* Name + type */}
@@ -175,14 +175,14 @@ export default function PatientCRM() {
                 <div
                   className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-semibold shrink-0 ${
                     p.is_new_patient
-                      ? 'bg-amber-100 text-amber-700'
-                      : 'bg-primary-100 text-primary-700'
+                      ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400'
+                      : 'bg-primary-100 text-primary-700 dark:bg-primary-900/50 dark:text-primary-400'
                   }`}
                 >
                   {(p.name || '?').charAt(0).toUpperCase()}
                 </div>
                 <div className="min-w-0">
-                  <p className="text-sm font-semibold text-gray-900 truncate">{p.name}</p>
+                  <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">{p.name}</p>
                   <div className="flex items-center gap-1.5">
                     {p.is_new_patient && (
                       <span className="text-xs text-amber-600 font-medium">New</span>
@@ -197,21 +197,21 @@ export default function PatientCRM() {
               </div>
 
               {/* Contact */}
-              <div className="col-span-2 text-xs text-gray-500 space-y-0.5 min-w-0">
+              <div className="col-span-2 text-xs text-gray-500 dark:text-gray-400 space-y-0.5 min-w-0">
                 <p className="truncate">{p.phone}</p>
                 {p.email && <p className="truncate text-gray-400">{p.email}</p>}
               </div>
 
               {/* Visit count */}
               <div className="col-span-2 text-center">
-                <span className="text-sm font-semibold text-gray-900">{p.visit_count}</span>
+                <span className="text-sm font-semibold text-gray-900 dark:text-white">{p.visit_count}</span>
                 {p.no_show_count > 0 && (
                   <span className="ml-1 text-xs text-red-400">({p.no_show_count} NS)</span>
                 )}
               </div>
 
               {/* Last seen */}
-              <div className="col-span-2 text-xs text-gray-500">
+              <div className="col-span-2 text-xs text-gray-500 dark:text-gray-400">
                 {p.last_appointment_at
                   ? fmtRelative(p.last_appointment_at, tz)
                   : <span className="text-gray-300">Never</span>}
@@ -220,7 +220,7 @@ export default function PatientCRM() {
               {/* Upcoming */}
               <div className="col-span-2 flex items-center justify-center gap-1">
                 {p.upcoming_count > 0 ? (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-green-50 text-green-700 rounded-full text-xs font-medium">
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-full text-xs font-medium">
                     <Calendar className="w-3 h-3" />
                     {p.upcoming_count}
                   </span>
@@ -303,12 +303,12 @@ function PatientProfile({ patientId, tz, onBack }) {
   if (error || !data) {
     return (
       <div className="p-8">
-        <button onClick={onBack} className="flex items-center gap-2 text-gray-500 hover:text-gray-700 mb-4">
+        <button onClick={onBack} className="flex items-center gap-2 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 mb-4">
           <ArrowLeft className="w-4 h-4" /> Back to patients
         </button>
-        <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3">
+        <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-xl p-4 flex items-start gap-3">
           <AlertCircle className="w-5 h-5 text-red-500" />
-          <p className="text-sm text-red-700">{error || 'Patient not found.'}</p>
+          <p className="text-sm text-red-700 dark:text-red-400">{error || 'Patient not found.'}</p>
         </div>
       </div>
     );
@@ -337,27 +337,27 @@ function PatientProfile({ patientId, tz, onBack }) {
       {/* Back button */}
       <button
         onClick={onBack}
-        className="flex items-center gap-2 text-gray-500 hover:text-gray-700 transition-colors text-sm"
+        className="flex items-center gap-2 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors text-sm"
       >
         <ArrowLeft className="w-4 h-4" /> All Patients
       </button>
 
       {saved && (
-        <div className="bg-green-50 border border-green-200 rounded-xl p-3 flex items-center gap-2">
+        <div className="bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 rounded-xl p-3 flex items-center gap-2">
           <CheckCircle className="w-4 h-4 text-green-500" />
-          <span className="text-sm text-green-700">Patient updated.</span>
+          <span className="text-sm text-green-700 dark:text-green-400">Patient updated.</span>
         </div>
       )}
 
       {/* Patient header card */}
-      <div className="bg-white rounded-xl border border-gray-200 p-6">
+      <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
         <div className="flex items-start gap-4">
           {/* Avatar */}
           <div
             className={`w-14 h-14 rounded-full flex items-center justify-center text-xl font-bold shrink-0 ${
               p.is_new_patient
-                ? 'bg-amber-100 text-amber-700'
-                : 'bg-primary-100 text-primary-700'
+                ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400'
+                : 'bg-primary-100 text-primary-700 dark:bg-primary-900/50 dark:text-primary-400'
             }`}
           >
             {(p.name || '?').charAt(0).toUpperCase()}
@@ -366,19 +366,19 @@ function PatientProfile({ patientId, tz, onBack }) {
           {/* Info */}
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <h2 className="text-xl font-bold text-gray-900">{p.name}</h2>
+              <h2 className="text-xl font-bold text-gray-900 dark:text-white">{p.name}</h2>
               {p.is_new_patient ? (
-                <span className="px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full text-xs font-medium">
+                <span className="px-2 py-0.5 bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-400 rounded-full text-xs font-medium">
                   New Patient
                 </span>
               ) : (
-                <span className="px-2 py-0.5 bg-primary-50 text-primary-700 rounded-full text-xs font-medium">
+                <span className="px-2 py-0.5 bg-primary-50 dark:bg-primary-900/50 text-primary-700 dark:text-primary-400 rounded-full text-xs font-medium">
                   Returning · {p.visit_count} visits
                 </span>
               )}
             </div>
 
-            <div className="flex items-center gap-4 mt-2 text-sm text-gray-500 flex-wrap">
+            <div className="flex items-center gap-4 mt-2 text-sm text-gray-500 dark:text-gray-400 flex-wrap">
               <span className="flex items-center gap-1">
                 <Phone className="w-3.5 h-3.5" /> {p.phone}
               </span>
@@ -436,7 +436,7 @@ function PatientProfile({ patientId, tz, onBack }) {
                 notes: p.notes || '',
               });
             }}
-            className="px-3 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors shrink-0"
+            className="px-3 py-2 text-sm font-medium text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors shrink-0"
           >
             {editing ? 'Cancel' : 'Edit Notes'}
           </button>
@@ -444,26 +444,26 @@ function PatientProfile({ patientId, tz, onBack }) {
 
         {/* Edit form */}
         {editing && (
-          <div className="mt-4 pt-4 border-t border-gray-100 space-y-3">
+          <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-700 space-y-3">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Allergies</label>
+                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Allergies</label>
                 <input
                   type="text"
                   value={editForm.allergies || ''}
                   onChange={(e) => setEditForm((f) => ({ ...f, allergies: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm outline-none focus:border-primary-500"
+                  className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg text-sm outline-none focus:border-primary-500 dark:bg-gray-700 dark:text-white"
                   placeholder="Latex, Penicillin, etc."
                 />
               </div>
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Receptionist Notes</label>
+              <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Receptionist Notes</label>
               <textarea
                 value={editForm.notes || ''}
                 onChange={(e) => setEditForm((f) => ({ ...f, notes: e.target.value }))}
                 rows={2}
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm outline-none focus:border-primary-500 resize-none"
+                className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg text-sm outline-none focus:border-primary-500 resize-none dark:bg-gray-700 dark:text-white"
                 placeholder="Internal notes about this patient (visible to AI agent on next call)..."
               />
             </div>
@@ -480,17 +480,17 @@ function PatientProfile({ patientId, tz, onBack }) {
 
         {/* Display allergies/notes if set and not editing */}
         {!editing && (p.allergies || p.notes) && (
-          <div className="mt-4 pt-4 border-t border-gray-100 flex gap-6 text-sm">
+          <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-700 flex gap-6 text-sm">
             {p.allergies && (
               <div>
                 <span className="text-xs font-medium text-red-500 uppercase tracking-wide">Allergies</span>
-                <p className="text-gray-700 mt-0.5">{p.allergies}</p>
+                <p className="text-gray-700 dark:text-gray-300 mt-0.5">{p.allergies}</p>
               </div>
             )}
             {p.notes && (
               <div>
-                <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">Notes</span>
-                <p className="text-gray-700 mt-0.5">{p.notes}</p>
+                <span className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Notes</span>
+                <p className="text-gray-700 dark:text-gray-300 mt-0.5">{p.notes}</p>
               </div>
             )}
           </div>
@@ -498,7 +498,7 @@ function PatientProfile({ patientId, tz, onBack }) {
       </div>
 
       {/* Tabs */}
-      <div className="flex items-center gap-1 border-b border-gray-200">
+      <div className="flex items-center gap-1 border-b border-gray-200 dark:border-gray-700">
         {TABS.map((tab) => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.key;
@@ -508,15 +508,15 @@ function PatientProfile({ patientId, tz, onBack }) {
               onClick={() => setActiveTab(tab.key)}
               className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
                 isActive
-                  ? 'border-primary-500 text-primary-700'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'
+                  ? 'border-primary-500 text-primary-700 dark:text-primary-400'
+                  : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
               }`}
             >
               <Icon className="w-4 h-4" />
               {tab.label}
               <span
                 className={`px-1.5 py-0.5 rounded-full text-xs ${
-                  isActive ? 'bg-primary-100 text-primary-700' : 'bg-gray-100 text-gray-500'
+                  isActive ? 'bg-primary-100 dark:bg-primary-900/50 text-primary-700 dark:text-primary-400' : 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400'
                 }`}
               >
                 {tab.count}
@@ -548,8 +548,8 @@ function PatientProfile({ patientId, tz, onBack }) {
 
 function StatBadge({ label, value, icon: Icon, color = 'gray' }) {
   const colors = {
-    gray: 'bg-gray-50 text-gray-700',
-    green: 'bg-green-50 text-green-700',
+    gray: 'bg-gray-50 dark:bg-gray-700/50 text-gray-700 dark:text-gray-300',
+    green: 'bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400',
   };
   return (
     <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg ${colors[color] || colors.gray}`}>
@@ -565,7 +565,7 @@ function AppointmentsTab({ upcoming, past, tz }) {
     <div className="space-y-4">
       {upcoming.length > 0 && (
         <div>
-          <h4 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
+          <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-2">
             <Calendar className="w-4 h-4 text-green-500" />
             Upcoming ({upcoming.length})
           </h4>
@@ -578,7 +578,7 @@ function AppointmentsTab({ upcoming, past, tz }) {
       )}
       {past.length > 0 && (
         <div>
-          <h4 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
+          <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-2">
             <Clock className="w-4 h-4 text-gray-400" />
             History ({past.length})
           </h4>
@@ -599,28 +599,28 @@ function AppointmentsTab({ upcoming, past, tz }) {
 function AppointmentRow({ appt, tz }) {
   const status = STATUS_COLORS[appt.status] || STATUS_COLORS.CONFIRMED;
   return (
-    <div className="bg-white rounded-lg border border-gray-200 p-3 flex items-center gap-4">
+    <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-3 flex items-center gap-4">
       <div className={`w-2 h-2 rounded-full ${status.dot} shrink-0`}></div>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-sm font-medium text-gray-900">
+          <span className="text-sm font-medium text-gray-900 dark:text-white">
             {appt.appointment_type?.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
           </span>
           <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${status.bg} ${status.text}`}>
             {appt.status}
           </span>
           {appt.booked_via === 'AI' && (
-            <span className="px-1.5 py-0.5 bg-purple-50 text-purple-600 rounded text-xs font-medium">
+            <span className="px-1.5 py-0.5 bg-purple-50 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 rounded text-xs font-medium">
               AI Booked
             </span>
           )}
           {appt.confirmed_by_patient === true && (
-            <span className="px-1.5 py-0.5 bg-green-50 text-green-600 rounded text-xs font-medium">
+            <span className="px-1.5 py-0.5 bg-green-50 dark:bg-green-900/30 text-green-600 dark:text-green-400 rounded text-xs font-medium">
               ✓ Confirmed
             </span>
           )}
         </div>
-        <p className="text-xs text-gray-500 mt-0.5">
+        <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
           {appt.scheduled_at ? formatDateTime(appt.scheduled_at, tz) : ''}{' '}
           · {appt.duration_minutes} min
         </p>
@@ -639,15 +639,15 @@ function CallsTab({ calls, expandedCallId, setExpandedCallId, tz }) {
         const isExpanded = expandedCallId === c.id;
         const outcome = OUTCOME_COLORS[c.outcome] || OUTCOME_COLORS.INQUIRY;
         return (
-          <div key={c.id} className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+          <div key={c.id} className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
             <button
               onClick={() => setExpandedCallId(isExpanded ? null : c.id)}
-              className="w-full flex items-center gap-4 p-3 text-left hover:bg-gray-50 transition-colors"
+              className="w-full flex items-center gap-4 p-3 text-left hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
             >
               <PhoneCall className="w-4 h-4 text-gray-400 shrink-0" />
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium text-gray-900">
+                  <span className="text-sm font-medium text-gray-900 dark:text-white">
                     {c.started_at
                       ? formatDateTime(c.started_at, tz, { weekday: undefined, year: undefined })
                       : 'Unknown'}
@@ -666,7 +666,7 @@ function CallsTab({ calls, expandedCallId, setExpandedCallId, tz }) {
                   )}
                 </div>
                 {c.summary && (
-                  <p className="text-xs text-gray-500 mt-0.5 truncate">{c.summary}</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 truncate">{c.summary}</p>
                 )}
               </div>
               <ChevronRight
@@ -678,7 +678,7 @@ function CallsTab({ calls, expandedCallId, setExpandedCallId, tz }) {
 
             {/* Transcript */}
             {isExpanded && c.transcript && c.transcript.length > 0 && (
-              <div className="border-t border-gray-100 max-h-80 overflow-y-auto p-3 bg-gray-50 space-y-2">
+              <div className="border-t border-gray-100 dark:border-gray-700 max-h-80 overflow-y-auto p-3 bg-gray-50 dark:bg-gray-700/50 space-y-2">
                 {c.transcript.map((msg, idx) => (
                   <div
                     key={idx}
@@ -690,7 +690,7 @@ function CallsTab({ calls, expandedCallId, setExpandedCallId, tz }) {
                       className={`max-w-[75%] rounded-xl px-3 py-2 text-xs ${
                         msg.role === 'assistant'
                           ? 'bg-primary-500 text-white rounded-br-sm'
-                          : 'bg-white border border-gray-200 text-gray-800 rounded-bl-sm'
+                          : 'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 text-gray-800 dark:text-gray-200 rounded-bl-sm'
                       }`}
                     >
                       <p className={`text-[10px] mb-0.5 ${
@@ -716,7 +716,7 @@ function SMSTab({ messages, tz }) {
     return <EmptyState icon={MessageSquare} message="No SMS messages." />;
   }
   return (
-    <div className="bg-white rounded-xl border border-gray-200 max-h-[500px] overflow-y-auto p-4 space-y-2">
+    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 max-h-[500px] overflow-y-auto p-4 space-y-2">
       {/* Messages are newest first from API, reverse for chat order */}
       {[...messages].reverse().map((msg) => {
         const isOutbound = msg.direction === 'OUTBOUND';
@@ -726,7 +726,7 @@ function SMSTab({ messages, tz }) {
               className={`max-w-[70%] rounded-2xl px-3 py-2 ${
                 isOutbound
                   ? 'bg-primary-500 text-white rounded-br-md'
-                  : 'bg-gray-100 text-gray-900 rounded-bl-md'
+                  : 'bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white rounded-bl-md'
               }`}
             >
               <div className={`flex items-center gap-1 mb-0.5 text-[10px] ${
@@ -752,9 +752,9 @@ function SMSTab({ messages, tz }) {
 
 function EmptyState({ icon: Icon, message }) {
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-8 text-center">
+    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-8 text-center">
       <Icon className="w-10 h-10 text-gray-300 mx-auto mb-2" />
-      <p className="text-sm text-gray-500">{message}</p>
+      <p className="text-sm text-gray-500 dark:text-gray-400">{message}</p>
     </div>
   );
 }

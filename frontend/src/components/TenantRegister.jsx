@@ -149,22 +149,32 @@ export default function TenantRegister() {
   const passwordsMatch =
     form.password.length === 0 || form.password === form.password_confirm;
 
+  const inputClass =
+    'w-full px-4 py-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none';
+  const inputWithIconClass =
+    'w-full pl-10 pr-4 py-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none';
+  const selectClass =
+    'w-full px-4 py-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none';
+  const selectWithIconClass =
+    'w-full pl-10 pr-4 py-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none';
+  const labelClass = 'block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5';
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-primary-50 via-gray-50 to-blue-50 py-12 px-4">
+    <div className="min-h-screen bg-gradient-to-br from-primary-50 via-gray-50 to-blue-50 dark:from-gray-900 dark:via-gray-900 dark:to-gray-900 py-12 px-4">
       <div className="max-w-3xl mx-auto">
         {/* Header */}
         <div className="text-center mb-8">
           <Link
             to="/"
-            className="inline-flex items-center gap-2 mb-6 text-sm text-gray-500 hover:text-gray-700"
+            className="inline-flex items-center gap-2 mb-6 text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"
           >
             ← Back to home
           </Link>
           <div className="mx-auto w-14 h-14 bg-primary-500 rounded-2xl flex items-center justify-center mb-4 shadow-lg shadow-primary-500/30">
             <Sparkles className="w-7 h-7 text-white" />
           </div>
-          <h1 className="text-3xl font-bold text-gray-900">Get Started with Scheduler.ai</h1>
-          <p className="text-gray-500 mt-2 max-w-xl mx-auto">
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Get Started with Scheduler.ai</h1>
+          <p className="text-gray-500 dark:text-gray-400 mt-2 max-w-xl mx-auto">
             Register your business to get an AI-powered voice agent that handles scheduling,
             reminders, and patient calls 24/7.
           </p>
@@ -172,22 +182,22 @@ export default function TenantRegister() {
 
         <form onSubmit={handleSubmit} className="space-y-6">
           {error && (
-            <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3">
+            <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-xl p-4 flex items-start gap-3">
               <AlertCircle className="w-5 h-5 text-red-500 mt-0.5 shrink-0" />
-              <p className="text-sm text-red-700">{error}</p>
+              <p className="text-sm text-red-700 dark:text-red-400">{error}</p>
             </div>
           )}
 
           {/* Business Information */}
-          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 space-y-5">
-            <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-sm p-6 space-y-5">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
               <Building2 className="w-5 h-5 text-primary-500" />
               Business Information
             </h3>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                <label className={labelClass}>
                   Business Name <span className="text-red-400">*</span>
                 </label>
                 <input
@@ -197,12 +207,12 @@ export default function TenantRegister() {
                   placeholder="Sunrise Clinic"
                   required
                   minLength={2}
-                  className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
+                  className={inputClass}
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                <label className={labelClass}>
                   URL Slug <span className="text-red-400">*</span>
                 </label>
                 <input
@@ -214,21 +224,21 @@ export default function TenantRegister() {
                   minLength={2}
                   maxLength={100}
                   pattern="^[a-z0-9_-]+$"
-                  className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-sm font-mono focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
+                  className={`${inputClass} font-mono`}
                 />
-                <p className="text-xs text-gray-400 mt-1">
+                <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
                   Lowercase letters, numbers, hyphens only
                 </p>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                <label className={labelClass}>
                   Business Type
                 </label>
                 <select
                   value={form.business_type}
                   onChange={(e) => updateField('business_type', e.target.value)}
-                  className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
+                  className={selectClass}
                 >
                   {BUSINESS_TYPES.map((bt) => (
                     <option key={bt.value} value={bt.value}>
@@ -239,7 +249,7 @@ export default function TenantRegister() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                <label className={labelClass}>
                   Timezone <span className="text-red-400">*</span>
                 </label>
                 <div className="relative">
@@ -248,7 +258,7 @@ export default function TenantRegister() {
                     value={form.timezone}
                     onChange={(e) => updateField('timezone', e.target.value)}
                     required
-                    className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
+                    className={selectWithIconClass}
                   >
                     {TIMEZONES.map((tz) => (
                       <option key={tz} value={tz}>
@@ -260,7 +270,7 @@ export default function TenantRegister() {
               </div>
 
               <div className="md:col-span-2">
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                <label className={labelClass}>
                   Business Address <span className="text-red-400">*</span>
                 </label>
                 <div className="relative">
@@ -272,7 +282,7 @@ export default function TenantRegister() {
                     placeholder="123 Main St, Suite 100, Austin, TX 78701"
                     required
                     minLength={5}
-                    className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
+                    className={inputWithIconClass}
                   />
                 </div>
               </div>
@@ -280,15 +290,15 @@ export default function TenantRegister() {
           </div>
 
           {/* Owner Contact */}
-          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 space-y-5">
-            <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-sm p-6 space-y-5">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
               <User className="w-5 h-5 text-primary-500" />
               Owner / Contact
             </h3>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                <label className={labelClass}>
                   Full Name <span className="text-red-400">*</span>
                 </label>
                 <div className="relative">
@@ -300,13 +310,13 @@ export default function TenantRegister() {
                     placeholder="Dr. Jane Smith"
                     required
                     minLength={2}
-                    className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
+                    className={inputWithIconClass}
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                <label className={labelClass}>
                   Email <span className="text-red-400">*</span>
                 </label>
                 <div className="relative">
@@ -318,16 +328,16 @@ export default function TenantRegister() {
                     placeholder="jane@sunrise-clinic.com"
                     required
                     autoComplete="email"
-                    className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
+                    className={inputWithIconClass}
                   />
                 </div>
-                <p className="text-xs text-gray-400 mt-1">
+                <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
                   This will be your login email
                 </p>
               </div>
 
               <div className="md:col-span-2">
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                <label className={labelClass}>
                   Phone <span className="text-red-400">*</span>
                 </label>
                 <div className="relative">
@@ -339,7 +349,7 @@ export default function TenantRegister() {
                     placeholder="+1 (512) 555-0100"
                     required
                     minLength={5}
-                    className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
+                    className={inputWithIconClass}
                   />
                 </div>
               </div>
@@ -347,15 +357,15 @@ export default function TenantRegister() {
           </div>
 
           {/* Password */}
-          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 space-y-5">
-            <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-sm p-6 space-y-5">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
               <Lock className="w-5 h-5 text-primary-500" />
               Create a Password
             </h3>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                <label className={labelClass}>
                   Password <span className="text-red-400">*</span>
                 </label>
                 <div className="relative">
@@ -368,14 +378,14 @@ export default function TenantRegister() {
                     required
                     minLength={8}
                     autoComplete="new-password"
-                    className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
+                    className={inputWithIconClass}
                   />
                 </div>
-                <p className="text-xs text-gray-400 mt-1">Minimum 8 characters</p>
+                <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Minimum 8 characters</p>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                <label className={labelClass}>
                   Confirm Password <span className="text-red-400">*</span>
                 </label>
                 <div className="relative">
@@ -388,10 +398,10 @@ export default function TenantRegister() {
                     required
                     minLength={8}
                     autoComplete="new-password"
-                    className={`w-full pl-10 pr-4 py-2.5 border rounded-lg text-sm focus:ring-2 outline-none ${
+                    className={`w-full pl-10 pr-4 py-2.5 border rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:ring-2 outline-none ${
                       passwordsMatch
-                        ? 'border-gray-200 focus:ring-primary-500 focus:border-primary-500'
-                        : 'border-red-300 focus:ring-red-500 focus:border-red-500'
+                        ? 'border-gray-200 dark:border-gray-600 focus:ring-primary-500 focus:border-primary-500'
+                        : 'border-red-300 dark:border-red-600 focus:ring-red-500 focus:border-red-500'
                     }`}
                   />
                 </div>
@@ -403,8 +413,8 @@ export default function TenantRegister() {
           </div>
 
           {/* Plan Selection */}
-          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 space-y-5">
-            <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-sm p-6 space-y-5">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
               <CreditCard className="w-5 h-5 text-primary-500" />
               Choose a Plan
             </h3>
@@ -417,33 +427,33 @@ export default function TenantRegister() {
                   onClick={() => updateField('plan', plan.value)}
                   className={`text-left p-4 rounded-xl border-2 transition-all ${
                     form.plan === plan.value
-                      ? 'border-primary-500 bg-primary-50 ring-1 ring-primary-500'
-                      : 'border-gray-200 hover:border-gray-300'
+                      ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20 ring-1 ring-primary-500'
+                      : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500 bg-white dark:bg-gray-700'
                   }`}
                 >
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-sm font-semibold text-gray-900">{plan.label}</span>
+                    <span className="text-sm font-semibold text-gray-900 dark:text-white">{plan.label}</span>
                     <span
                       className={`text-sm font-bold ${
-                        form.plan === plan.value ? 'text-primary-600' : 'text-gray-500'
+                        form.plan === plan.value ? 'text-primary-600 dark:text-primary-400' : 'text-gray-500 dark:text-gray-400'
                       }`}
                     >
                       {plan.price}
                     </span>
                   </div>
-                  <p className="text-xs text-gray-500">{plan.description}</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">{plan.description}</p>
                 </button>
               ))}
             </div>
           </div>
 
           {/* What happens next */}
-          <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+          <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl p-4">
             <div className="flex items-start gap-3">
-              <Clock className="w-5 h-5 text-blue-500 mt-0.5 shrink-0" />
+              <Clock className="w-5 h-5 text-blue-500 dark:text-blue-400 mt-0.5 shrink-0" />
               <div>
-                <p className="text-sm font-medium text-blue-900">What happens after I register?</p>
-                <ol className="text-sm text-blue-700 mt-1 space-y-1 list-decimal list-inside">
+                <p className="text-sm font-medium text-blue-900 dark:text-blue-300">What happens after I register?</p>
+                <ol className="text-sm text-blue-700 dark:text-blue-400 mt-1 space-y-1 list-decimal list-inside">
                   <li>Your account is created and submitted for admin review</li>
                   <li>An admin approves you (usually within 24 hours)</li>
                   <li>You'll be guided through connecting Vapi, Google Calendar, and Twilio</li>
@@ -455,9 +465,9 @@ export default function TenantRegister() {
 
           {/* Submit */}
           <div className="flex items-center justify-between gap-4 pt-2">
-            <p className="text-sm text-gray-500">
+            <p className="text-sm text-gray-500 dark:text-gray-400">
               Already have an account?{' '}
-              <Link to="/login" className="font-medium text-primary-600 hover:text-primary-700">
+              <Link to="/login" className="font-medium text-primary-600 dark:text-primary-400 hover:text-primary-700 dark:hover:text-primary-300">
                 Sign in
               </Link>
             </p>

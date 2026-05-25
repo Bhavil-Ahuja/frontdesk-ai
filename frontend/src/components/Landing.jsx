@@ -14,20 +14,20 @@ import {
 
 export default function Landing() {
   return (
-    <div className="min-h-screen bg-white">
+    <div className="min-h-screen bg-white dark:bg-gray-900">
       {/* Top bar */}
-      <header className="border-b border-gray-100">
+      <header className="border-b border-gray-100 dark:border-gray-800">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <div className="w-9 h-9 bg-primary-500 rounded-xl flex items-center justify-center">
               <Sparkles className="w-5 h-5 text-white" />
             </div>
-            <span className="font-bold text-gray-900 text-lg">Scheduler.ai</span>
+            <span className="font-bold text-gray-900 dark:text-white text-lg">Scheduler.ai</span>
           </div>
           <div className="flex items-center gap-3">
             <Link
               to="/login"
-              className="text-sm font-medium text-gray-600 hover:text-gray-900 px-3 py-2"
+              className="text-sm font-medium text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white px-3 py-2"
             >
               Sign in
             </Link>
@@ -43,14 +43,14 @@ export default function Landing() {
 
       {/* Hero */}
       <section className="max-w-6xl mx-auto px-6 py-20 text-center">
-        <div className="inline-flex items-center gap-2 px-3 py-1 bg-primary-50 text-primary-700 rounded-full text-xs font-medium mb-6">
+        <div className="inline-flex items-center gap-2 px-3 py-1 bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-400 rounded-full text-xs font-medium mb-6">
           <Zap className="w-3.5 h-3.5" />
           AI-Powered Voice Agents for Healthcare
         </div>
-        <h1 className="text-5xl font-bold text-gray-900 leading-tight max-w-3xl mx-auto">
+        <h1 className="text-5xl font-bold text-gray-900 dark:text-white leading-tight max-w-3xl mx-auto">
           Never miss a patient call <span className="text-primary-500">again</span>
         </h1>
-        <p className="text-lg text-gray-500 mt-6 max-w-2xl mx-auto">
+        <p className="text-lg text-gray-500 dark:text-gray-400 mt-6 max-w-2xl mx-auto">
           Scheduler.ai answers your front desk calls 24/7, books appointments into your calendar,
           sends SMS reminders, and escalates emergencies — all automatically.
         </p>
@@ -64,7 +64,7 @@ export default function Landing() {
           </Link>
           <Link
             to="/login"
-            className="inline-flex items-center gap-2 px-6 py-3 bg-white border border-gray-200 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors"
+            className="inline-flex items-center gap-2 px-6 py-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 rounded-lg text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
           >
             Sign in to dashboard
           </Link>
@@ -109,7 +109,7 @@ export default function Landing() {
 
       {/* How it works */}
       <section className="max-w-4xl mx-auto px-6 py-16">
-        <h2 className="text-3xl font-bold text-gray-900 text-center mb-12">How it works</h2>
+        <h2 className="text-3xl font-bold text-gray-900 dark:text-white text-center mb-12">How it works</h2>
         <div className="space-y-6">
           <Step
             number="1"
@@ -156,8 +156,8 @@ export default function Landing() {
         </div>
       </section>
 
-      <footer className="border-t border-gray-100 mt-12">
-        <div className="max-w-6xl mx-auto px-6 py-6 text-center text-sm text-gray-400">
+      <footer className="border-t border-gray-100 dark:border-gray-800 mt-12">
+        <div className="max-w-6xl mx-auto px-6 py-6 text-center text-sm text-gray-400 dark:text-gray-500">
           © 2026 Scheduler.ai · AI receptionists for healthcare
         </div>
       </footer>
@@ -167,25 +167,25 @@ export default function Landing() {
 
 function Feature({ icon: Icon, title, description }) {
   return (
-    <div className="p-6 rounded-2xl border border-gray-200 hover:border-primary-300 hover:shadow-lg transition-all">
-      <div className="w-10 h-10 rounded-lg bg-primary-50 text-primary-600 flex items-center justify-center mb-4">
+    <div className="p-6 rounded-2xl border border-gray-200 dark:border-gray-700 hover:border-primary-300 dark:hover:border-primary-700 hover:shadow-lg dark:hover:shadow-black/20 transition-all bg-white dark:bg-gray-800">
+      <div className="w-10 h-10 rounded-lg bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400 flex items-center justify-center mb-4">
         <Icon className="w-5 h-5" />
       </div>
-      <h3 className="font-semibold text-gray-900 mb-2">{title}</h3>
-      <p className="text-sm text-gray-500 leading-relaxed">{description}</p>
+      <h3 className="font-semibold text-gray-900 dark:text-white mb-2">{title}</h3>
+      <p className="text-sm text-gray-500 dark:text-gray-400 leading-relaxed">{description}</p>
     </div>
   );
 }
 
 function Step({ number, title, description }) {
   return (
-    <div className="flex items-start gap-4 p-5 rounded-xl border border-gray-200">
+    <div className="flex items-start gap-4 p-5 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
       <div className="shrink-0 w-9 h-9 rounded-full bg-primary-500 text-white flex items-center justify-center font-bold text-sm">
         {number}
       </div>
       <div>
-        <h3 className="font-semibold text-gray-900">{title}</h3>
-        <p className="text-sm text-gray-500 mt-1">{description}</p>
+        <h3 className="font-semibold text-gray-900 dark:text-white">{title}</h3>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">{description}</p>
       </div>
     </div>
   );

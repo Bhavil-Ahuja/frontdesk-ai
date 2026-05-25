@@ -210,6 +210,7 @@ async def me(current_user: Tenant = Depends(auth_service.get_current_user)):
 
 class ProfileUpdateRequest(BaseModel):
     owner_name: Optional[str] = Field(None, min_length=2, max_length=255)
+    business_name: Optional[str] = Field(None, min_length=2, max_length=255)
 
 
 @router.patch("/profile")
@@ -218,7 +219,7 @@ async def update_profile(
     current_user: Tenant = Depends(auth_service.get_current_user),
 ):
     """
-    Update own profile. Only owner_name is editable — email is immutable.
+    Update own profile. owner_name and business_name are editable — email is immutable.
     All changes are logged for admin audit trail.
     """
     from backend.models.profile_change_log import ProfileChangeLog
@@ -239,6 +240,18 @@ async def update_profile(
                 field_name="owner_name",
                 old_value=old_name,
                 new_value=user.owner_name,
+                changed_by=user.owner_email,
+            ))
+
+        if req.business_name is not None and req.business_name.strip() != user.business_name:
+            old_biz = user.business_name
+            user.business_name = req.business_name.strip()
+            updated.append("business_name")
+            session.add(ProfileChangeLog(
+                tenant_id=user.id,
+                field_name="business_name",
+                old_value=old_biz,
+                new_value=user.business_name,
                 changed_by=user.owner_email,
             ))
 

@@ -20,36 +20,37 @@ import {
   Wifi,
   WifiOff,
   AlertCircle,
+  History,
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 
 const STATUS_CONFIG = {
   PENDING: {
-    color: 'bg-amber-100 text-amber-700',
+    color: 'bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400',
     dot: 'bg-amber-400',
     icon: Clock,
     label: 'Pending',
   },
   APPROVED: {
-    color: 'bg-blue-100 text-blue-700',
+    color: 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-400',
     dot: 'bg-blue-400',
     icon: CheckCircle,
     label: 'Approved',
   },
   ACTIVE: {
-    color: 'bg-green-100 text-green-700',
+    color: 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400',
     dot: 'bg-green-400',
     icon: Wifi,
     label: 'Active',
   },
   SUSPENDED: {
-    color: 'bg-red-100 text-red-700',
+    color: 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-400',
     dot: 'bg-red-400',
     icon: PauseCircle,
     label: 'Suspended',
   },
   DEACTIVATED: {
-    color: 'bg-gray-100 text-gray-500',
+    color: 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400',
     dot: 'bg-gray-400',
     icon: WifiOff,
     label: 'Deactivated',
@@ -133,12 +134,12 @@ export default function TenantAdmin() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900">Tenant Management</h2>
-          <p className="text-gray-500 mt-1">Approve, manage, and monitor registered businesses</p>
+          <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Tenant Management</h2>
+          <p className="text-gray-500 dark:text-gray-400 mt-1">Approve, manage, and monitor registered businesses</p>
         </div>
         <button
           onClick={fetchTenants}
-          className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-600 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+          className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-600 dark:text-gray-400 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
         >
           <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           Refresh
@@ -147,36 +148,36 @@ export default function TenantAdmin() {
 
       {/* Stat cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="bg-white rounded-xl border border-gray-200 p-5">
+        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
           <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-lg bg-blue-50">
+            <div className="p-2.5 rounded-lg bg-blue-50 dark:bg-blue-900/50">
               <Building2 className="w-5 h-5 text-blue-600" />
             </div>
             <div>
-              <p className="text-2xl font-bold text-gray-900">{totalCount}</p>
-              <p className="text-sm text-gray-500">Total Tenants</p>
+              <p className="text-2xl font-bold text-gray-900 dark:text-white">{totalCount}</p>
+              <p className="text-sm text-gray-500 dark:text-gray-400">Total Tenants</p>
             </div>
           </div>
         </div>
-        <div className="bg-white rounded-xl border border-gray-200 p-5">
+        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
           <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-lg bg-amber-50">
+            <div className="p-2.5 rounded-lg bg-amber-50 dark:bg-amber-900/50">
               <Clock className="w-5 h-5 text-amber-600" />
             </div>
             <div>
-              <p className="text-2xl font-bold text-gray-900">{pendingCount}</p>
-              <p className="text-sm text-gray-500">Pending Approval</p>
+              <p className="text-2xl font-bold text-gray-900 dark:text-white">{pendingCount}</p>
+              <p className="text-sm text-gray-500 dark:text-gray-400">Pending Approval</p>
             </div>
           </div>
         </div>
-        <div className="bg-white rounded-xl border border-gray-200 p-5">
+        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
           <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-lg bg-green-50">
+            <div className="p-2.5 rounded-lg bg-green-50 dark:bg-green-900/50">
               <Wifi className="w-5 h-5 text-green-600" />
             </div>
             <div>
-              <p className="text-2xl font-bold text-gray-900">{activeCount}</p>
-              <p className="text-sm text-gray-500">Active Tenants</p>
+              <p className="text-2xl font-bold text-gray-900 dark:text-white">{activeCount}</p>
+              <p className="text-sm text-gray-500 dark:text-gray-400">Active Tenants</p>
             </div>
           </div>
         </div>
@@ -192,7 +193,7 @@ export default function TenantAdmin() {
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search by name, slug, owner..."
-            className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
+            className="w-full pl-10 pr-4 py-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none dark:bg-gray-700 dark:text-white"
           />
         </div>
 
@@ -205,7 +206,7 @@ export default function TenantAdmin() {
               className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
                 statusFilter === s
                   ? 'bg-primary-500 text-white'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-400 dark:hover:bg-gray-600'
               }`}
             >
               {s === 'ALL' ? 'All' : STATUS_CONFIG[s]?.label || s}
@@ -221,17 +222,17 @@ export default function TenantAdmin() {
 
       {/* Error banner */}
       {error && (
-        <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3">
+        <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-xl p-4 flex items-start gap-3">
           <AlertCircle className="w-5 h-5 text-red-500 mt-0.5 shrink-0" />
-          <p className="text-sm text-red-700">{error}</p>
+          <p className="text-sm text-red-700 dark:text-red-400">{error}</p>
         </div>
       )}
 
       {/* Tenant list */}
       {filtered.length === 0 ? (
-        <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
-          <Building2 className="w-10 h-10 text-gray-300 mx-auto mb-3" />
-          <p className="text-gray-500 text-sm">
+        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-12 text-center">
+          <Building2 className="w-10 h-10 text-gray-300 dark:text-gray-600 mx-auto mb-3" />
+          <p className="text-gray-500 dark:text-gray-400 text-sm">
             {searchQuery
               ? 'No tenants match your search.'
               : statusFilter !== 'ALL'
@@ -264,11 +265,11 @@ function TenantRow({ tenant, expanded, onToggle, onAction, actionLoading }) {
   const StatusIcon = cfg.icon;
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
       {/* Summary row */}
       <button
         onClick={onToggle}
-        className="w-full flex items-center gap-4 p-4 text-left hover:bg-gray-50 transition-colors"
+        className="w-full flex items-center gap-4 p-4 text-left hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
       >
         {/* Status dot */}
         <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${cfg.dot}`}></div>
@@ -276,17 +277,17 @@ function TenantRow({ tenant, expanded, onToggle, onAction, actionLoading }) {
         {/* Business info */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="font-semibold text-gray-900 truncate">{tenant.business_name}</span>
+            <span className="font-semibold text-gray-900 dark:text-white truncate">{tenant.business_name}</span>
             <span className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${cfg.color}`}>
               {cfg.label}
             </span>
             {tenant.demo_mode && (
-              <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-purple-100 text-purple-700">
+              <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-400">
                 Demo
               </span>
             )}
           </div>
-          <div className="flex items-center gap-3 mt-0.5 text-xs text-gray-500">
+          <div className="flex items-center gap-3 mt-0.5 text-xs text-gray-500 dark:text-gray-400">
             <span className="font-mono">{tenant.slug}</span>
             <span>·</span>
             <span>{tenant.owner_name}</span>
@@ -312,11 +313,11 @@ function TenantRow({ tenant, expanded, onToggle, onAction, actionLoading }) {
 
       {/* Expanded detail */}
       {expanded && (
-        <div className="border-t border-gray-100 px-4 py-5 bg-gray-50/50">
+        <div className="border-t border-gray-100 dark:border-gray-700 px-4 py-5 bg-gray-50/50 dark:bg-gray-700/50">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {/* Left: details */}
             <div className="space-y-3">
-              <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wider">Details</h4>
+              <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">Details</h4>
               <DetailRow label="ID" value={tenant.id} mono />
               <DetailRow label="Slug" value={tenant.slug} mono />
               <DetailRow label="Business Type" value={tenant.business_type || '—'} />
@@ -335,7 +336,7 @@ function TenantRow({ tenant, expanded, onToggle, onAction, actionLoading }) {
 
             {/* Right: owner + integrations */}
             <div className="space-y-3">
-              <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wider">
+              <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
                 Owner & Integrations
               </h4>
               <DetailRow label="Owner" value={tenant.owner_name} />
@@ -355,14 +356,17 @@ function TenantRow({ tenant, expanded, onToggle, onAction, actionLoading }) {
 
           {/* Greeting message */}
           {tenant.greeting_message && (
-            <div className="mt-4 p-3 bg-white rounded-lg border border-gray-200">
-              <p className="text-xs font-medium text-gray-500 mb-1">Greeting Message</p>
-              <p className="text-sm text-gray-700 italic">"{tenant.greeting_message}"</p>
+            <div className="mt-4 p-3 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+              <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Greeting Message</p>
+              <p className="text-sm text-gray-700 dark:text-gray-300 italic">"{tenant.greeting_message}"</p>
             </div>
           )}
 
+          {/* Profile Change History */}
+          <TenantChangeHistory tenantId={tenant.id} />
+
           {/* Action buttons */}
-          <div className="mt-5 pt-4 border-t border-gray-200 flex flex-wrap gap-2">
+          <div className="mt-5 pt-4 border-t border-gray-200 dark:border-gray-700 flex flex-wrap gap-2">
             {tenant.status === 'PENDING' && (
               <ActionButton
                 icon={CheckCircle}
@@ -415,9 +419,9 @@ function TenantRow({ tenant, expanded, onToggle, onAction, actionLoading }) {
 function DetailRow({ label, value, mono }) {
   return (
     <div className="flex items-start gap-2">
-      <span className="text-xs font-medium text-gray-500 w-24 shrink-0 pt-0.5">{label}</span>
+      <span className="text-xs font-medium text-gray-500 dark:text-gray-400 w-24 shrink-0 pt-0.5">{label}</span>
       <span
-        className={`text-sm text-gray-800 break-all ${mono ? 'font-mono text-xs bg-gray-100 px-1.5 py-0.5 rounded' : ''}`}
+        className={`text-sm text-gray-800 dark:text-gray-200 break-all ${mono ? 'font-mono text-xs bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded' : ''}`}
       >
         {value}
       </span>
@@ -429,7 +433,7 @@ function IntegrationBadge({ label, active }) {
   return (
     <span
       className={`px-2 py-0.5 rounded text-[10px] font-medium ${
-        active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-400'
+        active ? 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400' : 'bg-gray-100 text-gray-400 dark:bg-gray-700 dark:text-gray-500'
       }`}
     >
       {label}
@@ -443,20 +447,99 @@ function IntegrationStatus({ label, configured }) {
       <div
         className={`w-2 h-2 rounded-full ${configured ? 'bg-green-400' : 'bg-gray-300'}`}
       ></div>
-      <span className="text-sm text-gray-700">{label}</span>
-      <span className={`text-xs ${configured ? 'text-green-600' : 'text-gray-400'}`}>
+      <span className="text-sm text-gray-700 dark:text-gray-300">{label}</span>
+      <span className={`text-xs ${configured ? 'text-green-600 dark:text-green-400' : 'text-gray-400'}`}>
         {configured ? 'Connected' : 'Not configured'}
       </span>
     </div>
   );
 }
 
+function TenantChangeHistory({ tenantId }) {
+  const [changes, setChanges] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [show, setShow] = useState(false);
+
+  async function loadChanges() {
+    if (loaded) {
+      setShow(!show);
+      return;
+    }
+    setLoading(true);
+    try {
+      const data = await apiFetch(`/api/auth/profile-changes?tenant_id=${tenantId}`);
+      setChanges(Array.isArray(data) ? data : []);
+      setLoaded(true);
+      setShow(true);
+    } catch (err) {
+      console.error('Failed to load changes:', err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="mt-4">
+      <button
+        onClick={loadChanges}
+        className="flex items-center gap-2 text-sm font-medium text-gray-600 dark:text-gray-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors"
+      >
+        {loading ? (
+          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-current"></div>
+        ) : (
+          <History className="w-4 h-4" />
+        )}
+        {show ? 'Hide' : 'Show'} Change History
+        {loaded && changes.length > 0 && (
+          <span className="ml-1 px-1.5 py-0.5 bg-gray-100 dark:bg-gray-600 text-gray-500 dark:text-gray-400 rounded text-[10px]">
+            {changes.length}
+          </span>
+        )}
+      </button>
+
+      {show && (
+        <div className="mt-3 space-y-2">
+          {changes.length === 0 ? (
+            <p className="text-xs text-gray-400 dark:text-gray-500 py-2">No profile changes recorded.</p>
+          ) : (
+            changes.map((log) => (
+              <div
+                key={log.id}
+                className="flex items-start gap-2.5 p-2.5 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 text-xs"
+              >
+                <div className="w-1.5 h-1.5 rounded-full bg-primary-400 mt-1.5 shrink-0"></div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-gray-900 dark:text-white font-medium">
+                    {log.field_name === 'password' ? (
+                      'Password changed'
+                    ) : (
+                      <>
+                        <span className="text-gray-500 dark:text-gray-400">{log.field_name}:</span>{' '}
+                        <span className="line-through text-gray-400 dark:text-gray-500">{log.old_value}</span>{' '}
+                        <span className="text-primary-600 dark:text-primary-400">{log.new_value}</span>
+                      </>
+                    )}
+                  </p>
+                  <p className="text-gray-400 dark:text-gray-500 mt-0.5">
+                    by {log.changed_by} · {log.created_at ? new Date(log.created_at).toLocaleString() : '—'}
+                  </p>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ActionButton({ icon: Icon, label, color, loading, onClick }) {
   const colorMap = {
-    green: 'bg-green-50 text-green-700 hover:bg-green-100 border-green-200',
-    amber: 'bg-amber-50 text-amber-700 hover:bg-amber-100 border-amber-200',
-    blue: 'bg-blue-50 text-blue-700 hover:bg-blue-100 border-blue-200',
-    red: 'bg-red-50 text-red-700 hover:bg-red-100 border-red-200',
+    green: 'bg-green-50 text-green-700 hover:bg-green-100 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:hover:bg-green-900/50 dark:border-green-800',
+    amber: 'bg-amber-50 text-amber-700 hover:bg-amber-100 border-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:hover:bg-amber-900/50 dark:border-amber-800',
+    blue: 'bg-blue-50 text-blue-700 hover:bg-blue-100 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:hover:bg-blue-900/50 dark:border-blue-800',
+    red: 'bg-red-50 text-red-700 hover:bg-red-100 border-red-200 dark:bg-red-900/30 dark:text-red-400 dark:hover:bg-red-900/50 dark:border-red-800',
   };
 
   return (
