@@ -20,6 +20,7 @@ import {
   Check,
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
+import { useModal } from '../contexts/ModalContext';
 import { useAuth } from '../contexts/AuthContext';
 import { formatDateTime, formatTime, isSameDay } from '../lib/timezone';
 import ThemedDatePicker from './ui/ThemedDatePicker';
@@ -52,6 +53,7 @@ const TYPE_COLORS = {
 
 export default function AppointmentManager() {
   const { user } = useAuth();
+  const { toast } = useModal();
   const tz = user?.timezone || 'America/Chicago';
   const [appointments, setAppointments] = useState([]);
   const [selectedApt, setSelectedApt] = useState(null);
@@ -139,7 +141,7 @@ export default function AppointmentManager() {
       fetchAppointments();
     } catch (err) {
       console.error('Cancel failed:', err);
-      alert(err.message || 'Cancel failed');
+      toast.error(err.message || 'Cancel failed');
     } finally {
       setUpdatingStatus(false);
     }
@@ -158,7 +160,7 @@ export default function AppointmentManager() {
       fetchAppointments();
     } catch (err) {
       console.error('Status update failed:', err);
-      alert(err.message || 'Status update failed');
+      toast.error(err.message || 'Status update failed');
     } finally {
       setUpdatingStatus(false);
     }
@@ -176,7 +178,7 @@ export default function AppointmentManager() {
       fetchAppointments();
     } catch (err) {
       console.error('Save notes failed:', err);
-      alert(err.message || 'Failed to save notes');
+      toast.error(err.message || 'Failed to save notes');
     } finally {
       setSavingNotes(false);
     }

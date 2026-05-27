@@ -92,6 +92,37 @@ def _parse_tool_call_text(text: str) -> dict | None:
 
 sessions: dict[str, dict[str, Any]] = {}
 
+
+def _refresh_system_time(session: dict[str, Any]) -> None:
+    """Update the CURRENT TIME line in the system prompt so the agent always
+    knows the real time, not the time when the session was created."""
+    import re
+    from zoneinfo import ZoneInfo
+    msgs = session.get("messages")
+    if not msgs or msgs[0].get("role") != "system":
+        return
+    tenant_ctx = session.get("tenant_ctx")
+    tz_name = getattr(tenant_ctx, "timezone", None) or "America/Chicago"
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = ZoneInfo("America/Chicago")
+    now = datetime.now(tz)
+    time_str = now.strftime("%I:%M %p").lstrip("0")
+    if now.hour < 12:
+        period = "morning"
+    elif now.hour < 17:
+        period = "afternoon"
+    else:
+        period = "evening"
+    new_line = f"CURRENT TIME is {time_str} {period} ({tz_name})."
+    msgs[0]["content"] = re.sub(
+        r"CURRENT TIME is .+?\.",
+        new_line,
+        msgs[0]["content"],
+        count=1,
+    )
+
 # ── OpenAI client pointed at Ollama ──────────────────────────────────────────
 
 _client: OpenAI | None = None
@@ -869,6 +900,9 @@ async def _process_message_gemini(
 
     effective_ctx = session.get("tenant_ctx")
 
+    # Refresh the time in the system prompt so "what time is it?" is accurate.
+    _refresh_system_time(session)
+
     session["messages"].append({
         "role": "user",
         "content": user_message,
@@ -1071,6 +1105,9 @@ async def _process_message_ollama(
 
     # Use session's tenant_ctx for consistency within the conversation
     effective_ctx = session.get("tenant_ctx")
+
+    # Refresh the time in the system prompt so "what time is it?" is accurate.
+    _refresh_system_time(session)
 
     # Append user turn
     session["messages"].append({

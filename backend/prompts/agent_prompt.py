@@ -365,11 +365,8 @@ def build_system_prompt(
     except Exception:
         pass
 
-    # Hour-rounded time so this prefix stays byte-identical for an entire
-    # hour. That lets Gemini's implicit prompt caching (and our explicit
-    # caching path) actually hit — minute-precision was killing cache reuse.
-    # The agent never needs minute precision; it works in hour/period terms.
-    hour_str = today.strftime('%I %p').lstrip('0')
+    # Use actual time so the agent can answer "what time is it?" correctly.
+    time_str = today.strftime('%I:%M %p').lstrip('0')  # e.g. "2:45 PM"
     if today.hour < 12:
         period = "morning"
     elif today.hour < 17:
@@ -380,7 +377,7 @@ def build_system_prompt(
     date_context = (
         f"\n=== CURRENT DATE & TIME ===\n"
         f"TODAY is {today.strftime('%A, %B %d, %Y')}.\n"
-        f"CURRENT TIME is approximately {hour_str} — it is {period} ({tz_name}).\n"
+        f"CURRENT TIME is {time_str} {period} ({tz_name}).\n"
         f"\n=== DAY-OF-WEEK → DATE MAPPING (use these for tool calls) ===\n"
         + "\n".join(dow_lines) + "\n"
         f"\nUPCOMING DATES (alternative phrasing):\n"

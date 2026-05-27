@@ -74,6 +74,8 @@ export function AuthProvider({ children }) {
     clearToken();
     setUser(null);
     setAccountError(null);
+    // Chat sessionStorage keys are scoped per-user (scheduler_ai_chat_{userId}_*)
+    // so no cross-account leakage — no need to clear on logout.
   }, []);
 
   const refreshUser = useCallback(async () => {

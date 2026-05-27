@@ -15,6 +15,7 @@ import {
   ChevronUp,
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
+import { useModal } from '../contexts/ModalContext';
 
 const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 
@@ -28,6 +29,7 @@ const EMPTY_PROVIDER = {
 };
 
 export default function ProviderManager() {
+  const { confirm } = useModal();
   const [providers, setProviders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -121,7 +123,13 @@ export default function ProviderManager() {
   }
 
   async function handleDelete(providerId) {
-    if (!confirm('Deactivate this provider? They will no longer appear in scheduling.')) return;
+    const ok = await confirm({
+      title: 'Deactivate Provider?',
+      message: 'This provider will no longer appear in scheduling. You can re-add them later.',
+      confirmText: 'Deactivate',
+      variant: 'danger',
+    });
+    if (!ok) return;
     try {
       await apiFetch(`/api/providers/${providerId}`, { method: 'DELETE' });
       await fetchProviders();

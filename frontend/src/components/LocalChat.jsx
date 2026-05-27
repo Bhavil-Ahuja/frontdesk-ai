@@ -6,20 +6,29 @@
  * frame and append `delta.content` tokens to the in-flight assistant bubble as
  * they stream in — so the UX matches Vapi's transcript stream.
  */
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { Send, RotateCcw, Bot, User as UserIcon, MessageSquare, Phone, Plus, Trash2, ChevronDown, Download } from 'lucide-react';
 import { getToken } from '../lib/api';
+import { useAuth } from '../contexts/AuthContext';
 
-// Stable per-tab conversation id so multi-turn chat keeps history server-side.
-const CONV_KEY = 'scheduler_ai_chat_conv';
-const MSGS_KEY = 'scheduler_ai_chat_msgs';
-const STREAM_KEY = 'scheduler_ai_chat_stream'; // tracks in-flight stream
+// ── Per-user, per-caller storage keys ────────────────────────────────────────
+// Keys are scoped to userId + callerPhone so each test caller has its own
+// independent chat history, and switching accounts doesn't leak.
+function storageKey(scope, suffix) {
+  return `scheduler_ai_chat_${scope}_${suffix}`;
+}
 
-function ensureConversationId() {
-  let id = sessionStorage.getItem(CONV_KEY);
+function makeScopeId(userId, callerPhone) {
+  const phone = (callerPhone || 'default').replace(/[^a-zA-Z0-9]/g, '');
+  return `${userId}_${phone}`;
+}
+
+function ensureConversationId(scope) {
+  const key = storageKey(scope, 'conv');
+  let id = sessionStorage.getItem(key);
   if (!id) {
     id = (crypto?.randomUUID?.() || `conv-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-    sessionStorage.setItem(CONV_KEY, id);
+    sessionStorage.setItem(key, id);
   }
   return id;
 }
@@ -27,25 +36,31 @@ function ensureConversationId() {
 // ── Background stream manager ─────────────────────────────────────────────
 // Keeps the stream alive even when the component unmounts (user navigates away).
 // Tokens are saved to sessionStorage so the response persists across route changes.
+// `scope` is set when the stream starts (userId + callerPhone) to scope storage keys.
 const backgroundStream = {
   active: false,
   abortController: null,
   onUpdate: null, // callback to notify mounted component of new tokens
+  scope: null,
 
-  start(fetchPromise, abortController) {
+  _msgsKey() { return storageKey(this.scope, 'msgs'); },
+  _streamKey() { return storageKey(this.scope, 'stream'); },
+
+  start(fetchPromise, abortController, scope) {
     this.active = true;
     this.abortController = abortController;
-    sessionStorage.setItem(STREAM_KEY, 'active');
+    this.scope = scope;
+    sessionStorage.setItem(this._streamKey(), 'active');
   },
 
   appendToken(token) {
     // Update sessionStorage directly (persists even if component unmounted)
     try {
-      const msgs = JSON.parse(sessionStorage.getItem(MSGS_KEY) || '[]');
+      const msgs = JSON.parse(sessionStorage.getItem(this._msgsKey()) || '[]');
       const last = msgs[msgs.length - 1];
       if (last && last.role === 'assistant') {
         last.content = (last.content || '') + token;
-        sessionStorage.setItem(MSGS_KEY, JSON.stringify(msgs));
+        sessionStorage.setItem(this._msgsKey(), JSON.stringify(msgs));
       }
     } catch (_) { /* ignore */ }
     // Also notify mounted component if listening
@@ -55,17 +70,17 @@ const backgroundStream = {
   finish(error = null) {
     this.active = false;
     this.abortController = null;
-    sessionStorage.removeItem(STREAM_KEY);
+    sessionStorage.removeItem(this._streamKey());
     // Mark message as complete in sessionStorage
     try {
-      const msgs = JSON.parse(sessionStorage.getItem(MSGS_KEY) || '[]');
+      const msgs = JSON.parse(sessionStorage.getItem(this._msgsKey()) || '[]');
       const last = msgs[msgs.length - 1];
       if (last && last.role === 'assistant') {
         delete last.pending;
         if (error && !last.content) {
           last.content = `_(error: ${error})_`;
         }
-        sessionStorage.setItem(MSGS_KEY, JSON.stringify(msgs));
+        sessionStorage.setItem(this._msgsKey(), JSON.stringify(msgs));
       }
     } catch (_) { /* ignore */ }
     // Notify mounted component
@@ -77,11 +92,11 @@ const backgroundStream = {
       this.abortController.abort();
     }
     this.active = false;
-    sessionStorage.removeItem(STREAM_KEY);
+    if (this.scope) sessionStorage.removeItem(this._streamKey());
   },
 
-  isActive() {
-    return this.active || sessionStorage.getItem(STREAM_KEY) === 'active';
+  isActive(scope) {
+    return this.active || sessionStorage.getItem(storageKey(scope, 'stream')) === 'active';
   },
 };
 
@@ -91,9 +106,9 @@ const DEFAULT_WELCOME = {
     "Hi! I'm your AI agent — same brain that powers the voice call, just over chat. Ask me to book an appointment, look up open slots, or anything you'd say on a real call.",
 };
 
-function loadMessages() {
+function loadMessages(scope) {
   try {
-    const raw = sessionStorage.getItem(MSGS_KEY);
+    const raw = sessionStorage.getItem(storageKey(scope, 'msgs'));
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) return parsed;
@@ -102,16 +117,17 @@ function loadMessages() {
   return [DEFAULT_WELCOME];
 }
 
-function saveMessages(msgs) {
+function saveMessages(scope, msgs) {
   try {
     // Strip pending flags before persisting
     const clean = msgs.map(({ pending, ...rest }) => rest);
-    sessionStorage.setItem(MSGS_KEY, JSON.stringify(clean));
+    sessionStorage.setItem(storageKey(scope, 'msgs'), JSON.stringify(clean));
   } catch (_) { /* storage full — ignore */ }
 }
 
 export default function LocalChat() {
-  const [messages, setMessages] = useState(loadMessages);
+  const { user } = useAuth();
+  const userId = user?.id || 'anonymous';
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState(null);
@@ -122,8 +138,22 @@ export default function LocalChat() {
   const [addingCaller, setAddingCaller] = useState(false);
   const [newCallerName, setNewCallerName] = useState('');
   const [deletingCaller, setDeletingCaller] = useState(null);
-  const conversationId = useRef(ensureConversationId());
   const callerDropdownRef = useRef(null);
+
+  // Scope = userId + callerPhone — each test caller gets independent chat history.
+  const chatScope = useMemo(
+    () => makeScopeId(userId, selectedCaller?.phone),
+    [userId, selectedCaller?.phone],
+  );
+  const [messages, setMessages] = useState(() => loadMessages(chatScope));
+  const conversationId = useRef(ensureConversationId(chatScope));
+
+  // When caller changes, swap to that caller's conversation
+  useEffect(() => {
+    setMessages(loadMessages(chatScope));
+    conversationId.current = ensureConversationId(chatScope);
+    setError(null);
+  }, [chatScope]);
 
   // Fetch test callers from config
   const fetchConfig = useCallback(() => {
@@ -222,28 +252,28 @@ export default function LocalChat() {
 
   // Persist messages to sessionStorage whenever they change
   useEffect(() => {
-    saveMessages(messages);
-  }, [messages]);
+    saveMessages(chatScope, messages);
+  }, [chatScope, messages]);
   const abortRef = useRef(null);
   const scrollRef = useRef(null);
 
   // Subscribe to background stream updates (for when component remounts mid-stream)
   useEffect(() => {
     // Check if there's an active background stream we need to listen to
-    if (backgroundStream.isActive()) {
+    if (backgroundStream.isActive(chatScope)) {
       setStreaming(true);
     }
 
     // Register callback to receive token updates from background stream
-    backgroundStream.onUpdate = (token, done, error) => {
+    backgroundStream.onUpdate = (token, done, streamError) => {
       if (done) {
         // Stream finished while we were mounted or just remounted
         setStreaming(false);
-        if (error) {
-          setError(error);
+        if (streamError) {
+          setError(streamError);
         }
         // Reload messages from sessionStorage to get final state
-        setMessages(loadMessages());
+        setMessages(loadMessages(chatScope));
       } else if (token) {
         // New token arrived — update the last message
         setMessages((prev) => {
@@ -261,8 +291,9 @@ export default function LocalChat() {
     };
 
     // On mount, sync with sessionStorage (in case stream completed while away)
-    if (!backgroundStream.active && sessionStorage.getItem(STREAM_KEY) !== 'active') {
-      setMessages(loadMessages());
+    const streamKey = storageKey(chatScope, 'stream');
+    if (!backgroundStream.active && sessionStorage.getItem(streamKey) !== 'active') {
+      setMessages(loadMessages(chatScope));
       setStreaming(false);
     }
 
@@ -270,7 +301,7 @@ export default function LocalChat() {
       // Don't abort on unmount — let background stream continue
       backgroundStream.onUpdate = null;
     };
-  }, []);
+  }, [chatScope]);
 
   // Auto-scroll to bottom on new content
   useEffect(() => {
@@ -294,13 +325,13 @@ export default function LocalChat() {
       { role: 'assistant', content: '', pending: true },
     ];
     setMessages(newMessages);
-    saveMessages(newMessages); // persist immediately for background stream
+    saveMessages(chatScope, newMessages); // persist immediately for background stream
     setStreaming(true);
 
     const token = getToken();
     const controller = new AbortController();
     abortRef.current = controller;
-    backgroundStream.start(null, controller);
+    backgroundStream.start(null, controller, chatScope);
 
     try {
       const res = await fetch('/api/chat/stream', {
@@ -452,8 +483,8 @@ export default function LocalChat() {
     // Generate a fresh conversation id and clear UI history
     const fresh =
       crypto?.randomUUID?.() || `conv-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    sessionStorage.setItem(CONV_KEY, fresh);
-    sessionStorage.removeItem(MSGS_KEY);
+    sessionStorage.setItem(storageKey(chatScope, 'conv'), fresh);
+    sessionStorage.removeItem(storageKey(chatScope, 'msgs'));
     conversationId.current = fresh;
     setMessages([
       {
@@ -533,10 +564,9 @@ export default function LocalChat() {
                         <button
                           type="button"
                           className="flex items-center gap-2 flex-1 text-left"
-                          onClick={async () => {
+                          onClick={() => {
                             if (caller.phone !== selectedCaller?.phone) {
-                              // Switching callers — reset old session first, then switch
-                              await resetConversation();
+                              // Just switch — chatScope change auto-loads that caller's history
                               setSelectedCaller(caller);
                             }
                             setCallerDropdownOpen(false);

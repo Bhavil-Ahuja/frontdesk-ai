@@ -34,6 +34,7 @@ import {
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import { getToken } from '../lib/api';
+import { useModal } from '../contexts/ModalContext';
 import { useAuth } from '../contexts/AuthContext';
 import ThemedDatePicker from './ui/ThemedDatePicker';
 
@@ -1183,6 +1184,7 @@ function HolidaysEditor({ holidays, onChange }) {
 }
 
 function VapiConnectionRow({ connected, onConnected }) {
+  const { toast, confirm } = useModal();
   const [open, setOpen] = useState(false);
   const [apiKey, setApiKey] = useState('');
   const [phoneNumberId, setPhoneNumberId] = useState('');
@@ -1222,7 +1224,13 @@ function VapiConnectionRow({ connected, onConnected }) {
   }
 
   async function handleDisconnect() {
-    if (!confirm('Disconnect Vapi? Your phone agent will stop answering calls.')) return;
+    const ok = await confirm({
+      title: 'Disconnect Vapi?',
+      message: 'Your phone agent will stop answering calls until reconnected.',
+      confirmText: 'Disconnect',
+      variant: 'danger',
+    });
+    if (!ok) return;
     setSubmitting(true);
     setErr(null);
     try {
@@ -1455,6 +1463,7 @@ function IntegrationSection({
 }
 
 function GoogleCalendarSection({ config, onUpdate }) {
+  const { toast, confirm } = useModal();
   const [disconnecting, setDisconnecting] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const connected = config?.google_calendar_connected;
@@ -1467,19 +1476,25 @@ function GoogleCalendarSection({ config, onUpdate }) {
       // Redirect browser to Google consent screen
       window.location.href = data.auth_url;
     } catch (err) {
-      alert('Failed to start Google connection: ' + (err.message || err));
+      toast.error('Failed to start Google connection: ' + (err.message || err));
       setConnecting(false);
     }
   }
 
   async function handleDisconnect() {
-    if (!confirm('Disconnect Google Calendar? Your agent will fall back to the built-in scheduler.')) return;
+    const ok = await confirm({
+      title: 'Disconnect Google Calendar?',
+      message: 'Your agent will fall back to the built-in scheduler until reconnected.',
+      confirmText: 'Disconnect',
+      variant: 'danger',
+    });
+    if (!ok) return;
     setDisconnecting(true);
     try {
       await apiFetch('/api/integrations/google/disconnect', { method: 'POST' });
       onUpdate(); // refresh config
     } catch (err) {
-      alert('Failed to disconnect: ' + (err.message || err));
+      toast.error('Failed to disconnect: ' + (err.message || err));
     } finally {
       setDisconnecting(false);
     }

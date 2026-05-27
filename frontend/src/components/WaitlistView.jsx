@@ -18,6 +18,7 @@ import {
   CalendarPlus,
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
+import { useModal } from '../contexts/ModalContext';
 import { useAuth } from '../contexts/AuthContext';
 import { formatDate, formatTime } from '../lib/timezone';
 import ThemedDateTimePicker from './ui/ThemedDateTimePicker';
@@ -67,6 +68,7 @@ const STATUS_CONFIG = {
 
 export default function WaitlistView() {
   const { user } = useAuth();
+  const { confirm } = useModal();
   const tz = user?.timezone || 'America/Chicago';
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -105,8 +107,13 @@ export default function WaitlistView() {
   }, [fetchEntries]);
 
   async function handleCancel(entryId) {
-    if (!confirm('Cancel this waitlist entry? The patient will be notified by SMS.'))
-      return;
+    const ok = await confirm({
+      title: 'Cancel Waitlist Entry?',
+      message: 'The patient will be notified by SMS that their waitlist entry has been cancelled.',
+      confirmText: 'Cancel Entry',
+      variant: 'danger',
+    });
+    if (!ok) return;
     try {
       await apiFetch(`/api/waitlist/${entryId}`, { method: 'DELETE' });
       await fetchEntries();

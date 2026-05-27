@@ -24,6 +24,7 @@ import {
   MapPin,
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
+import { useModal } from '../contexts/ModalContext';
 
 const STATUS_CONFIG = {
   PENDING: {
@@ -68,6 +69,7 @@ export default function TenantAdmin() {
   const [expandedId, setExpandedId] = useState(null);
   const [actionLoading, setActionLoading] = useState(null); // tenant_id currently being actioned
   const [error, setError] = useState(null);
+  const { toast, confirm, prompt } = useModal();
 
   useEffect(() => {
     fetchTenants();
@@ -99,34 +101,44 @@ export default function TenantAdmin() {
       await fetchTenants();
     } catch (err) {
       console.error(`Action ${action} failed:`, err);
-      alert(err.message || 'Action failed.');
+      toast.error(err.message || 'Action failed.');
     } finally {
       setActionLoading(null);
     }
   }
 
   async function purgeAccount(tenantId, businessName, email) {
-    // Double confirmation — this is irreversible
-    const first = window.confirm(
-      `⚠️ PERMANENTLY DELETE "${businessName}" (${email})?\n\nThis will delete ALL data: appointments, patients, calls, SMS messages, and the account itself.\n\nThis action is IRREVERSIBLE.`
-    );
+    // Step 1: Confirm intent
+    const first = await confirm({
+      title: 'Permanently Delete Account?',
+      message: `This will permanently delete "${businessName}" (${email}) and ALL associated data — appointments, patients, calls, SMS messages.\n\nThis action is IRREVERSIBLE.`,
+      confirmText: 'Continue',
+      variant: 'danger',
+    });
     if (!first) return;
 
-    const typed = window.prompt(
-      `Type the business name to confirm permanent deletion:\n\n"${businessName}"`
-    );
+    // Step 2: Type-to-confirm (the business name)
+    const typed = await prompt({
+      title: 'Type to Confirm',
+      message: `Type the exact business name to confirm permanent deletion:`,
+      placeholder: businessName,
+      confirmText: 'Delete Forever',
+      variant: 'danger',
+    });
+    if (typed === null) return;
     if (typed !== businessName) {
-      if (typed !== null) alert('Business name did not match. Deletion cancelled.');
+      toast.error('Business name did not match. Deletion cancelled.');
       return;
     }
 
     setActionLoading(tenantId);
     try {
       await apiFetch(`/api/tenants/${tenantId}/purge`, { method: 'DELETE' });
+      toast.success(`"${businessName}" permanently deleted.`);
       await fetchTenants();
     } catch (err) {
       console.error('Purge failed:', err);
-      alert(err.message || 'Permanent deletion failed.');
+      toast.error(err.message || 'Permanent deletion failed.');
     } finally {
       setActionLoading(null);
     }
@@ -290,6 +302,7 @@ export default function TenantAdmin() {
 // ── Individual tenant row ────────────────────────────────────────────────────
 
 function TenantRow({ tenant, expanded, onToggle, onAction, onPurge, actionLoading }) {
+  const { confirm } = useModal();
   const cfg = STATUS_CONFIG[tenant.status] || STATUS_CONFIG.PENDING;
   const StatusIcon = cfg.icon;
 
@@ -455,10 +468,14 @@ function TenantRow({ tenant, expanded, onToggle, onAction, onPurge, actionLoadin
                 label="Deactivate"
                 color="red"
                 loading={actionLoading}
-                onClick={() => {
-                  if (window.confirm(`Deactivate "${tenant.business_name}"? This is a soft delete.`)) {
-                    onAction('delete', 'DELETE');
-                  }
+                onClick={async () => {
+                  const ok = await confirm({
+                    title: 'Deactivate Account?',
+                    message: `Deactivate "${tenant.business_name}"? The account will be disabled but data will be preserved.`,
+                    confirmText: 'Deactivate',
+                    variant: 'danger',
+                  });
+                  if (ok) onAction('delete', 'DELETE');
                 }}
               />
             )}

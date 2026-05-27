@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
+import { useModal } from '../contexts/ModalContext';
 import { formatDateTime, formatDate, formatRelativeTime as fmtRelative } from '../lib/timezone';
 import ThemedSelect from './ui/ThemedSelect';
 
@@ -252,6 +253,7 @@ export default function PatientCRM() {
 // ── Patient Profile (detail view) ──────────────────────────────────────────
 
 function PatientProfile({ patientId, tz, onBack }) {
+  const { toast } = useModal();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -312,7 +314,7 @@ function PatientProfile({ patientId, tz, onBack }) {
       await fetchProfile();
     } catch (err) {
       console.error('Status update failed:', err);
-      alert(err.message || 'Status update failed');
+      toast.error(err.message || 'Status update failed');
     } finally {
       setUpdatingStatus(false);
     }
@@ -326,7 +328,7 @@ function PatientProfile({ patientId, tz, onBack }) {
       await fetchProfile();
     } catch (err) {
       console.error('Cancel failed:', err);
-      alert(err.message || 'Cancel failed');
+      toast.error(err.message || 'Cancel failed');
     } finally {
       setUpdatingStatus(false);
     }
