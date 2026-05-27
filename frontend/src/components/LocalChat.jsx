@@ -147,6 +147,10 @@ export default function LocalChat() {
   );
   const [messages, setMessages] = useState(() => loadMessages(chatScope));
   const conversationId = useRef(ensureConversationId(chatScope));
+  // Ref tracks current scope so the save effect always writes to the right key
+  // without needing chatScope as a dependency (which causes the overwrite race).
+  const chatScopeRef = useRef(chatScope);
+  chatScopeRef.current = chatScope;
 
   // When caller changes, swap to that caller's conversation
   useEffect(() => {
@@ -250,10 +254,13 @@ export default function LocalChat() {
     }
   }
 
-  // Persist messages to sessionStorage whenever they change
+  // Persist messages to sessionStorage whenever they change.
+  // We intentionally omit chatScope from deps and use the ref instead —
+  // otherwise a scope transition fires the effect with the new scope
+  // but stale (DEFAULT_WELCOME) messages, overwriting the real saved chat.
   useEffect(() => {
-    saveMessages(chatScope, messages);
-  }, [chatScope, messages]);
+    saveMessages(chatScopeRef.current, messages);
+  }, [messages]);
   const abortRef = useRef(null);
   const scrollRef = useRef(null);
 
