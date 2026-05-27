@@ -202,6 +202,27 @@ async def lifespan(app: FastAPI):
     logger.info("  SMS Webhook: %s/webhook/sms", settings.SERVER_BASE_URL)
     logger.info("=" * 60)
 
+    # ── Startup health checks — warn about missing / insecure config ─────
+    _jwt_secret = os.getenv("JWT_SECRET", "")
+    if not _jwt_secret or "change-me" in _jwt_secret:
+        logger.warning("⚠️  JWT_SECRET is not set or uses the insecure default! "
+                        "Set a strong secret in .env before going to production.")
+
+    if not settings.DEMO_MODE:
+        if not settings.VAPI_API_KEY:
+            logger.warning("⚠️  VAPI_API_KEY is empty — Vapi assistant registration will be skipped.")
+        if not settings.TWILIO_ACCOUNT_SID or not settings.TWILIO_AUTH_TOKEN:
+            logger.warning("⚠️  Twilio credentials missing — outbound SMS will silently fail.")
+        if not settings.TWILIO_PHONE_NUMBER:
+            logger.warning("⚠️  TWILIO_PHONE_NUMBER is empty — inbound SMS won't match a tenant.")
+        if settings.SERVER_BASE_URL.startswith("http://localhost"):
+            logger.warning("⚠️  SERVER_BASE_URL is localhost — Vapi/Twilio webhooks won't reach "
+                            "this server. Use a tunnel (ngrok) or set a public URL.")
+    if settings.LLM_PROVIDER == "gemini" and not settings.GEMINI_API_KEY:
+        logger.warning("⚠️  LLM_PROVIDER=gemini but GEMINI_API_KEY is empty — LLM calls will fail.")
+    if settings.LLM_PROVIDER == "ollama":
+        logger.info("  LLM: Ollama (%s) at %s", settings.OLLAMA_MODEL, settings.OLLAMA_BASE_URL)
+
     # 5. Start background reminder/follow-up scheduler
     reminder_task = asyncio.create_task(run_reminder_loop())
     logger.info("✓ Reminder scheduler started (2h reminders + post-visit follow-ups)")
@@ -231,10 +252,19 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS — allow the React dev server during development
+# CORS — allow the React dev server and production frontend.
+# NOTE: allow_origins=["*"] with allow_credentials=True is invalid per the
+# CORS spec (browsers will reject it). Build a safe list from SERVER_BASE_URL.
+_cors_origins: list[str] = [
+    "http://localhost:5173",   # Vite dev server
+    "http://localhost:3000",   # Alternate dev server
+]
+if settings.SERVER_BASE_URL and settings.SERVER_BASE_URL not in _cors_origins:
+    _cors_origins.append(settings.SERVER_BASE_URL)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000", "*"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

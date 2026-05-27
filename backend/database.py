@@ -111,7 +111,7 @@ async def init_db() -> None:
     logger.info("Connecting to database: %s", settings.DATABASE_URL.split("@")[-1])  # Log host only, not creds
     async with engine.begin() as conn:
         # Import models so they register with Base.metadata
-        from backend.models import tenant, call, appointment, patient, provider, waitlist, sms_message  # noqa: F401
+        from backend.models import tenant, call, appointment, patient, provider, waitlist, sms_message, profile_change_log  # noqa: F401
         await conn.run_sync(Base.metadata.create_all)
 
     # Apply column-level migrations (idempotent — safe to re-run)

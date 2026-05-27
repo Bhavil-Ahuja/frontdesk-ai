@@ -92,6 +92,25 @@ def _parse_tool_call_text(text: str) -> dict | None:
 
 sessions: dict[str, dict[str, Any]] = {}
 
+# Maximum age (seconds) for a session before it's considered abandoned.
+# Vapi calls rarely last more than 30 minutes; 2 hours is very generous.
+_SESSION_MAX_AGE = 2 * 60 * 60  # 2 hours
+
+
+def _cleanup_stale_sessions() -> int:
+    """Remove sessions older than _SESSION_MAX_AGE. Returns count removed."""
+    now = time.time()
+    stale = [
+        cid for cid, s in sessions.items()
+        if now - s.get("call_start_time", now) > _SESSION_MAX_AGE
+    ]
+    for cid in stale:
+        sessions.pop(cid, None)
+    if stale:
+        logger.warning("Cleaned up %d stale session(s): %s", len(stale),
+                        ", ".join(stale[:5]))
+    return len(stale)
+
 
 def _refresh_system_time(session: dict[str, Any]) -> None:
     """Update the CURRENT TIME line in the system prompt so the agent always
@@ -752,11 +771,17 @@ def create_session(
         "caller_number": caller_number,
         "tenant_ctx": tenant_ctx,  # stored so _execute_tool can use it
     }
+    # Housekeeping: clean up any abandoned sessions before adding a new one.
+    # Cheap check — only runs the sweep when session count grows beyond 50.
+    if len(sessions) > 50:
+        _cleanup_stale_sessions()
+
     sessions[call_id] = session
-    logger.info("Session created for call %s (tenant=%s, patient=%s)",
+    logger.info("Session created for call %s (tenant=%s, patient=%s, active=%d)",
                 call_id,
                 tenant_ctx.slug if tenant_ctx else "global",
-                patient_context["patient"]["name"] if patient_context else "new caller")
+                patient_context["patient"]["name"] if patient_context else "new caller",
+                len(sessions))
     return session
 
 
