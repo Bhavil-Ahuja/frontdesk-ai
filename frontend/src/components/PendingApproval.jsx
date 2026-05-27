@@ -2,9 +2,10 @@ import React, { useEffect } from 'react';
 import { Clock, LogOut, RefreshCw, Mail, Sparkles } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
+import ThemeToggle from './ThemeToggle';
 
 export default function PendingApproval() {
-  const { user, logout, refreshUser } = useAuth();
+  const { user, logout, refreshUser, accountError } = useAuth();
   const navigate = useNavigate();
 
   // Auto-refresh every 30 seconds in case admin approves
@@ -32,7 +33,12 @@ export default function PendingApproval() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-amber-50 via-gray-50 to-orange-50 dark:from-gray-900 dark:via-gray-900 dark:to-gray-900 p-4">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-amber-50 via-gray-50 to-orange-50 dark:from-gray-900 dark:via-gray-900 dark:to-gray-900 p-4 relative">
+      {/* Theme toggle */}
+      <div className="absolute top-4 right-4">
+        <ThemeToggle />
+      </div>
+
       <div className="w-full max-w-lg">
         <div className="text-center mb-8">
           <div className="mx-auto w-14 h-14 bg-amber-100 dark:bg-amber-900/30 rounded-2xl flex items-center justify-center mb-4">

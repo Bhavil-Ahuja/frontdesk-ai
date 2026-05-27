@@ -210,6 +210,7 @@ async def get_provider_aware_slots(
     business_hours: dict[str, Any] | None = None,
     tz_name: str = "America/Chicago",
     provider_id: uuid.UUID | None = None,
+    holidays: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """
     Get available slots with provider-level concurrency tracking.
@@ -240,6 +241,30 @@ async def get_provider_aware_slots(
     except (ValueError, TypeError):
         logger.warning("[NativeSched] Invalid date: %s", date_str)
         return {"slots": [], "provider_filter": None}
+
+    # ── Holiday short-circuit ────────────────────────────────────────────
+    # If the requested date is on the tenant's holidays list, the office
+    # is closed — no slots regardless of business_hours. Surface the
+    # holiday name so callers can tell the user why.
+    holiday_match: dict[str, Any] | None = None
+    if holidays:
+        for h in holidays:
+            if isinstance(h, dict) and h.get("date") == date_str:
+                holiday_match = {
+                    "date": h["date"],
+                    "name": (h.get("name") or "Holiday"),
+                }
+                break
+    if holiday_match:
+        logger.info(
+            "[NativeSched] %s is a holiday (%s) for tenant %s — no slots",
+            date_str, holiday_match["name"], tenant_id,
+        )
+        return {
+            "slots": [],
+            "provider_filter": str(provider_id) if provider_id else None,
+            "holiday": holiday_match,
+        }
 
     # Resolve timezone
     try:
@@ -392,11 +417,14 @@ async def create_native_booking(
     appointment_type: str,
     start_time: str,
     duration_minutes: int = 60,
+    provider_id: uuid.UUID | None = None,
 ) -> dict[str, Any] | None:
     """
     Create a booking directly in the Appointment table.
 
     Returns dict with id, uid, status on success; None on failure.
+    Returns a dict with status="CONFLICT" if the unique index fires (someone
+    booked the same provider at the same instant — race lost).
     """
     try:
         scheduled_at = datetime.fromisoformat(start_time)
@@ -413,31 +441,45 @@ async def create_native_booking(
 
     booking_uid = f"native-{uuid.uuid4().hex[:12]}"
 
-    async with async_session() as session:
-        appt = Appointment(
-            tenant_id=tenant_id,
-            cal_booking_uid=booking_uid,
-            patient_name=patient_info.get("name", ""),
-            patient_phone=patient_info.get("phone", ""),
-            patient_email=patient_info.get("email", ""),
-            date_of_birth=patient_info.get("dob", ""),
-            appointment_type=appointment_type,
-            scheduled_at=scheduled_at,
-            duration_minutes=duration_minutes,
-            status=AppointmentStatus.CONFIRMED,
-            booked_via=BookedVia.AI,
+    # Local import to avoid a hard dependency on SQLAlchemy at import time
+    from sqlalchemy.exc import IntegrityError
+
+    try:
+        async with async_session() as session:
+            appt = Appointment(
+                tenant_id=tenant_id,
+                cal_booking_uid=booking_uid,
+                patient_name=patient_info.get("name", ""),
+                patient_phone=patient_info.get("phone", ""),
+                patient_email=patient_info.get("email", ""),
+                date_of_birth=patient_info.get("dob", ""),
+                appointment_type=appointment_type,
+                scheduled_at=scheduled_at,
+                duration_minutes=duration_minutes,
+                status=AppointmentStatus.CONFIRMED,
+                booked_via=BookedVia.AI,
+                provider_id=provider_id,
+            )
+            session.add(appt)
+            await session.commit()
+            await session.refresh(appt)
+    except IntegrityError as exc:
+        # Unique-index violation = slot already taken by another booking
+        # since we last checked availability. Surface this so the caller can
+        # tell the patient "sorry, that slot was just taken — pick another."
+        logger.warning(
+            "[NativeSched] Booking conflict for provider=%s at %s (uid=%s): %s",
+            provider_id, scheduled_at, booking_uid, str(exc.orig)[:160],
         )
-        session.add(appt)
-        await session.commit()
-        await session.refresh(appt)
+        return {"status": "CONFLICT", "reason": "slot_taken"}
 
     result = {
         "id": str(appt.id),
         "uid": booking_uid,
         "status": "ACCEPTED",
     }
-    logger.info("[NativeSched] ✓ Booking created: %s for %s @ %s (%d min)",
-                booking_uid, patient_info.get("name"), start_time, duration_minutes)
+    logger.info("[NativeSched] ✓ Booking created: %s for %s @ %s (%d min, provider=%s)",
+                booking_uid, patient_info.get("name"), start_time, duration_minutes, provider_id)
     return result
 
 

@@ -4,8 +4,6 @@ import {
   Save,
   Plus,
   Trash2,
-  MessageSquare,
-  Send,
   CheckCircle,
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
@@ -15,10 +13,6 @@ export default function KnowledgeBase() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [testQuestion, setTestQuestion] = useState('');
-  const [testAnswer, setTestAnswer] = useState('');
-  const [testing, setTesting] = useState(false);
-
   useEffect(() => {
     fetchKB();
   }, []);
@@ -44,38 +38,6 @@ export default function KnowledgeBase() {
       console.error('Save failed:', err);
     } finally {
       setSaving(false);
-    }
-  }
-
-  async function testKB() {
-    if (!testQuestion.trim()) return;
-    setTesting(true);
-    setTestAnswer('');
-    try {
-      // Simple pattern match against FAQs for demo
-      const q = testQuestion.toLowerCase();
-      const match = kb?.faqs?.find(
-        (faq) =>
-          faq.question.toLowerCase().includes(q) ||
-          q.includes(faq.question.toLowerCase().split(' ').slice(0, 3).join(' '))
-      );
-      if (match) {
-        setTestAnswer(match.answer);
-      } else {
-        // Check services
-        const svc = kb?.services?.find((s) => q.includes(s.name.toLowerCase()));
-        if (svc) {
-          setTestAnswer(
-            `${svc.name}: $${svc.price_min}–$${svc.price_max}. Duration: ${svc.duration_minutes} minutes. ${svc.notes || ''}`
-          );
-        } else {
-          setTestAnswer(
-            "I'd be happy to help with that! Let me connect you with our team for the most accurate answer. Is there anything else I can help with?"
-          );
-        }
-      }
-    } finally {
-      setTesting(false);
     }
   }
 
@@ -133,7 +95,7 @@ export default function KnowledgeBase() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Knowledge Base</h2>
+          <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Practice Info</h2>
           <p className="text-gray-500 dark:text-gray-400 mt-1">
             Edit information the AI agent uses to answer questions
           </p>
@@ -268,36 +230,6 @@ export default function KnowledgeBase() {
         </div>
       </Section>
 
-      {/* Test Panel */}
-      <div className="bg-primary-50 dark:bg-primary-900/20 rounded-xl border border-primary-200 dark:border-primary-800 p-6">
-        <h3 className="text-lg font-semibold text-primary-800 dark:text-primary-300 flex items-center gap-2 mb-4">
-          <MessageSquare className="w-5 h-5" />
-          Test Agent Response
-        </h3>
-        <div className="flex gap-3">
-          <input
-            type="text"
-            value={testQuestion}
-            onChange={(e) => setTestQuestion(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && testKB()}
-            placeholder="Type a patient question..."
-            className="flex-1 px-4 py-2.5 border border-primary-200 dark:border-primary-700 rounded-lg text-sm bg-white dark:bg-gray-700 dark:text-white focus:ring-2 focus:ring-primary-500 outline-none"
-          />
-          <button
-            onClick={testKB}
-            disabled={testing}
-            className="px-4 py-2.5 bg-primary-500 text-white rounded-lg text-sm font-medium hover:bg-primary-600 disabled:opacity-50 transition-colors"
-          >
-            <Send className="w-4 h-4" />
-          </button>
-        </div>
-        {testAnswer && (
-          <div className="mt-4 p-4 bg-white dark:bg-gray-800 rounded-lg border border-primary-200 dark:border-primary-700">
-            <p className="text-xs font-medium text-primary-600 mb-1">Sarah would respond:</p>
-            <p className="text-sm text-gray-700 dark:text-gray-300">{testAnswer}</p>
-          </div>
-        )}
-      </div>
     </div>
   );
 }

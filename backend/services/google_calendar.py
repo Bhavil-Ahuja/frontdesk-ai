@@ -370,6 +370,7 @@ async def book_appointment(
     duration_minutes: int = 60,
     timezone: str = "America/Chicago",
     calendar_id: str = "primary",
+    provider_name: str | None = None,
 ) -> dict[str, Any] | None:
     """
     Create a Google Calendar event for the appointment.
@@ -381,6 +382,8 @@ async def book_appointment(
         duration_minutes: Appointment length.
         timezone: IANA timezone.
         calendar_id: Google Calendar ID.
+        provider_name: Optional name of the provider — embedded into the
+            event title and description so it's visible inside Google Calendar.
 
     Returns:
         Dict with id, uid (htmlLink), status on success; None on failure.
@@ -395,13 +398,21 @@ async def book_appointment(
     patient_email = patient_info.get("email", "")
     patient_phone = patient_info.get("phone", "")
 
+    provider_line = f"Provider: {provider_name}\n" if provider_name else ""
+    summary = (
+        f"Appointment: {patient_name} ({provider_name})"
+        if provider_name
+        else f"Appointment: {patient_name}"
+    )
+
     event_body = {
-        "summary": f"Appointment: {patient_name}",
+        "summary": summary,
         "description": (
             f"Patient: {patient_name}\n"
             f"Phone: {patient_phone}\n"
             f"DOB: {patient_info.get('dob', 'N/A')}\n"
-            f"\nBooked by Scheduler.ai voice agent"
+            f"{provider_line}"
+            f"\nBooked by FrontDesk AI voice agent"
         ),
         "start": {
             "dateTime": start_dt.isoformat(),

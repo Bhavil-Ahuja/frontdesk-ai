@@ -21,6 +21,7 @@ import {
   WifiOff,
   AlertCircle,
   History,
+  MapPin,
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 
@@ -99,6 +100,33 @@ export default function TenantAdmin() {
     } catch (err) {
       console.error(`Action ${action} failed:`, err);
       alert(err.message || 'Action failed.');
+    } finally {
+      setActionLoading(null);
+    }
+  }
+
+  async function purgeAccount(tenantId, businessName, email) {
+    // Double confirmation — this is irreversible
+    const first = window.confirm(
+      `⚠️ PERMANENTLY DELETE "${businessName}" (${email})?\n\nThis will delete ALL data: appointments, patients, calls, SMS messages, and the account itself.\n\nThis action is IRREVERSIBLE.`
+    );
+    if (!first) return;
+
+    const typed = window.prompt(
+      `Type the business name to confirm permanent deletion:\n\n"${businessName}"`
+    );
+    if (typed !== businessName) {
+      if (typed !== null) alert('Business name did not match. Deletion cancelled.');
+      return;
+    }
+
+    setActionLoading(tenantId);
+    try {
+      await apiFetch(`/api/tenants/${tenantId}/purge`, { method: 'DELETE' });
+      await fetchTenants();
+    } catch (err) {
+      console.error('Purge failed:', err);
+      alert(err.message || 'Permanent deletion failed.');
     } finally {
       setActionLoading(null);
     }
@@ -249,6 +277,7 @@ export default function TenantAdmin() {
               expanded={expandedId === tenant.id}
               onToggle={() => setExpandedId(expandedId === tenant.id ? null : tenant.id)}
               onAction={(action, method) => performAction(tenant.id, action, method)}
+              onPurge={() => purgeAccount(tenant.id, tenant.business_name, tenant.owner_email)}
               actionLoading={actionLoading === tenant.id}
             />
           ))}
@@ -260,7 +289,7 @@ export default function TenantAdmin() {
 
 // ── Individual tenant row ────────────────────────────────────────────────────
 
-function TenantRow({ tenant, expanded, onToggle, onAction, actionLoading }) {
+function TenantRow({ tenant, expanded, onToggle, onAction, onPurge, actionLoading }) {
   const cfg = STATUS_CONFIG[tenant.status] || STATUS_CONFIG.PENDING;
   const StatusIcon = cfg.icon;
 
@@ -362,6 +391,32 @@ function TenantRow({ tenant, expanded, onToggle, onAction, actionLoading }) {
             </div>
           )}
 
+          {/* Location */}
+          {(tenant.business_address || tenant.google_maps_url) && (
+            <div className="mt-4 p-4 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+              <h4 className="text-sm font-semibold text-gray-900 dark:text-white flex items-center gap-2 mb-2">
+                <MapPin className="w-4 h-4 text-primary-500" />
+                Clinic Location
+              </h4>
+              {tenant.business_address && (
+                <p className="text-sm text-gray-700 dark:text-gray-300 mb-2">
+                  {tenant.business_address}
+                </p>
+              )}
+              {tenant.google_maps_url && (
+                <a
+                  href={tenant.google_maps_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 text-sm font-medium text-primary-600 dark:text-primary-400 hover:text-primary-700 dark:hover:text-primary-300"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  Open in Google Maps
+                </a>
+              )}
+            </div>
+          )}
+
           {/* Profile Change History */}
           <TenantChangeHistory tenantId={tenant.id} />
 
@@ -385,7 +440,7 @@ function TenantRow({ tenant, expanded, onToggle, onAction, actionLoading }) {
                 onClick={() => onAction('suspend')}
               />
             )}
-            {tenant.status === 'SUSPENDED' && (
+            {(tenant.status === 'SUSPENDED' || tenant.status === 'DEACTIVATED') && (
               <ActionButton
                 icon={PlayCircle}
                 label="Reactivate"
@@ -407,6 +462,13 @@ function TenantRow({ tenant, expanded, onToggle, onAction, actionLoading }) {
                 }}
               />
             )}
+            <ActionButton
+              icon={XCircle}
+              label="Permanently Delete"
+              color="red"
+              loading={actionLoading}
+              onClick={onPurge}
+            />
           </div>
         </div>
       )}

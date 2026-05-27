@@ -52,16 +52,39 @@ class LoginRequest(BaseModel):
 
 class RegisterRequest(BaseModel):
     """New tenant registration — extends the onboarding payload with a password."""
-    slug: str = Field(..., min_length=2, max_length=100, pattern=r"^[a-z0-9_-]+$")
+    # Slug is auto-generated from business_name; not shown in UI.
+    slug: Optional[str] = Field(None, max_length=100, pattern=r"^[a-z0-9_-]+$")
     business_name: str = Field(..., min_length=2, max_length=255)
     business_type: str = "custom"
     business_address: str = Field(..., min_length=5)
     owner_name: str = Field(..., min_length=2, max_length=255)
     owner_email: str
     owner_phone: str = Field(..., min_length=5)
+    # Required at signup so the agent always has a real human to fall back on
+    # in an emergency / escalation scenario. Emergency guidance text is
+    # collected later from the Agent Config page.
+    escalation_phone: str = Field(..., min_length=5, max_length=20)
+    # Required: a Google Maps link to the clinic location. We use this for
+    # admin approval review (iframe preview) and to send patients a verified
+    # map link inside SMS / email templates.
+    google_maps_url: str = Field(..., min_length=10, max_length=2048)
     timezone: str = Field(..., min_length=1)
     plan: str = "starter"
     password: str = Field(..., min_length=8, max_length=128)
+
+    @field_validator("google_maps_url")
+    @classmethod
+    def _v_google_maps_url(cls, v: str) -> str:
+        v = (v or "").strip()
+        # Accept https://maps.app.goo.gl/…, https://goo.gl/maps/…,
+        # https://www.google.com/maps/…, or any URL containing 'google'+'map'.
+        # We're not validating the address — just guarding obvious garbage.
+        if not v.startswith(("http://", "https://")):
+            raise ValueError("google_maps_url must be a full URL starting with http(s)://")
+        lower = v.lower()
+        if not (("google" in lower and "map" in lower) or "goo.gl/maps" in lower or "maps.app.goo.gl" in lower):
+            raise ValueError("google_maps_url must be a Google Maps link")
+        return v
 
     @field_validator("owner_email")
     @classmethod
@@ -163,14 +186,12 @@ async def register(req: RegisterRequest):
     """
     Register a new tenant in PENDING status, with a password.
     Returns a JWT — the user can log in immediately to track approval status.
+
+    Slug is auto-generated from business_name; duplicate slugs are resolved
+    by appending -1, -2, … in create_tenant.
     """
     email = req.owner_email.lower()
-    logger.info("[Auth] Registration: slug=%s email=%s", req.slug, email)
-
-    # Check slug collision
-    existing_slug = await tenant_service.resolve_by_slug(req.slug)
-    if existing_slug:
-        raise HTTPException(status_code=409, detail=f"URL slug '{req.slug}' is already taken.")
+    logger.info("[Auth] Registration: business=%s email=%s", req.business_name, email)
 
     # Check email collision
     async with async_session() as session:
@@ -180,7 +201,7 @@ async def register(req: RegisterRequest):
         if result.scalar_one_or_none():
             raise HTTPException(status_code=409, detail="An account with this email already exists.")
 
-    # Create tenant in PENDING status
+    # Create tenant in PENDING status (slug dedup handled inside create_tenant)
     payload = req.model_dump(exclude={"password"})
     payload["owner_email"] = email
     tenant = await tenant_service.create_tenant(payload)

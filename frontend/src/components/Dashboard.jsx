@@ -1,34 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Phone,
   CalendarCheck,
   AlertTriangle,
-  Clock,
-  Activity,
-  TrendingUp,
 } from 'lucide-react';
-import {
-  PieChart,
-  Pie,
-  Cell,
-  ResponsiveContainer,
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-} from 'recharts';
 import { apiFetch } from '../lib/api';
-
-const OUTCOME_COLORS = {
-  BOOKED: '#10b981',
-  INQUIRY: '#f59e0b',
-  ESCALATED: '#ef4444',
-  CANCELLED: '#8b5cf6',
-  ABANDONED: '#6b7280',
-};
 
 export default function Dashboard() {
   const [stats, setStats] = useState(null);
@@ -67,10 +42,6 @@ export default function Dashboard() {
     );
   }
 
-  const pieData = Object.entries(stats.outcomes_breakdown)
-    .filter(([, v]) => v > 0)
-    .map(([name, value]) => ({ name, value }));
-
   return (
     <div className="p-8 space-y-8">
       {/* Header */}
@@ -94,13 +65,7 @@ export default function Dashboard() {
       </div>
 
       {/* Stat cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <StatCard
-          icon={Phone}
-          label="Today's Calls"
-          value={stats.today_calls}
-          color="blue"
-        />
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <StatCard
           icon={CalendarCheck}
           label="Appointments This Week"
@@ -115,95 +80,6 @@ export default function Dashboard() {
           subtitle="Last 30 days"
           color="amber"
         />
-        <StatCard
-          icon={Clock}
-          label="Avg Call Duration"
-          value={formatDuration(stats.avg_call_duration)}
-          color="purple"
-        />
-      </div>
-
-      {/* Charts row */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Calls per day */}
-        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
-            <TrendingUp className="w-5 h-5 text-primary-500" />
-            Calls This Week
-          </h3>
-          <ResponsiveContainer width="100%" height={280}>
-            <LineChart data={stats.calls_per_day}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-              <XAxis dataKey="day" stroke="#94a3b8" fontSize={12} />
-              <YAxis stroke="#94a3b8" fontSize={12} allowDecimals={false} />
-              <Tooltip
-                contentStyle={{
-                  borderRadius: '8px',
-                  border: '1px solid #e2e8f0',
-                  boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)',
-                  background: '#fff',
-                }}
-              />
-              <Line
-                type="monotone"
-                dataKey="count"
-                stroke="#14b8a6"
-                strokeWidth={3}
-                dot={{ r: 5, fill: '#14b8a6' }}
-                activeDot={{ r: 7 }}
-                name="Calls"
-              />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-
-        {/* Outcome breakdown */}
-        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
-            <Activity className="w-5 h-5 text-primary-500" />
-            Call Outcomes
-          </h3>
-          {pieData.length > 0 ? (
-            <div className="flex items-center gap-6">
-              <ResponsiveContainer width="60%" height={260}>
-                <PieChart>
-                  <Pie
-                    data={pieData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={60}
-                    outerRadius={100}
-                    paddingAngle={3}
-                    dataKey="value"
-                  >
-                    {pieData.map((entry) => (
-                      <Cell
-                        key={entry.name}
-                        fill={OUTCOME_COLORS[entry.name] || '#6b7280'}
-                      />
-                    ))}
-                  </Pie>
-                  <Tooltip />
-                </PieChart>
-              </ResponsiveContainer>
-              <div className="space-y-3">
-                {pieData.map((entry) => (
-                  <div key={entry.name} className="flex items-center gap-2">
-                    <div
-                      className="w-3 h-3 rounded-full"
-                      style={{ backgroundColor: OUTCOME_COLORS[entry.name] }}
-                    ></div>
-                    <span className="text-sm text-gray-600 dark:text-gray-400">
-                      {entry.name} ({entry.value})
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : (
-            <p className="text-gray-400 text-center py-12">No call data yet</p>
-          )}
-        </div>
       </div>
     </div>
   );
@@ -233,9 +109,3 @@ function StatCard({ icon: Icon, label, value, subtitle, color }) {
   );
 }
 
-function formatDuration(seconds) {
-  if (!seconds) return '0s';
-  const m = Math.floor(seconds / 60);
-  const s = Math.round(seconds % 60);
-  return m > 0 ? `${m}m ${s}s` : `${s}s`;
-}

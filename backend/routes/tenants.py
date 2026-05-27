@@ -9,6 +9,7 @@ POST   /api/tenants/{id}/approve    → approve PENDING → ACTIVE
 POST   /api/tenants/{id}/suspend    → suspend an active tenant
 POST   /api/tenants/{id}/reactivate → reactivate a suspended tenant
 DELETE /api/tenants/{id}            → deactivate a tenant (soft delete)
+DELETE /api/tenants/{id}/purge      → permanently delete tenant + all data (admin)
 """
 
 import logging
@@ -18,7 +19,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_db
@@ -53,6 +54,7 @@ class TenantUpdateRequest(BaseModel):
     business_phone: Optional[str] = None
     business_address: Optional[str] = None
     business_website: Optional[str] = None
+    google_maps_url: Optional[str] = None
     timezone: Optional[str] = None
     agent_name: Optional[str] = None
     greeting_message: Optional[str] = None
@@ -68,6 +70,9 @@ class TenantUpdateRequest(BaseModel):
     escalation_transfer_number: Optional[str] = None
     appointment_types: Optional[list[dict[str, Any]]] = None
     business_hours: Optional[dict[str, Any]] = None
+    # List of {"date": "YYYY-MM-DD", "name": "Christmas Day"} entries.
+    # Admin manages closures here — service layer normalises & dedupes.
+    holidays: Optional[list[dict[str, Any]]] = None
     knowledge_base: Optional[dict[str, Any]] = None
     emergency_guidance: Optional[str] = None
     demo_mode: Optional[bool] = None
@@ -80,6 +85,8 @@ class TenantOut(BaseModel):
     slug: str
     business_name: str
     business_type: Optional[str]
+    business_address: Optional[str]
+    google_maps_url: Optional[str]
     owner_name: str
     owner_email: str
     owner_phone: Optional[str]
@@ -108,6 +115,8 @@ def _tenant_to_out(t: Tenant) -> TenantOut:
         slug=t.slug,
         business_name=t.business_name,
         business_type=t.business_type.value if t.business_type else None,
+        business_address=t.business_address or "",
+        google_maps_url=t.google_maps_url or "",
         owner_name=t.owner_name,
         owner_email=t.owner_email,
         owner_phone=t.owner_phone,
@@ -289,7 +298,7 @@ async def reactivate_tenant(
     tenant_id: str,
     admin: Tenant = Depends(auth_service.require_admin),
 ):
-    """Reactivate a suspended tenant. (Admin only)"""
+    """Reactivate a suspended or deactivated tenant. (Admin only)"""
     try:
         uid = uuid.UUID(tenant_id)
     except ValueError:
@@ -302,10 +311,10 @@ async def reactivate_tenant(
         if not tenant:
             raise HTTPException(status_code=404, detail="Tenant not found.")
 
-        if tenant.status != TenantStatus.SUSPENDED:
+        if tenant.status not in (TenantStatus.SUSPENDED, TenantStatus.DEACTIVATED):
             raise HTTPException(
                 status_code=400,
-                detail=f"Can only reactivate SUSPENDED tenants (current: {tenant.status.value}).",
+                detail=f"Can only reactivate SUSPENDED or DEACTIVATED tenants (current: {tenant.status.value}).",
             )
 
         tenant.status = TenantStatus.ACTIVE
@@ -340,3 +349,62 @@ async def deactivate_tenant(
         tenant_service.invalidate_cache(str(uid))
         logger.info("[Tenants] Deactivated tenant %s", tenant.slug)
         return _tenant_to_out(tenant)
+
+
+@router.delete("/{tenant_id}/purge", status_code=200)
+async def purge_tenant(
+    tenant_id: str,
+    admin: Tenant = Depends(auth_service.require_admin),
+):
+    """
+    Permanently delete a tenant and ALL associated data (appointments, patients,
+    calls, SMS, waitlist, providers, profile change logs). This frees the email
+    so the person can re-register. Irreversible. (Admin only)
+    """
+    try:
+        uid = uuid.UUID(tenant_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid tenant ID format.")
+
+    # Prevent admin from deleting themselves
+    if admin.id == uid:
+        raise HTTPException(status_code=400, detail="You cannot delete your own account.")
+
+    from backend.models import (
+        Appointment, Call, Patient, Provider, WaitlistEntry, SMSMessage, ProfileChangeLog,
+    )
+    from backend.database import async_session
+
+    async with async_session() as session:
+        # Verify tenant exists
+        result = await session.execute(select(Tenant).where(Tenant.id == uid))
+        tenant = result.scalar_one_or_none()
+        if not tenant:
+            raise HTTPException(status_code=404, detail="Tenant not found.")
+
+        tenant_name = tenant.business_name
+        tenant_email = tenant.owner_email
+        tenant_slug = tenant.slug
+
+        # Delete all related data first (order doesn't matter with no inter-table FKs)
+        await session.execute(delete(Appointment).where(Appointment.tenant_id == uid))
+        await session.execute(delete(Call).where(Call.tenant_id == uid))
+        await session.execute(delete(Patient).where(Patient.tenant_id == uid))
+        await session.execute(delete(Provider).where(Provider.tenant_id == uid))
+        await session.execute(delete(WaitlistEntry).where(WaitlistEntry.tenant_id == uid))
+        await session.execute(delete(SMSMessage).where(SMSMessage.tenant_id == uid))
+        await session.execute(delete(ProfileChangeLog).where(ProfileChangeLog.tenant_id == uid))
+
+        # Delete the tenant itself
+        await session.execute(delete(Tenant).where(Tenant.id == uid))
+        await session.commit()
+
+        tenant_service.invalidate_cache(str(uid))
+        logger.info("[Tenants] PURGED tenant %s (%s / %s) — all data permanently deleted",
+                    tenant_slug, tenant_name, tenant_email)
+
+    return {
+        "detail": f"Tenant '{tenant_name}' ({tenant_email}) permanently deleted.",
+        "slug": tenant_slug,
+        "email": tenant_email,
+    }

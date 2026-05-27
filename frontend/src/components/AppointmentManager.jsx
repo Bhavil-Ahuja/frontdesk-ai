@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   CalendarDays,
   CalendarCheck,
@@ -11,15 +11,18 @@ import {
   X,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   RefreshCw,
   CheckCircle2,
   XCircle,
   FileText,
   Save,
+  Check,
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 import { formatDateTime, formatTime, isSameDay } from '../lib/timezone';
+import ThemedDatePicker from './ui/ThemedDatePicker';
 
 const STATUS_STYLES = {
   CONFIRMED: 'bg-green-100 text-green-700 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800',
@@ -60,6 +63,10 @@ export default function AppointmentManager() {
   const [error, setError] = useState(null);
   const [providers, setProviders] = useState([]);
   const [selectedProvider, setSelectedProvider] = useState(null);
+  // When set, the grid highlights this exact day inside the visible week.
+  // Used by the calendar date picker so admins can jump to a date and have
+  // it stand out in the week grid.
+  const [highlightedDate, setHighlightedDate] = useState(null);
 
   // Notes editing state
   const [editingNotes, setEditingNotes] = useState(false);
@@ -68,6 +75,7 @@ export default function AppointmentManager() {
 
   // Status update state
   const [updatingStatus, setUpdatingStatus] = useState(false);
+  const [confirmAction, setConfirmAction] = useState(null); // { action: 'attended'|'no-show'|'cancel', id: number }
 
   useEffect(() => {
     fetchAppointments();
@@ -123,20 +131,21 @@ export default function AppointmentManager() {
   }
 
   async function handleCancel(id) {
-    if (!confirm('Are you sure you want to cancel this appointment?')) return;
+    setUpdatingStatus(true);
     try {
       await apiFetch(`/api/appointments/${id}/cancel`, { method: 'POST' });
       setSelectedApt(null);
+      setConfirmAction(null);
       fetchAppointments();
     } catch (err) {
       console.error('Cancel failed:', err);
       alert(err.message || 'Cancel failed');
+    } finally {
+      setUpdatingStatus(false);
     }
   }
 
   async function handleStatusUpdate(id, newStatus) {
-    const labels = { COMPLETED: 'attended', NO_SHOW: 'no-show' };
-    if (!confirm(`Mark this appointment as ${labels[newStatus] || newStatus}?`)) return;
     setUpdatingStatus(true);
     try {
       const result = await apiFetch(`/api/appointments/${id}`, {
@@ -145,6 +154,7 @@ export default function AppointmentManager() {
       });
       // Update the selected appointment in-place
       setSelectedApt((prev) => prev ? { ...prev, status: result.current_status, notes: result.notes } : null);
+      setConfirmAction(null);
       fetchAppointments();
     } catch (err) {
       console.error('Status update failed:', err);
@@ -170,6 +180,30 @@ export default function AppointmentManager() {
     } finally {
       setSavingNotes(false);
     }
+  }
+
+  // Compute the Monday of any given date (ISO week start).
+  function mondayOf(date) {
+    const d = new Date(date);
+    d.setHours(0, 0, 0, 0);
+    const dayIdx = d.getDay(); // 0 = Sun
+    const diff = dayIdx === 0 ? -6 : 1 - dayIdx;
+    d.setDate(d.getDate() + diff);
+    return d;
+  }
+
+  // Jump to a specific date — set weekOffset so the date appears in the week
+  // grid and highlight it. Used by the calendar date picker.
+  function jumpToDate(date) {
+    if (!date) return;
+    const target = new Date(date);
+    target.setHours(0, 0, 0, 0);
+    const targetMonday = mondayOf(target);
+    const todayMonday = mondayOf(new Date());
+    const diffMs = targetMonday - todayMonday;
+    const diffWeeks = Math.round(diffMs / (7 * 24 * 60 * 60 * 1000));
+    setWeekOffset(diffWeeks);
+    setHighlightedDate(target);
   }
 
   // Build a week grid
@@ -212,23 +246,23 @@ export default function AppointmentManager() {
           <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Appointments</h2>
           <p className="text-gray-500 dark:text-gray-400 mt-1">{appointments.length} total appointments</p>
         </div>
-        <div className="flex items-center gap-3">
-          {/* Provider filter */}
-          <div className="relative flex items-center">
-            <Users className="absolute left-2.5 w-4 h-4 text-gray-400 pointer-events-none" />
-            <select
-              value={selectedProvider || ''}
-              onChange={(e) => setSelectedProvider(e.target.value || null)}
-              className="pl-8 pr-3 py-2 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors appearance-none cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary-300 focus:border-primary-300"
-            >
-              <option value="">All Providers</option>
-              {providers.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </div>
+        <div className="flex items-center gap-3 flex-wrap">
+          {/* Polished provider dropdown — replaces the basic <select> */}
+          <ProviderPicker
+            providers={providers}
+            value={selectedProvider}
+            onChange={setSelectedProvider}
+          />
+
+          {/* Date picker — jump to any date's week */}
+          <ThemedDatePicker
+            value={highlightedDate}
+            onChange={jumpToDate}
+            onClear={() => setHighlightedDate(null)}
+            accent="amber"
+            placeholder="Pick a date"
+          />
+
           <button
             onClick={handleSyncGcal}
             disabled={syncing}
@@ -253,7 +287,7 @@ export default function AppointmentManager() {
             <ChevronLeft className="w-4 h-4 text-gray-600 dark:text-gray-400" />
           </button>
           <button
-            onClick={() => setWeekOffset(0)}
+            onClick={() => { setWeekOffset(0); setHighlightedDate(null); }}
             className="px-3 py-2 text-sm font-medium text-primary-600 dark:text-primary-400 bg-primary-50 dark:bg-primary-900/30 rounded-lg hover:bg-primary-100 dark:hover:bg-primary-900/50 transition-colors"
           >
             This Week
@@ -300,28 +334,45 @@ export default function AppointmentManager() {
         {weekDays.map((day) => {
           const dayApts = getAppointmentsForDay(day);
           const isToday = day.toDateString() === today.toDateString();
+          const isHighlighted =
+            highlightedDate && day.toDateString() === highlightedDate.toDateString();
           const isSunday = day.getDay() === 0;
           const isPast = day < today && !isToday;
+
+          // Border / ring resolution: highlighted picked-date wins over today.
+          let borderRing =
+            'border-gray-200 dark:border-gray-700';
+          if (isHighlighted) {
+            borderRing =
+              'border-amber-400 dark:border-amber-500 ring-2 ring-amber-300 dark:ring-amber-700';
+          } else if (isToday) {
+            borderRing =
+              'border-primary-400 dark:border-primary-500 ring-1 ring-primary-200 dark:ring-primary-800';
+          }
 
           return (
             <div
               key={day.toISOString()}
-              className={`bg-white dark:bg-gray-800 rounded-xl border min-h-[200px] ${
-                isToday
-                  ? 'border-primary-400 dark:border-primary-500 ring-1 ring-primary-200 dark:ring-primary-800'
-                  : 'border-gray-200 dark:border-gray-700'
-              } ${isSunday ? 'opacity-50' : ''} ${isPast ? 'opacity-80' : ''}`}
+              className={`bg-white dark:bg-gray-800 rounded-xl border min-h-[200px] ${borderRing} ${isSunday ? 'opacity-50' : ''} ${isPast ? 'opacity-80' : ''}`}
             >
               {/* Day header */}
               <div className={`px-3 py-2 border-b text-center ${
-                isToday
+                isHighlighted
+                  ? 'bg-amber-50 dark:bg-amber-900/30 border-amber-200 dark:border-amber-800'
+                  : isToday
                   ? 'bg-primary-50 dark:bg-primary-900/30 border-primary-200 dark:border-primary-800'
                   : 'bg-gray-50 dark:bg-gray-700/50 border-gray-100 dark:border-gray-700'
               }`}>
                 <p className="text-xs text-gray-500 dark:text-gray-400 uppercase">
                   {day.toLocaleDateString('en-US', { weekday: 'short' })}
                 </p>
-                <p className={`text-lg font-bold ${isToday ? 'text-primary-600 dark:text-primary-400' : 'text-gray-900 dark:text-white'}`}>
+                <p className={`text-lg font-bold ${
+                  isHighlighted
+                    ? 'text-amber-600 dark:text-amber-400'
+                    : isToday
+                    ? 'text-primary-600 dark:text-primary-400'
+                    : 'text-gray-900 dark:text-white'
+                }`}>
                   {day.getDate()}
                 </p>
               </div>
@@ -386,7 +437,7 @@ export default function AppointmentManager() {
               <DetailRow icon={PhoneIcon} label="Phone" value={selectedApt.patient_phone} />
               <DetailRow icon={Mail} label="Email" value={selectedApt.patient_email || '—'} />
               <DetailRow icon={CalendarDays} label="Type" value={selectedApt.appointment_type} />
-              <DetailRow icon={UserCog} label="Provider" value={selectedApt.provider_name || '—'} />
+              <DetailRow icon={UserCog} label="Doctor" value={selectedApt.provider_name || '—'} />
               <DetailRow
                 icon={Clock}
                 label="Scheduled"
@@ -469,7 +520,7 @@ export default function AppointmentManager() {
                     </p>
                     <div className="flex gap-2">
                       <button
-                        onClick={() => handleStatusUpdate(selectedApt.id, 'COMPLETED')}
+                        onClick={() => setConfirmAction({ action: 'attended', id: selectedApt.id, status: 'COMPLETED' })}
                         disabled={updatingStatus}
                         className="flex-1 flex items-center justify-center gap-1.5 py-2.5 px-4 bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800 rounded-lg text-sm font-medium hover:bg-emerald-100 dark:hover:bg-emerald-900/50 disabled:opacity-50 transition-colors"
                       >
@@ -477,7 +528,7 @@ export default function AppointmentManager() {
                         Attended
                       </button>
                       <button
-                        onClick={() => handleStatusUpdate(selectedApt.id, 'NO_SHOW')}
+                        onClick={() => setConfirmAction({ action: 'no-show', id: selectedApt.id, status: 'NO_SHOW' })}
                         disabled={updatingStatus}
                         className="flex-1 flex items-center justify-center gap-1.5 py-2.5 px-4 bg-amber-50 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 border border-amber-200 dark:border-amber-800 rounded-lg text-sm font-medium hover:bg-amber-100 dark:hover:bg-amber-900/50 disabled:opacity-50 transition-colors"
                       >
@@ -491,7 +542,7 @@ export default function AppointmentManager() {
                 {/* Correction: NO_SHOW → mark as actually attended */}
                 {selectedApt.status === 'NO_SHOW' && (
                   <button
-                    onClick={() => handleStatusUpdate(selectedApt.id, 'COMPLETED')}
+                    onClick={() => setConfirmAction({ action: 'correct-attended', id: selectedApt.id, status: 'COMPLETED' })}
                     disabled={updatingStatus}
                     className="w-full flex items-center justify-center gap-1.5 py-2.5 px-4 bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800 rounded-lg text-sm font-medium hover:bg-emerald-100 dark:hover:bg-emerald-900/50 disabled:opacity-50 transition-colors"
                   >
@@ -503,7 +554,7 @@ export default function AppointmentManager() {
                 {/* Correction: COMPLETED → mark as actually no-show */}
                 {selectedApt.status === 'COMPLETED' && (
                   <button
-                    onClick={() => handleStatusUpdate(selectedApt.id, 'NO_SHOW')}
+                    onClick={() => setConfirmAction({ action: 'correct-no-show', id: selectedApt.id, status: 'NO_SHOW' })}
                     disabled={updatingStatus}
                     className="w-full flex items-center justify-center gap-1.5 py-2.5 px-4 bg-amber-50 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 border border-amber-200 dark:border-amber-800 rounded-lg text-sm font-medium hover:bg-amber-100 dark:hover:bg-amber-900/50 disabled:opacity-50 transition-colors"
                   >
@@ -515,13 +566,59 @@ export default function AppointmentManager() {
                 {/* Future CONFIRMED → cancel */}
                 {selectedApt.status === 'CONFIRMED' && !isPastAppointment(selectedApt) && (
                   <button
-                    onClick={() => handleCancel(selectedApt.id)}
+                    onClick={() => setConfirmAction({ action: 'cancel', id: selectedApt.id })}
                     className="w-full py-2.5 px-4 bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-800 rounded-lg text-sm font-medium hover:bg-red-100 dark:hover:bg-red-900/50 transition-colors"
                   >
                     Cancel Appointment
                   </button>
                 )}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation modal */}
+      {confirmAction && (
+        <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4" onClick={() => setConfirmAction(null)}>
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-sm w-full p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-bold text-gray-900 dark:text-white">
+              {confirmAction.action === 'cancel' ? 'Cancel Appointment?' : 'Update Status?'}
+            </h3>
+            <p className="text-sm text-gray-600 dark:text-gray-400">
+              {confirmAction.action === 'attended' && 'Mark this appointment as attended?'}
+              {confirmAction.action === 'no-show' && 'Mark this appointment as no-show?'}
+              {confirmAction.action === 'correct-attended' && 'Change status from No Show to Attended?'}
+              {confirmAction.action === 'correct-no-show' && 'Change status from Attended to No Show?'}
+              {confirmAction.action === 'cancel' && 'Are you sure you want to cancel this appointment?'}
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setConfirmAction(null)}
+                disabled={updatingStatus}
+                className="flex-1 px-4 py-2.5 border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (confirmAction.action === 'cancel') {
+                    handleCancel(confirmAction.id);
+                  } else {
+                    handleStatusUpdate(confirmAction.id, confirmAction.status);
+                  }
+                }}
+                disabled={updatingStatus}
+                className={`flex-1 px-4 py-2.5 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors ${
+                  confirmAction.action === 'cancel'
+                    ? 'bg-red-500 text-white hover:bg-red-600'
+                    : confirmAction.status === 'COMPLETED'
+                    ? 'bg-emerald-500 text-white hover:bg-emerald-600'
+                    : 'bg-amber-500 text-white hover:bg-amber-600'
+                }`}
+              >
+                {updatingStatus ? 'Updating...' : 'Confirm'}
+              </button>
             </div>
           </div>
         </div>
@@ -541,3 +638,99 @@ function DetailRow({ icon: Icon, label, value }) {
     </div>
   );
 }
+
+// ── Polished provider picker (replaces the native <select>) ────────────────
+function ProviderPicker({ providers, value, onChange }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  const selected = providers.find((p) => p.id === value);
+
+  // Close on outside click / Escape
+  useEffect(() => {
+    function onDoc(e) {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') setOpen(false);
+    }
+    if (open) {
+      document.addEventListener('mousedown', onDoc);
+      document.addEventListener('keydown', onKey);
+    }
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className={`flex items-center gap-2 pl-3 pr-2 py-2 rounded-lg border text-sm font-medium transition-colors min-w-[180px] ${
+          selected
+            ? 'border-primary-200 dark:border-primary-700 bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 hover:bg-primary-100 dark:hover:bg-primary-900/50'
+            : 'border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600'
+        }`}
+      >
+        <Users className="w-4 h-4 shrink-0" />
+        <span className="flex-1 text-left truncate">
+          {selected ? selected.name : 'All Doctors'}
+        </span>
+        <ChevronDown
+          className={`w-4 h-4 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`}
+        />
+      </button>
+
+      {open && (
+        <div className="absolute top-full left-0 mt-1 w-64 max-h-80 overflow-y-auto bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-xl z-30 py-1">
+          <button
+            type="button"
+            onClick={() => { onChange(null); setOpen(false); }}
+            className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors ${
+              !value ? 'text-primary-700 dark:text-primary-300 font-medium' : 'text-gray-700 dark:text-gray-300'
+            }`}
+          >
+            <Users className="w-4 h-4 text-gray-400 shrink-0" />
+            <span className="flex-1">All Doctors</span>
+            {!value && <Check className="w-4 h-4 text-primary-500 shrink-0" />}
+          </button>
+          {providers.length === 0 ? (
+            <p className="px-3 py-2 text-xs text-gray-400 dark:text-gray-500 italic">
+              No doctors configured yet.
+            </p>
+          ) : (
+            providers.map((p) => {
+              const isSelected = p.id === value;
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => { onChange(p.id); setOpen(false); }}
+                  className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors ${
+                    isSelected ? 'text-primary-700 dark:text-primary-300 font-medium' : 'text-gray-700 dark:text-gray-300'
+                  }`}
+                >
+                  <div className="w-7 h-7 rounded-full bg-gradient-to-br from-primary-100 to-primary-200 dark:from-primary-900/50 dark:to-primary-800/50 flex items-center justify-center shrink-0">
+                    <span className="text-xs font-semibold text-primary-700 dark:text-primary-300">
+                      {(p.name || '?').charAt(0).toUpperCase()}
+                    </span>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="truncate">{p.name}</p>
+                    {p.specialty && (
+                      <p className="text-[11px] text-gray-400 dark:text-gray-500 truncate">{p.specialty}</p>
+                    )}
+                  </div>
+                  {isSelected && <Check className="w-4 h-4 text-primary-500 shrink-0" />}
+                </button>
+              );
+            })
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+

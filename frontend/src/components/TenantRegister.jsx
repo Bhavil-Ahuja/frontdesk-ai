@@ -7,13 +7,16 @@ import {
   Phone,
   Lock,
   Clock,
-  CreditCard,
   AlertCircle,
   ArrowRight,
   Sparkles,
   MapPin,
+  PhoneCall,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import ThemeToggle from './ThemeToggle';
+import ThemedSelect from './ui/ThemedSelect';
+import { timezoneOptions } from '../lib/timezones';
 
 const BUSINESS_TYPES = [
   { value: 'dental', label: 'Dental Office' },
@@ -24,55 +27,24 @@ const BUSINESS_TYPES = [
   { value: 'custom', label: 'Other / Custom' },
 ];
 
-const PLAN_TIERS = [
-  {
-    value: 'starter',
-    label: 'Starter',
-    price: '$49/mo',
-    description: 'Up to 200 calls/month, 1 phone line',
-  },
-  {
-    value: 'professional',
-    label: 'Professional',
-    price: '$149/mo',
-    description: 'Up to 1,000 calls/month, 3 phone lines, SMS reminders',
-  },
-  {
-    value: 'enterprise',
-    label: 'Enterprise',
-    price: 'Custom',
-    description: 'Unlimited calls, dedicated support, custom integrations',
-  },
-];
-
-const TIMEZONES = [
-  'America/New_York',
-  'America/Chicago',
-  'America/Denver',
-  'America/Los_Angeles',
-  'America/Phoenix',
-  'America/Anchorage',
-  'Pacific/Honolulu',
-  'America/Toronto',
-  'America/Vancouver',
-  'Europe/London',
-  'Europe/Berlin',
-  'Asia/Tokyo',
-  'Australia/Sydney',
-];
+// Full IANA timezone list — built lazily at module load from
+// `Intl.supportedValuesOf('timeZone')` so the dropdown always matches what
+// the browser will accept. Falls back to a curated static list for older
+// browsers. The same options module is used everywhere timezone is picked.
+const TIMEZONE_OPTIONS = timezoneOptions();
 
 const INITIAL_FORM = {
-  slug: '',
   business_name: '',
   business_type: 'custom',
   business_address: '',
+  google_maps_url: '',
   owner_name: '',
   owner_email: '',
   owner_phone: '',
+  escalation_phone: '',
   password: '',
   password_confirm: '',
   timezone: 'America/Chicago',
-  plan: 'starter',
 };
 
 export default function TenantRegister() {
@@ -81,39 +53,45 @@ export default function TenantRegister() {
   const [form, setForm] = useState({ ...INITIAL_FORM });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
-  const [slugTouched, setSlugTouched] = useState(false);
+  const [escalationSameAsPhone, setEscalationSameAsPhone] = useState(false);
 
   function updateField(field, value) {
-    setForm((prev) => ({ ...prev, [field]: value }));
+    setForm((prev) => {
+      const next = { ...prev, [field]: value };
+      // If "same as phone" is checked and we're updating owner_phone,
+      // also update escalation_phone to stay in sync.
+      if (field === 'owner_phone' && escalationSameAsPhone) {
+        next.escalation_phone = value;
+      }
+      return next;
+    });
   }
 
-  // Auto-generate slug from business name unless manually edited
-  function handleBusinessNameChange(value) {
-    updateField('business_name', value);
-    if (!slugTouched) {
-      const autoSlug = value
-        .toLowerCase()
-        .replace(/[^a-z0-9\s-]/g, '')
-        .trim()
-        .replace(/\s+/g, '-')
-        .slice(0, 100);
-      updateField('slug', autoSlug);
+  function handleEscalationCheckbox(checked) {
+    setEscalationSameAsPhone(checked);
+    if (checked) {
+      updateField('escalation_phone', form.owner_phone);
     }
   }
 
-  function handleSlugChange(value) {
-    setSlugTouched(true);
-    updateField('slug', value.toLowerCase().replace(/[^a-z0-9_-]/g, ''));
-  }
-
   function isValid() {
+    const mapUrl = (form.google_maps_url || '').toLowerCase().trim();
+    const mapUrlOk =
+      mapUrl.startsWith('http') &&
+      mapUrl.length >= 10 &&
+      (
+        (mapUrl.includes('google') && mapUrl.includes('map')) ||
+        mapUrl.includes('goo.gl/maps') ||
+        mapUrl.includes('maps.app.goo.gl')
+      );
     return (
-      form.slug.length >= 2 &&
       form.business_name.length >= 2 &&
       form.business_address.length >= 5 &&
+      mapUrlOk &&
       form.owner_name.length >= 2 &&
       form.owner_email.includes('@') &&
       form.owner_phone.length >= 5 &&
+      form.escalation_phone.length >= 5 &&
       form.password.length >= 8 &&
       form.password === form.password_confirm
     );
@@ -130,7 +108,7 @@ export default function TenantRegister() {
       const payload = { ...form };
       delete payload.password_confirm;
 
-      // Register + auto-login
+      // Register + auto-login (slug is generated server-side)
       const user = await register(payload);
 
       // Newly registered users are PENDING — go to waiting page
@@ -153,14 +131,15 @@ export default function TenantRegister() {
     'w-full px-4 py-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none';
   const inputWithIconClass =
     'w-full pl-10 pr-4 py-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none';
-  const selectClass =
-    'w-full px-4 py-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none';
-  const selectWithIconClass =
-    'w-full pl-10 pr-4 py-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none';
   const labelClass = 'block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5';
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-primary-50 via-gray-50 to-blue-50 dark:from-gray-900 dark:via-gray-900 dark:to-gray-900 py-12 px-4">
+    <div className="min-h-screen bg-gradient-to-br from-primary-50 via-gray-50 to-blue-50 dark:from-gray-900 dark:via-gray-900 dark:to-gray-900 py-12 px-4 relative">
+      {/* Theme toggle */}
+      <div className="absolute top-4 right-4">
+        <ThemeToggle />
+      </div>
+
       <div className="max-w-3xl mx-auto">
         {/* Header */}
         <div className="text-center mb-8">
@@ -173,7 +152,7 @@ export default function TenantRegister() {
           <div className="mx-auto w-14 h-14 bg-primary-500 rounded-2xl flex items-center justify-center mb-4 shadow-lg shadow-primary-500/30">
             <Sparkles className="w-7 h-7 text-white" />
           </div>
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Get Started with Scheduler.ai</h1>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Get Started with FrontDesk AI</h1>
           <p className="text-gray-500 dark:text-gray-400 mt-2 max-w-xl mx-auto">
             Register your business to get an AI-powered voice agent that handles scheduling,
             reminders, and patient calls 24/7.
@@ -203,7 +182,7 @@ export default function TenantRegister() {
                 <input
                   type="text"
                   value={form.business_name}
-                  onChange={(e) => handleBusinessNameChange(e.target.value)}
+                  onChange={(e) => updateField('business_name', e.target.value)}
                   placeholder="Sunrise Clinic"
                   required
                   minLength={2}
@@ -213,60 +192,31 @@ export default function TenantRegister() {
 
               <div>
                 <label className={labelClass}>
-                  URL Slug <span className="text-red-400">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={form.slug}
-                  onChange={(e) => handleSlugChange(e.target.value)}
-                  placeholder="sunrise-clinic"
-                  required
-                  minLength={2}
-                  maxLength={100}
-                  pattern="^[a-z0-9_-]+$"
-                  className={`${inputClass} font-mono`}
-                />
-                <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
-                  Lowercase letters, numbers, hyphens only
-                </p>
-              </div>
-
-              <div>
-                <label className={labelClass}>
                   Business Type
                 </label>
-                <select
+                <ThemedSelect
                   value={form.business_type}
-                  onChange={(e) => updateField('business_type', e.target.value)}
-                  className={selectClass}
-                >
-                  {BUSINESS_TYPES.map((bt) => (
-                    <option key={bt.value} value={bt.value}>
-                      {bt.label}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(v) => updateField('business_type', v)}
+                  options={BUSINESS_TYPES}
+                />
               </div>
 
-              <div>
+              <div className="md:col-span-2">
                 <label className={labelClass}>
                   Timezone <span className="text-red-400">*</span>
                 </label>
-                <div className="relative">
-                  <Clock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                  <select
-                    value={form.timezone}
-                    onChange={(e) => updateField('timezone', e.target.value)}
-                    required
-                    className={selectWithIconClass}
-                  >
-                    {TIMEZONES.map((tz) => (
-                      <option key={tz} value={tz}>
-                        {tz.replace(/_/g, ' ')}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                <ThemedSelect
+                  value={form.timezone}
+                  onChange={(v) => updateField('timezone', v)}
+                  icon={Clock}
+                  options={TIMEZONE_OPTIONS}
+                  searchable
+                  searchPlaceholder="Search timezones..."
+                />
+                <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+                  Timezone is permanent — choose carefully. It can't be changed
+                  after registration.
+                </p>
               </div>
 
               <div className="md:col-span-2">
@@ -285,6 +235,31 @@ export default function TenantRegister() {
                     className={inputWithIconClass}
                   />
                 </div>
+              </div>
+
+              <div className="md:col-span-2">
+                <label className={labelClass}>
+                  Google Maps Link <span className="text-red-400">*</span>
+                </label>
+                <div className="relative">
+                  <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                  <input
+                    type="url"
+                    value={form.google_maps_url}
+                    onChange={(e) => updateField('google_maps_url', e.target.value)}
+                    placeholder="https://maps.app.goo.gl/…  or  https://www.google.com/maps/place/…"
+                    required
+                    minLength={10}
+                    maxLength={2048}
+                    className={inputWithIconClass}
+                  />
+                </div>
+                <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+                  Paste a Google Maps share link to your clinic. Used by admins to
+                  verify your location and shared with patients in SMS/email
+                  reminders. Open Google Maps → search for your clinic → tap
+                  "Share" → "Copy link".
+                </p>
               </div>
             </div>
           </div>
@@ -356,6 +331,58 @@ export default function TenantRegister() {
             </div>
           </div>
 
+          {/* Escalation — required so emergencies always have a live human fallback */}
+          <div className="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-sm p-6 space-y-5">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+              <PhoneCall className="w-5 h-5 text-primary-500" />
+              Emergency Escalation
+            </h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400 -mt-2">
+              When a caller has a medical emergency or asks for a human, the AI will
+              transfer the call to this number. This is required so emergencies always
+              reach a live person.
+            </p>
+
+            <div>
+              <div className="flex items-center gap-2 mb-3">
+                <input
+                  type="checkbox"
+                  id="escalation-same"
+                  checked={escalationSameAsPhone}
+                  onChange={(e) => handleEscalationCheckbox(e.target.checked)}
+                  className="w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-primary-500 focus:ring-primary-500"
+                />
+                <label htmlFor="escalation-same" className="text-sm text-gray-600 dark:text-gray-400 cursor-pointer">
+                  Same as owner phone number
+                </label>
+              </div>
+
+              <label className={labelClass}>
+                Escalation Phone Number <span className="text-red-400">*</span>
+              </label>
+              <div className="relative">
+                <PhoneCall className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                <input
+                  type="tel"
+                  value={form.escalation_phone}
+                  onChange={(e) => {
+                    setEscalationSameAsPhone(false);
+                    updateField('escalation_phone', e.target.value);
+                  }}
+                  placeholder="+1 (512) 555-0200"
+                  required
+                  minLength={5}
+                  disabled={escalationSameAsPhone}
+                  className={`${inputWithIconClass} ${escalationSameAsPhone ? 'opacity-60 cursor-not-allowed' : ''}`}
+                />
+              </div>
+              <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+                Usually your front desk or on-call provider. You can add custom
+                emergency guidance text later from the Agent Config page.
+              </p>
+            </div>
+          </div>
+
           {/* Password */}
           <div className="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-sm p-6 space-y-5">
             <h3 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
@@ -409,41 +436,6 @@ export default function TenantRegister() {
                   <p className="text-xs text-red-500 mt-1">Passwords do not match</p>
                 )}
               </div>
-            </div>
-          </div>
-
-          {/* Plan Selection */}
-          <div className="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-sm p-6 space-y-5">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
-              <CreditCard className="w-5 h-5 text-primary-500" />
-              Choose a Plan
-            </h3>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {PLAN_TIERS.map((plan) => (
-                <button
-                  key={plan.value}
-                  type="button"
-                  onClick={() => updateField('plan', plan.value)}
-                  className={`text-left p-4 rounded-xl border-2 transition-all ${
-                    form.plan === plan.value
-                      ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20 ring-1 ring-primary-500'
-                      : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500 bg-white dark:bg-gray-700'
-                  }`}
-                >
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-sm font-semibold text-gray-900 dark:text-white">{plan.label}</span>
-                    <span
-                      className={`text-sm font-bold ${
-                        form.plan === plan.value ? 'text-primary-600 dark:text-primary-400' : 'text-gray-500 dark:text-gray-400'
-                      }`}
-                    >
-                      {plan.price}
-                    </span>
-                  </div>
-                  <p className="text-xs text-gray-500 dark:text-gray-400">{plan.description}</p>
-                </button>
-              ))}
             </div>
           </div>
 

@@ -256,6 +256,8 @@ async def get_config(current_user: Tenant = Depends(auth_service.get_current_use
         "demo_mode": bool(t.demo_mode),
         "appointment_types": t.appointment_types or [],
         "emergency_guidance": t.emergency_guidance or "",
+        # One-off holiday closures — admin manages [{date, name}, ...]
+        "holidays": t.holidays or [],
         # Integration credentials — never return raw secrets, only:
         # (a) booleans so the UI can show "Connected", and
         # (b) non-sensitive identifiers (assistant ID, phone number, username, event slug)
@@ -311,8 +313,12 @@ async def update_config(
     Accepted keys:
       agent_name, escalation_phone, escalation_transfer_number, business_hours,
       greeting_message, voice_id, voice_provider, business_name, business_phone,
-      business_address, timezone, demo_mode, appointment_types, emergency_guidance,
+      business_address, demo_mode, appointment_types, emergency_guidance,
       reminder_settings, review_settings
+
+    NOTE: `timezone` is intentionally NOT accepted here — it's fixed at
+    registration to keep appointment/slot history coherent. Trying to send
+    a different timezone is silently ignored.
     """
     logger.info("Agent config update by %s", current_user.owner_email)
     try:
@@ -324,8 +330,8 @@ async def update_config(
 
     for k in (
         "agent_name", "escalation_phone", "escalation_transfer_number",
-        "business_hours", "greeting_message", "business_name",
-        "business_phone", "business_address", "timezone",
+        "business_hours", "holidays", "greeting_message", "business_name",
+        "business_phone", "business_address",
         "demo_mode", "appointment_types", "emergency_guidance",
         # Integration credentials — accept as plain text from authenticated tenant
         "vapi_api_key", "vapi_assistant_id", "vapi_phone_number_id",
@@ -355,12 +361,46 @@ async def update_config(
     if not updated:
         raise HTTPException(status_code=404, detail="Tenant not found.")
 
-    # Also clear slot cache if business_hours or timezone changed — affects availability
-    if "business_hours" in update_fields or "timezone" in update_fields:
+    # Also clear slot cache if business_hours or holidays changed — both
+    # directly affect day-level availability. (Timezone is fixed at
+    # registration, so it can never change here.)
+    if (
+        "business_hours" in update_fields
+        or "holidays" in update_fields
+    ):
         calendar_service.invalidate_slot_cache(current_user.slug)
         logger.info("Slot cache cleared for %s due to config change", current_user.slug)
 
-    return {"status": "saved", "updated_fields": list(update_fields.keys())}
+    # If anything that affects the Vapi assistant changed (voice, greeting, agent
+    # name), patch the live assistant so the phone agent matches what the user
+    # just saved. Best-effort — failures are logged and don't break the save.
+    _vapi_relevant = {"voice_config", "greeting_message", "agent_name", "business_name"}
+    vapi_synced = False
+    if _vapi_relevant & set(update_fields.keys()):
+        try:
+            tenant_ctx = await tenant_service.resolve_by_id(current_user.id)
+            if tenant_ctx and tenant_ctx.vapi_api_key and tenant_ctx.vapi_assistant_id:
+                from backend.services import vapi_service
+                new_id = await vapi_service.register_assistant(tenant_ctx=tenant_ctx)
+                vapi_synced = bool(new_id)
+                logger.info(
+                    "[Config] Vapi assistant sync for %s: %s",
+                    current_user.slug,
+                    "ok" if vapi_synced else "skipped/failed",
+                )
+            else:
+                logger.info(
+                    "[Config] Skipping Vapi sync for %s — credentials missing",
+                    current_user.slug,
+                )
+        except Exception as exc:
+            logger.warning("[Config] Vapi assistant sync error: %s", exc)
+
+    return {
+        "status": "saved",
+        "updated_fields": list(update_fields.keys()),
+        "vapi_synced": vapi_synced,
+    }
 
 
 # ── Voice preview (ElevenLabs TTS) ──────────────────────────────────────────

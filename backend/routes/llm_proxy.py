@@ -618,6 +618,58 @@ async def _stream_with_tools_sse(
                 logger.info("[LLM Proxy]   🔧 RESULT: %s",
                             json.dumps(tool_result, default=str)[:500])
 
+                # ── Vapi live-transfer ───────────────────────────────────
+                # If the LLM called escalate_to_human and the tenant has a
+                # transfer number configured, emit a Vapi `transferCall`
+                # tool-call so Vapi actually hands the call off to a real
+                # human phone line. Otherwise the SMS alert alone fires and
+                # the agent only says "I've notified the team".
+                if (
+                    fn_name == "escalate_to_human"
+                    and isinstance(tool_result, dict)
+                    and tool_result.get("action") == "transfer"
+                ):
+                    transfer_dest = (tool_result.get("destination") or "").strip()
+                    if not transfer_dest and tenant_ctx:
+                        transfer_dest = (
+                            tenant_ctx.escalation_transfer_number
+                            or tenant_ctx.escalation_phone
+                            or ""
+                        ).strip()
+                    if transfer_dest:
+                        logger.info(
+                            "[LLM Proxy] 📞 escalate_to_human → emitting Vapi transferCall to %s",
+                            transfer_dest,
+                        )
+                        # Speak a short hand-off line, then emit transferCall
+                        # as a streamed tool_calls delta so Vapi acts on it.
+                        handoff = "Let me transfer you to one of our team members now. Please hold."
+                        words = handoff.split(" ")
+                        for i in range(0, len(words), 3):
+                            chunk_text = " ".join(words[i:i+3])
+                            if i > 0:
+                                chunk_text = " " + chunk_text
+                            yield _sse({"content": chunk_text})
+                            full_content += chunk_text
+                        yield _sse({
+                            "tool_calls": [{
+                                "index": 0,
+                                "id": f"call_transfer_{int(time.time())}",
+                                "type": "function",
+                                "function": {
+                                    "name": "transferCall",
+                                    "arguments": json.dumps({"destination": transfer_dest}),
+                                },
+                            }]
+                        })
+                        yield _sse({}, finish_reason="tool_calls")
+                        yield "data: [DONE]\n\n"
+                        return
+                    else:
+                        logger.info(
+                            "[LLM Proxy] escalate_to_human ran but no transfer number set — SMS alert only"
+                        )
+
                 messages.append({
                     "role": "assistant",
                     "content": None,

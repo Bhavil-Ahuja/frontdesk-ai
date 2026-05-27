@@ -226,6 +226,7 @@ async def book_appointment(
     start_time: str,
     tenant_ctx: Any | None = None,
     appointment_type_key: str = "",
+    provider_id: Any | None = None,
     *,
     event_type_id: str = "",  # deprecated, kept for call-site compat
 ) -> dict[str, Any] | None:
@@ -240,9 +241,16 @@ async def book_appointment(
         tenant_ctx: TenantContext for multi-tenant routing.
         appointment_type_key: Raw appointment type key (e.g. "consultation")
             used to resolve duration from tenant config.
+        provider_id: Optional provider UUID (or string). For native bookings
+            this is persisted on the Appointment row and protected by a
+            unique partial index on (tenant_id, provider_id, scheduled_at).
+            For Google Calendar tenants the provider name is embedded into
+            the event title/description for visibility.
 
     Returns:
         Dict with id, uid, status on success; None on failure.
+        Returns {"status": "CONFLICT"} if a native booking lost the
+        unique-index race (slot was just taken by someone else).
     """
     slug = tenant_ctx.slug if tenant_ctx else "default"
     tz = tenant_ctx.timezone if tenant_ctx else settings.OFFICE_TIMEZONE
@@ -250,23 +258,54 @@ async def book_appointment(
     # Invalidate slot cache — the booking changes availability
     invalidate_slot_cache(slug)
 
+    # Normalize provider_id to UUID where possible (callers may pass a string)
+    import uuid as _uuid
+    provider_uuid: _uuid.UUID | None = None
+    if provider_id:
+        try:
+            provider_uuid = (
+                provider_id if isinstance(provider_id, _uuid.UUID) else _uuid.UUID(str(provider_id))
+            )
+        except (ValueError, TypeError):
+            logger.warning("[Calendar][%s] Ignoring invalid provider_id: %r", slug, provider_id)
+            provider_uuid = None
+
     # ── Priority 1: Google Calendar (if connected) ──────────────────────
     if tenant_ctx and tenant_ctx.google_calendar_connected and tenant_ctx.google_calendar_refresh_token:
         duration, _ = _resolve_appointment_config(appointment_type_key, tenant_ctx)
-        logger.info("[Calendar][%s] Using Google Calendar for booking (type=%s, duration=%d)", slug, appointment_type_key, duration)
+
+        # Resolve provider name for the event title/description
+        provider_name: str | None = None
+        if provider_uuid:
+            try:
+                from backend.services import provider_service
+                prov = await provider_service.get_provider(provider_uuid)
+                if prov:
+                    provider_name = prov.get("name")
+            except Exception as prov_exc:
+                logger.warning("[Calendar][%s] Provider lookup failed: %s", slug, prov_exc)
+
+        logger.info(
+            "[Calendar][%s] Using Google Calendar for booking (type=%s, duration=%d, provider=%s)",
+            slug, appointment_type_key, duration, provider_name or provider_uuid,
+        )
         return await gcal.book_appointment(
             refresh_token=tenant_ctx.google_calendar_refresh_token,
             patient_info=patient_info,
             start_time=start_time,
             duration_minutes=duration,
             timezone=tz,
+            provider_name=provider_name,
         )
 
     # ── Priority 2: Native scheduling (uses business_hours + Postgres) ──
     if tenant_ctx:
         duration, _ = _resolve_appointment_config(appointment_type_key, tenant_ctx)
         appt_type_key = appointment_type_key or "consultation"
-        logger.info("[Calendar][%s] Using native booking (type=%s, duration=%d)", slug, appt_type_key, duration)
+        logger.info(
+            "[Calendar][%s] Using native booking (type=%s, duration=%d, provider=%s)",
+            slug, appt_type_key, duration, provider_uuid,
+        )
 
         return await native_scheduling.create_native_booking(
             tenant_id=tenant_ctx.tenant_id,
@@ -274,6 +313,7 @@ async def book_appointment(
             appointment_type=appt_type_key,
             start_time=start_time,
             duration_minutes=duration,
+            provider_id=provider_uuid,
         )
 
     # ── Priority 3: Demo mode fallback (no real calendar configured) ────

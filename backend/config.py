@@ -11,9 +11,30 @@ load_dotenv()
 class Settings:
     """Central configuration loaded from .env file."""
 
-    # ── Ollama / LLM ──────────────────────────────────────────────────────
+    # ── LLM Backend ───────────────────────────────────────────────────────
+    # LLM_PROVIDER: "ollama" (local) or "gemini" (Google free tier)
+    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "ollama")
+
+    # Ollama (local LLM)
     OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
+
+    # Gemini (Google free tier — 15 RPM, 1500/day for gemini-3.5-flash)
+    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+    # Max chat-history messages sent to Gemini per request. The full transcript
+    # is still saved in the session — only what's *forwarded* to the model is
+    # trimmed. Default is intentionally generous (200) because each tool round
+    # adds 2–3 history entries; a heavy booking call can easily hit 30+
+    # entries by turn 3. Set lower only if you're truly hitting context limits.
+    GEMINI_HISTORY_MAX_MESSAGES: int = int(os.getenv("GEMINI_HISTORY_MAX_MESSAGES", "200"))
+    # Enable explicit context caching for the system prompt + tools. When True,
+    # we create a CachedContent per tenant and reuse it across calls. Cuts
+    # per-call cost ~75% on the cached prefix. May not be supported by all
+    # models — leave False if you see "caching not supported" errors.
+    GEMINI_USE_CONTEXT_CACHE: bool = os.getenv("GEMINI_USE_CONTEXT_CACHE", "false").lower() == "true"
+    # TTL (seconds) for explicit context caches. Default 1 hour.
+    GEMINI_CACHE_TTL_SECONDS: int = int(os.getenv("GEMINI_CACHE_TTL_SECONDS", "3600"))
 
     # ── Vapi ──────────────────────────────────────────────────────────────
     VAPI_API_KEY: str = os.getenv("VAPI_API_KEY", "")
@@ -45,7 +66,7 @@ class Settings:
     ESCALATION_PHONE_NUMBER: str = os.getenv("ESCALATION_PHONE_NUMBER", "")
     ESCALATION_TRANSFER_NUMBER: str = os.getenv("ESCALATION_TRANSFER_NUMBER", "")
     OFFICE_TIMEZONE: str = os.getenv("OFFICE_TIMEZONE", "America/Chicago")
-    OFFICE_NAME: str = os.getenv("OFFICE_NAME", "Scheduler.ai")
+    OFFICE_NAME: str = os.getenv("OFFICE_NAME", "FrontDesk AI")
     DEMO_MODE: bool = os.getenv("DEMO_MODE", "true").lower() == "true"
     SERVER_BASE_URL: str = os.getenv("SERVER_BASE_URL", "http://localhost:8000")
 

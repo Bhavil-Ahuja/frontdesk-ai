@@ -325,6 +325,96 @@ def send_reschedule(
     return ok
 
 
+def send_waitlist_added(
+    patient_name: str,
+    phone: str,
+    appointment_type: str,
+    preferred_date: str,
+    preferred_time_start: str | None = None,
+    preferred_time_end: str | None = None,
+    tenant_ctx: Any | None = None,
+) -> bool:
+    """Confirm to the patient that they were added to the waitlist."""
+    biz = _business_name(tenant_ctx)
+    biz_phone = _business_phone_display(tenant_ctx)
+
+    # Format the preferred date as a friendly string when possible
+    try:
+        date_str = datetime.strptime(preferred_date, "%Y-%m-%d").strftime("%A, %B %d")
+    except (ValueError, TypeError):
+        date_str = preferred_date
+
+    window = ""
+    if preferred_time_start and preferred_time_end:
+        window = f" between {preferred_time_start}–{preferred_time_end}"
+    elif preferred_time_start:
+        window = f" after {preferred_time_start}"
+    elif preferred_time_end:
+        window = f" before {preferred_time_end}"
+
+    body = (
+        f"Hi {patient_name}! You're on the {biz} waitlist for a "
+        f"{appointment_type} on {date_str}{window}. We'll text you the moment "
+        f"a matching slot opens up. Questions? Call {biz_phone}."
+    )
+    ok = _send_sms(phone, body, tenant_ctx)
+    if ok:
+        _log_outbound_sms(tenant_ctx, to_number=phone, body=body, patient_phone=phone)
+    return ok
+
+
+def send_waitlist_promoted(
+    patient_name: str,
+    phone: str,
+    appointment_type: str,
+    scheduled_at: datetime,
+    tenant_ctx: Any | None = None,
+) -> bool:
+    """Notify the patient that their waitlist entry was promoted to a booked appointment."""
+    biz = _business_name(tenant_ctx)
+    biz_phone = _business_phone_display(tenant_ctx)
+    tz = _tz_abbrev(tenant_ctx)
+    local_dt = _to_local_time(scheduled_at, tenant_ctx)
+    date_str = local_dt.strftime("%A, %B %d, %Y")
+    time_str = local_dt.strftime("%I:%M %p").lstrip("0")
+    body = (
+        f"Hi {patient_name}! Great news — a {appointment_type} slot opened at "
+        f"{biz} and we've booked it for you on {date_str} at {time_str} {tz}. "
+        f"Need to change it? Call {biz_phone}. See you then!"
+    )
+    ok = _send_sms(phone, body, tenant_ctx)
+    if ok:
+        _log_outbound_sms(tenant_ctx, to_number=phone, body=body, patient_phone=phone)
+    return ok
+
+
+def send_waitlist_cancelled(
+    patient_name: str,
+    phone: str,
+    appointment_type: str,
+    preferred_date: str,
+    tenant_ctx: Any | None = None,
+) -> bool:
+    """Notify the patient that their waitlist entry was cancelled."""
+    biz = _business_name(tenant_ctx)
+    biz_phone = _business_phone_display(tenant_ctx)
+
+    try:
+        date_str = datetime.strptime(preferred_date, "%Y-%m-%d").strftime("%A, %B %d")
+    except (ValueError, TypeError):
+        date_str = preferred_date
+
+    body = (
+        f"Hi {patient_name}, your {biz} waitlist request for a "
+        f"{appointment_type} on {date_str} has been cancelled. "
+        f"Want back on the list? Call {biz_phone}."
+    )
+    ok = _send_sms(phone, body, tenant_ctx)
+    if ok:
+        _log_outbound_sms(tenant_ctx, to_number=phone, body=body, patient_phone=phone)
+    return ok
+
+
 def send_escalation_notification(
     patient_name: str,
     phone: str,
@@ -384,6 +474,30 @@ def send_reminder(
         f"Hi {patient_name}! Friendly reminder: your {appointment_type} at "
         f"{biz} is coming up today at {time_str} {tz}. "
         f"Need to reschedule? Call {biz_phone}. See you soon!"
+    )
+    ok = _send_sms(phone, body, tenant_ctx)
+    if ok:
+        _log_outbound_sms(tenant_ctx, to_number=phone, body=body, patient_phone=phone)
+    return ok
+
+
+def send_no_show(
+    patient_name: str,
+    phone: str,
+    appointment_type: str,
+    scheduled_at: datetime,
+    tenant_ctx: Any | None = None,
+) -> bool:
+    """Send a gentle no-show follow-up SMS inviting the patient to reschedule."""
+    biz = _business_name(tenant_ctx)
+    biz_phone = _business_phone_display(tenant_ctx)
+    local_dt = _to_local_time(scheduled_at, tenant_ctx)
+    date_str = local_dt.strftime("%A, %B %d")
+    time_str = local_dt.strftime("%I:%M %p").lstrip("0")
+    body = (
+        f"Hi {patient_name}, we missed you at your {appointment_type} on "
+        f"{date_str} at {time_str}. We hope everything is okay. "
+        f"Call {biz} at {biz_phone} to reschedule whenever you're ready."
     )
     ok = _send_sms(phone, body, tenant_ctx)
     if ok:

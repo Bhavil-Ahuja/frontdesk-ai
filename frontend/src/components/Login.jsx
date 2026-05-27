@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate, Link, useLocation } from 'react-router-dom';
 import { Mail, Lock, LogIn, AlertCircle, Sparkles, ArrowRight } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import ThemeToggle from './ThemeToggle';
 
 export default function Login() {
   const navigate = useNavigate();
@@ -36,7 +37,12 @@ export default function Login() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary-50 via-gray-50 to-blue-50 dark:from-gray-900 dark:via-gray-900 dark:to-gray-900 p-4">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary-50 via-gray-50 to-blue-50 dark:from-gray-900 dark:via-gray-900 dark:to-gray-900 p-4 relative">
+      {/* Theme toggle */}
+      <div className="absolute top-4 right-4">
+        <ThemeToggle />
+      </div>
+
       <div className="w-full max-w-md">
         {/* Logo */}
         <div className="text-center mb-8">
@@ -44,7 +50,7 @@ export default function Login() {
             <Sparkles className="w-7 h-7 text-white" />
           </div>
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Welcome back</h1>
-          <p className="text-gray-500 dark:text-gray-400 mt-1">Sign in to your Scheduler.ai dashboard</p>
+          <p className="text-gray-500 dark:text-gray-400 mt-1">Sign in to your FrontDesk AI dashboard</p>
         </div>
 
         {/* Card */}
@@ -121,7 +127,7 @@ export default function Login() {
         </div>
 
         <p className="text-center text-xs text-gray-400 dark:text-gray-500 mt-6">
-          By signing in, you agree to the Scheduler.ai terms of service.
+          By signing in, you agree to the FrontDesk AI terms of service.
         </p>
       </div>
     </div>

@@ -49,10 +49,14 @@ export async function apiFetch(path, options = {}) {
     headers.Authorization = `Bearer ${token}`;
   }
 
-  // Auto-stringify object bodies
+  // Auto-stringify object bodies. Also ensure Content-Type is set when the
+  // caller already pre-stringified (very common in this codebase) — without it,
+  // FastAPI rejects the body and returns a 422 that surfaces as "[object Object]".
   let body = options.body;
   if (body && typeof body === 'object' && !(body instanceof FormData)) {
     body = JSON.stringify(body);
+    if (!headers['Content-Type']) headers['Content-Type'] = 'application/json';
+  } else if (typeof body === 'string' && !(body instanceof FormData)) {
     if (!headers['Content-Type']) headers['Content-Type'] = 'application/json';
   }
 
@@ -75,11 +79,38 @@ export async function apiFetch(path, options = {}) {
   }
 
   if (!res.ok) {
-    const message =
-      (data && (data.detail || data.message)) ||
-      `Request failed with status ${res.status}`;
+    const message = _extractErrorMessage(data, res.status);
     throw new ApiError(message, res.status, data);
   }
 
   return data;
+}
+
+/**
+ * Pull a human-readable error message out of an API response body. FastAPI
+ * uses `detail` which can be either a string (HTTPException) OR an array of
+ * validation errors (Pydantic 422). We accept both shapes so callers don't
+ * have to render "[object Object]" to the user.
+ */
+function _extractErrorMessage(data, status) {
+  if (!data) return `Request failed with status ${status}`;
+  const detail = data.detail;
+  if (typeof detail === 'string' && detail.trim()) return detail;
+  if (Array.isArray(detail)) {
+    // Pydantic 422 — each item has { loc: [...], msg, type }
+    const parts = detail
+      .map((d) => {
+        if (!d || typeof d !== 'object') return null;
+        const loc = Array.isArray(d.loc) ? d.loc.filter((p) => p !== 'body').join('.') : '';
+        const msg = d.msg || d.message || '';
+        return loc ? `${loc}: ${msg}` : msg;
+      })
+      .filter(Boolean);
+    if (parts.length) return parts.join('; ');
+  }
+  if (detail && typeof detail === 'object') {
+    return detail.msg || detail.message || JSON.stringify(detail);
+  }
+  if (typeof data.message === 'string') return data.message;
+  return `Request failed with status ${status}`;
 }

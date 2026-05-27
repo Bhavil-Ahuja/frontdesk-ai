@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import { Routes, Route, NavLink, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard,
-  Phone,
   CalendarDays,
   BookOpen,
   Settings,
@@ -21,7 +20,6 @@ import {
 } from 'lucide-react';
 
 import Dashboard from './components/Dashboard';
-import CallLogs from './components/CallLogs';
 import AppointmentManager from './components/AppointmentManager';
 import KnowledgeBase from './components/KnowledgeBase';
 import AgentConfig from './components/AgentConfig';
@@ -47,13 +45,12 @@ const TENANT_NAV = [
   { to: '/dashboard', icon: LayoutDashboard, label: 'Overview' },
   { to: '/setup', icon: Rocket, label: 'Setup Guide' },
   { to: '/chat', icon: MessageSquare, label: 'Test Agent', chatOnly: true },
-  { to: '/calls', icon: Phone, label: 'Call Logs' },
   { to: '/patients', icon: Contact, label: 'Patients' },
   { to: '/appointments', icon: CalendarDays, label: 'Appointments' },
-  { to: '/providers', icon: Users, label: 'Providers' },
+  { to: '/providers', icon: Users, label: 'Doctors' },
   { to: '/waitlist', icon: ClipboardList, label: 'Waitlist' },
   { to: '/sms', icon: MessagesSquare, label: 'SMS Messages' },
-  { to: '/knowledge', icon: BookOpen, label: 'Knowledge Base' },
+  { to: '/knowledge', icon: BookOpen, label: 'Practice Info' },
   { to: '/settings', icon: Settings, label: 'Agent Config' },
 ];
 
@@ -160,10 +157,10 @@ function AppShell() {
             </div>
             <div className="min-w-0">
               <h1 className="font-bold text-gray-900 dark:text-white text-lg leading-tight truncate">
-                {user?.business_name || 'Scheduler.ai'}
+                {user?.business_name || 'FrontDesk AI'}
               </h1>
               <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
-                {isAdmin ? 'Admin · Scheduler.ai' : 'Tenant Dashboard'}
+                {isAdmin ? 'Admin · FrontDesk AI' : 'Tenant Dashboard'}
               </p>
             </div>
           </div>
@@ -309,14 +306,6 @@ function AppShell() {
                 ) : (
                   <Navigate to="/dashboard" replace />
                 )}
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/calls"
-            element={
-              <ProtectedRoute>
-                <CallLogs />
               </ProtectedRoute>
             }
           />

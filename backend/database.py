@@ -57,11 +57,50 @@ _MIGRATIONS: list[str] = [
     # ── tenants table — unified test_callers [{phone, name}] (replaces parallel arrays)
     "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS test_callers JSONB DEFAULT '[]'::jsonb",
 
+    # ── tenants table — Google Maps share-link for the clinic location
+    #    Used at signup for admin approval review (iframe preview) and inside
+    #    SMS / email templates as a clickable map link.
+    "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS google_maps_url TEXT",
+
+    # ── tenants table — list of one-off holiday closures
+    #    Each entry: {"date": "YYYY-MM-DD", "name": "Christmas Day"}
+    #    Used by the slot generator (refuses bookings on these dates) and by
+    #    the AI agent (proactively tells callers when a day is a holiday).
+    "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS holidays JSONB NOT NULL DEFAULT '[]'::jsonb",
+
     # ── appointments table — provider, extra reminders, patient confirmation
     "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS provider_id UUID REFERENCES providers(id)",
     "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS reminder_2h_sent_at TIMESTAMPTZ",
     "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS review_requested_at TIMESTAMPTZ",
     "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS confirmed_by_patient BOOLEAN",
+
+    # ── tenants table — drop orphaned calcom_event_types column
+    #    This column was added manually during a Cal.com integration experiment
+    #    but never added to the SQLAlchemy model.  Its NOT NULL constraint causes
+    #    INSERT failures on tenant registration.  Safe to drop — no code reads it.
+    "ALTER TABLE tenants DROP COLUMN IF EXISTS calcom_event_types",
+
+    # ── appointmentstatus enum — add NO_SHOW value (safe if already exists)
+    """DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_enum WHERE enumlabel = 'NO_SHOW' AND enumtypid = (SELECT oid FROM pg_type WHERE typname = 'appointmentstatus')) THEN
+            ALTER TYPE appointmentstatus ADD VALUE 'NO_SHOW';
+        END IF;
+    END $$;""",
+
+    # ── appointments — prevent double-booking the same provider at the same
+    #    instant. Partial unique index excludes cancelled/completed/no-show
+    #    rows so reusing a slot after cancellation is still possible.
+    #    NOTE: COALESCE handles NULL provider_id by treating "no provider" as
+    #    a single virtual provider — useful for tenants who don't yet use
+    #    providers. If you need to allow multiple "no provider" bookings at
+    #    the same time, drop this index.
+    """CREATE UNIQUE INDEX IF NOT EXISTS uniq_appt_provider_time
+       ON appointments (
+           tenant_id,
+           COALESCE(provider_id, '00000000-0000-0000-0000-000000000000'::uuid),
+           scheduled_at
+       )
+       WHERE status IN ('CONFIRMED', 'RESCHEDULED')""",
 ]
 
 

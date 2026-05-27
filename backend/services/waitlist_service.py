@@ -38,6 +38,7 @@ async def add_to_waitlist(
     preferred_time_start: str | None = None,
     preferred_time_end: str | None = None,
     provider_id: uuid.UUID | None = None,
+    tenant_ctx: Any | None = None,
 ) -> dict:
     """
     Add a patient to the waitlist for a specific date and appointment type.
@@ -65,6 +66,82 @@ async def add_to_waitlist(
     except (ValueError, TypeError):
         logger.error("[Waitlist] Invalid preferred_date format: %s", preferred_date)
         return {"error": "Invalid date format. Expected YYYY-MM-DD."}
+
+    # ── Past-date guard ────────────────────────────────────────────────
+    # Adding a patient to the waitlist for a date that has already passed
+    # is never useful — we'd just create an entry that immediately expires.
+    # Refuse with a clear message so the LLM tells the patient to pick a
+    # future date instead of silently confirming a useless waitlist entry.
+    try:
+        from zoneinfo import ZoneInfo
+        tz_name = (
+            getattr(tenant_ctx, "timezone", None) if tenant_ctx else None
+        ) or "America/Chicago"
+        try:
+            tz = ZoneInfo(tz_name)
+        except Exception:
+            tz = ZoneInfo("America/Chicago")
+        today_local = datetime.now(tz).date()
+    except Exception:
+        today_local = datetime.utcnow().date()
+
+    if target_date < today_local:
+        friendly = target_date.strftime("%A, %B %d")
+        logger.warning(
+            "[Waitlist] Refused add for past date %s (today=%s, patient=%s)",
+            preferred_date, today_local.isoformat(), patient_name,
+        )
+        return {
+            "ok": False,
+            "error": "past_date",
+            "preferred_date": preferred_date,
+            "today": today_local.isoformat(),
+            "summary_for_assistant": (
+                f"That date ({friendly}) has already passed — today is "
+                f"{today_local.strftime('%A, %B %d, %Y')}. Tell the patient the date "
+                f"is in the past and ask which upcoming day they'd prefer. Do NOT add "
+                f"them to the waitlist for a past date."
+            ),
+        }
+
+    # ── Holiday guard ──────────────────────────────────────────────────
+    # If the preferred date is a configured tenant holiday, the office is
+    # closed — adding a waitlist entry would never resolve since no slots
+    # exist. Refuse with a clear message naming the holiday so the LLM can
+    # explain the closure to the patient.
+    holiday_match: dict | None = None
+    try:
+        holidays = (
+            getattr(tenant_ctx, "holidays", None) if tenant_ctx else None
+        ) or []
+        for h in holidays:
+            if isinstance(h, dict) and h.get("date") == preferred_date:
+                holiday_match = {
+                    "date": h["date"],
+                    "name": (h.get("name") or "Holiday"),
+                }
+                break
+    except Exception:
+        holiday_match = None
+
+    if holiday_match:
+        friendly = target_date.strftime("%A, %B %d")
+        holiday_name = holiday_match["name"]
+        logger.info(
+            "[Waitlist] Refused add for holiday %s (%s) — patient=%s",
+            preferred_date, holiday_name, patient_name,
+        )
+        return {
+            "ok": False,
+            "error": "holiday",
+            "preferred_date": preferred_date,
+            "holiday": holiday_match,
+            "summary_for_assistant": (
+                f"The office is CLOSED on {friendly} for {holiday_name}. "
+                f"Tell the patient we're closed that day for {holiday_name} and ask "
+                f"which other day works. Do NOT add them to the waitlist for a holiday."
+            ),
+        }
 
     # Expire at end of the preferred date (23:59:59 UTC)
     expires_at = datetime.combine(
@@ -97,6 +174,20 @@ async def add_to_waitlist(
         preferred_date,
         entry.id,
     )
+
+    # Notify the patient by SMS that they've been added to the waitlist
+    try:
+        sms_service.send_waitlist_added(
+            patient_name=patient_name,
+            phone=patient_phone,
+            appointment_type=appointment_type,
+            preferred_date=preferred_date,
+            preferred_time_start=preferred_time_start,
+            preferred_time_end=preferred_time_end,
+            tenant_ctx=tenant_ctx,
+        )
+    except Exception as exc:
+        logger.error("[Waitlist] Failed to send 'added' SMS for entry %s: %s", entry.id, exc)
 
     return {
         "id": str(entry.id),
@@ -182,6 +273,7 @@ async def check_waitlist_for_opening(
     date: str,
     available_slot: str,
     tenant_ctx: Any | None = None,
+    provider_id: uuid.UUID | None = None,
 ) -> bool:
     """
     Called when a cancellation creates an available slot. Finds the
@@ -191,6 +283,9 @@ async def check_waitlist_for_opening(
     Matching logic:
       - appointment_type must match exactly.
       - preferred_date must match the given date.
+      - PROVIDER MATCH: If the cancelled slot has a provider_id, only notify
+        entries that requested either that same provider OR no provider at
+        all. We never push a patient onto a provider they didn't request.
       - If the entry has a preferred time window (preferred_time_start /
         preferred_time_end), the available_slot time must fall within that
         window. Entries with no time preference always match.
@@ -203,6 +298,9 @@ async def check_waitlist_for_opening(
         available_slot: The available time slot as an ISO datetime string
             or HH:MM string (used for time-window matching and SMS text).
         tenant_ctx: Optional TenantContext for multi-tenant SMS sending.
+        provider_id: Optional UUID of the provider whose slot just opened.
+            When set, only entries that requested this provider (or no
+            provider) are eligible.
 
     Returns:
         True if a waitlisted patient was notified, False otherwise.
@@ -218,13 +316,24 @@ async def check_waitlist_for_opening(
         logger.error("[Waitlist] Invalid available_slot format: %s", available_slot)
         return False
 
-    # Query all WAITING entries matching type + date for this tenant
+    # Query all WAITING entries matching type + date for this tenant.
+    # Provider filtering is enforced via OR in the WHERE so the DB only
+    # returns rows that requested THIS provider or no provider at all.
+    from sqlalchemy import or_  # local import to avoid widening top-level surface
+
     filters = [
         WaitlistEntry.tenant_id == tenant_id,
         WaitlistEntry.status == WaitlistStatus.WAITING,
         WaitlistEntry.appointment_type == appointment_type,
         WaitlistEntry.preferred_date == date,
     ]
+    if provider_id is not None:
+        filters.append(
+            or_(
+                WaitlistEntry.provider_id == provider_id,
+                WaitlistEntry.provider_id.is_(None),
+            )
+        )
 
     async with async_session() as session:
         result = await session.execute(
@@ -236,10 +345,11 @@ async def check_waitlist_for_opening(
 
         if not candidates:
             logger.info(
-                "[Waitlist] No WAITING entries for %s on %s (tenant %s)",
+                "[Waitlist] No WAITING entries for %s on %s (tenant %s, provider=%s)",
                 appointment_type,
                 date,
                 tenant_id,
+                provider_id,
             )
             return False
 
@@ -402,12 +512,16 @@ async def confirm_waitlist_booking(
 # ── Cancel a waitlist entry ─────────────────────────────────────────────────
 
 
-async def cancel_waitlist_entry(entry_id: uuid.UUID) -> bool:
+async def cancel_waitlist_entry(
+    entry_id: uuid.UUID,
+    tenant_ctx: Any | None = None,
+) -> bool:
     """
     Cancel a specific waitlist entry by setting its status to CANCELLED.
 
     Args:
         entry_id: The UUID of the waitlist entry to cancel.
+        tenant_ctx: Optional TenantContext for sending the patient SMS.
 
     Returns:
         True if the entry was found and cancelled, False otherwise.
@@ -431,17 +545,352 @@ async def cancel_waitlist_entry(entry_id: uuid.UUID) -> bool:
             return False
 
         entry.status = WaitlistStatus.CANCELLED
+
+        # Snapshot fields we need for the SMS before the session closes
+        patient_name = entry.patient_name
+        patient_phone = entry.patient_phone
+        appointment_type = entry.appointment_type
+        preferred_date = entry.preferred_date
+
         await session.commit()
 
     logger.info(
         "[Waitlist] Cancelled entry %s (%s, %s on %s)",
         entry_id,
-        entry.patient_name,
-        entry.appointment_type,
-        entry.preferred_date,
+        patient_name,
+        appointment_type,
+        preferred_date,
     )
 
+    # Notify the patient that their waitlist entry was cancelled
+    try:
+        sms_service.send_waitlist_cancelled(
+            patient_name=patient_name,
+            phone=patient_phone,
+            appointment_type=appointment_type,
+            preferred_date=preferred_date,
+            tenant_ctx=tenant_ctx,
+        )
+    except Exception as exc:
+        logger.error("[Waitlist] Failed to send 'cancelled' SMS for entry %s: %s", entry_id, exc)
+
     return True
+
+
+# ── Promote a waitlist entry to a real appointment ─────────────────────────
+
+
+async def find_promote_conflicts(
+    entry_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+    scheduled_at: str,
+) -> dict:
+    """
+    Find existing appointments that would conflict with promoting a waitlist
+    entry into the given slot.
+
+    Returns appointments for the entry's preferred provider (or all providers
+    if no provider preference) whose scheduled_at falls within a ±duration
+    window of the proposed slot. The admin UI uses this to ask the user
+    "this slot already has appointments — still promote?" before doing a
+    force-bypass booking.
+
+    Args:
+        entry_id: UUID of the waitlist entry being promoted.
+        tenant_id: Tenant scope (from authenticated user).
+        scheduled_at: Proposed start time for the new booking (ISO string).
+
+    Returns:
+        {
+          "conflicts": [<appointment dict>, ...],
+          "provider_id": "<uuid or null>",
+          "scheduled_at": "<iso>",
+          "window_minutes": <int>,
+        }
+    """
+    from backend.models.appointment import Appointment, AppointmentStatus
+    from backend.models.provider import Provider
+
+    # Parse the target time
+    try:
+        target_dt = datetime.fromisoformat(scheduled_at)
+    except (ValueError, TypeError):
+        raise ValueError(f"Invalid scheduled_at: {scheduled_at!r}")
+    if target_dt.tzinfo is None:
+        target_dt = target_dt.replace(tzinfo=timezone.utc)
+    else:
+        target_dt = target_dt.astimezone(timezone.utc)
+
+    async with async_session() as session:
+        # Load the entry to pull provider_id + appointment_type
+        result = await session.execute(
+            select(WaitlistEntry).where(WaitlistEntry.id == entry_id)
+        )
+        entry = result.scalars().first()
+        if not entry:
+            raise ValueError(f"Waitlist entry not found: {entry_id}")
+        if entry.tenant_id != tenant_id:
+            raise ValueError("Waitlist entry does not belong to this tenant.")
+
+        entry_provider_id = entry.provider_id
+        # Default duration window — 60 minutes covers typical appointment lengths
+        window = timedelta(minutes=60)
+        window_start = target_dt - window
+        window_end = target_dt + window
+
+        filters = [
+            Appointment.tenant_id == tenant_id,
+            Appointment.status.in_(
+                [AppointmentStatus.CONFIRMED, AppointmentStatus.RESCHEDULED]
+            ),
+            Appointment.scheduled_at >= window_start,
+            Appointment.scheduled_at <= window_end,
+        ]
+        # If the entry targets a specific provider, narrow to that provider only.
+        # If not, show conflicts across all providers (admin will pick a provider).
+        if entry_provider_id is not None:
+            filters.append(Appointment.provider_id == entry_provider_id)
+
+        appt_rows = await session.execute(
+            select(Appointment).where(and_(*filters)).order_by(Appointment.scheduled_at.asc())
+        )
+        appts = list(appt_rows.scalars().all())
+
+        # Build a provider_id -> name map for friendly display
+        provider_names: dict[str, str] = {}
+        provider_ids = {a.provider_id for a in appts if a.provider_id}
+        if provider_ids:
+            prov_rows = await session.execute(
+                select(Provider).where(Provider.id.in_(provider_ids))
+            )
+            for p in prov_rows.scalars().all():
+                provider_names[str(p.id)] = p.name
+
+    conflicts = [
+        {
+            "id": str(a.id),
+            "patient_name": a.patient_name,
+            "patient_phone": a.patient_phone,
+            "appointment_type": a.appointment_type,
+            "scheduled_at": a.scheduled_at.isoformat() if a.scheduled_at else None,
+            "duration_minutes": a.duration_minutes,
+            "status": a.status.value if a.status else None,
+            "provider_id": str(a.provider_id) if a.provider_id else None,
+            "provider_name": (
+                provider_names.get(str(a.provider_id)) if a.provider_id else None
+            ),
+        }
+        for a in appts
+    ]
+
+    logger.info(
+        "[Waitlist] Conflict check for entry %s @ %s → %d conflicts (provider=%s)",
+        entry_id, scheduled_at, len(conflicts), entry_provider_id,
+    )
+
+    return {
+        "conflicts": conflicts,
+        "provider_id": str(entry_provider_id) if entry_provider_id else None,
+        "scheduled_at": scheduled_at,
+        "window_minutes": int(window.total_seconds() // 60),
+    }
+
+
+async def promote_to_appointment(
+    entry_id: uuid.UUID,
+    scheduled_at: str,
+    tenant_ctx: Any | None = None,
+    force: bool = False,
+) -> dict | None:
+    """
+    Promote a waitlist entry to a booked appointment.
+
+    Books the appointment via calendar_service using the entry's patient info
+    and the admin-supplied start time, then marks the entry as BOOKED and
+    sends the patient a confirmation SMS.
+
+    Args:
+        entry_id: UUID of the waitlist entry to promote.
+        scheduled_at: ISO datetime string for the booked slot.
+        tenant_ctx: TenantContext for calendar routing + SMS.
+        force: When True, bypass the provider/time uniqueness check by
+            nudging the stored timestamp by a few seconds so the partial
+            unique index doesn't fire. Use only when admin has explicitly
+            confirmed the double-book in the UI.
+
+    Returns:
+        Dict with appointment + entry info on success, or None on failure.
+    """
+    # Lazy import to avoid circular imports (calendar_service imports a lot)
+    from backend.services import calendar_service
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(WaitlistEntry).where(WaitlistEntry.id == entry_id)
+        )
+        entry = result.scalars().first()
+
+        if not entry:
+            logger.warning("[Waitlist] Promote failed — entry %s not found", entry_id)
+            return None
+
+        if entry.status in (WaitlistStatus.BOOKED, WaitlistStatus.CANCELLED, WaitlistStatus.EXPIRED):
+            logger.warning(
+                "[Waitlist] Promote skipped — entry %s already %s",
+                entry_id,
+                entry.status.value,
+            )
+            return None
+
+        # Snapshot the fields we need outside the session
+        patient_info = {
+            "name": entry.patient_name,
+            "phone": entry.patient_phone,
+            "email": entry.patient_email or "",
+        }
+        appointment_type = entry.appointment_type
+        preferred_date = entry.preferred_date
+        patient_name = entry.patient_name
+        patient_phone = entry.patient_phone
+        entry_provider_id = entry.provider_id
+
+    # Book the appointment through the same path the AI uses
+    booking_start = scheduled_at
+    try:
+        booking = await calendar_service.book_appointment(
+            patient_info=patient_info,
+            start_time=booking_start,
+            tenant_ctx=tenant_ctx,
+            appointment_type_key=appointment_type,
+            provider_id=entry_provider_id,
+        )
+    except Exception as exc:
+        logger.error("[Waitlist] Booking failed during promote of %s: %s", entry_id, exc)
+        return None
+
+    if not booking:
+        logger.warning("[Waitlist] book_appointment returned None during promote of %s", entry_id)
+        return None
+
+    # The native path returns CONFLICT when the unique-index races. When the
+    # admin has explicitly opted to force the double-book, retry with a tiny
+    # offset (a few seconds) so the partial unique index on
+    # (tenant_id, provider_id, scheduled_at) doesn't fire — the doctor has
+    # explicitly agreed to take an overlapping appointment.
+    if isinstance(booking, dict) and booking.get("status") == "CONFLICT":
+        if force:
+            try:
+                forced_dt = datetime.fromisoformat(scheduled_at)
+                if forced_dt.tzinfo is None:
+                    forced_dt = forced_dt.replace(tzinfo=timezone.utc)
+                # Walk forward by a few seconds at a time until the unique
+                # index lets us in. Cap at 12 retries (~1 minute) — beyond
+                # that something else is wrong.
+                booking = None
+                for offset in range(1, 13):
+                    nudged = forced_dt + timedelta(seconds=offset * 5)
+                    nudged_iso = nudged.isoformat()
+                    try:
+                        booking = await calendar_service.book_appointment(
+                            patient_info=patient_info,
+                            start_time=nudged_iso,
+                            tenant_ctx=tenant_ctx,
+                            appointment_type_key=appointment_type,
+                            provider_id=entry_provider_id,
+                        )
+                    except Exception as exc:
+                        logger.error(
+                            "[Waitlist] Force-promote retry failed (offset=%ds): %s",
+                            offset * 5, exc,
+                        )
+                        return None
+                    if not booking:
+                        return None
+                    if isinstance(booking, dict) and booking.get("status") == "CONFLICT":
+                        continue  # try next offset
+                    # Success — record the actual booked time so callers + SMS
+                    # show the slightly nudged timestamp.
+                    booking_start = nudged_iso
+                    logger.info(
+                        "[Waitlist] Force-promote of %s succeeded with +%ds offset",
+                        entry_id, offset * 5,
+                    )
+                    break
+                else:
+                    logger.warning(
+                        "[Waitlist] Force-promote of %s exhausted offset retries",
+                        entry_id,
+                    )
+                    return None
+                # If after the loop we still hold a CONFLICT, give up.
+                if isinstance(booking, dict) and booking.get("status") == "CONFLICT":
+                    return None
+            except (ValueError, TypeError) as exc:
+                logger.error("[Waitlist] Force-promote parse failed: %s", exc)
+                return None
+        else:
+            logger.warning(
+                "[Waitlist] Promote of %s lost the unique-index race — slot %s already taken",
+                entry_id, scheduled_at,
+            )
+            return None
+
+    # Mark the entry BOOKED
+    now = datetime.now(timezone.utc)
+    async with async_session() as session:
+        result = await session.execute(
+            select(WaitlistEntry).where(WaitlistEntry.id == entry_id)
+        )
+        entry = result.scalars().first()
+        if entry:
+            entry.status = WaitlistStatus.BOOKED
+            entry.booked_at = now
+            await session.commit()
+
+    # SMS the patient about the promotion (use the time we actually booked,
+    # which may be nudged a few seconds from `scheduled_at` for force-promote)
+    try:
+        sms_start = booking_start
+        if isinstance(sms_start, str):
+            try:
+                start_dt = datetime.fromisoformat(sms_start)
+            except ValueError:
+                start_dt = datetime.strptime(sms_start, "%Y-%m-%dT%H:%M:%S")
+        else:
+            start_dt = sms_start
+        if start_dt.tzinfo is None:
+            start_dt = start_dt.replace(tzinfo=timezone.utc)
+
+        sms_service.send_waitlist_promoted(
+            patient_name=patient_name,
+            phone=patient_phone,
+            appointment_type=appointment_type,
+            scheduled_at=start_dt,
+            tenant_ctx=tenant_ctx,
+        )
+    except Exception as exc:
+        logger.error("[Waitlist] Failed to send 'promoted' SMS for entry %s: %s", entry_id, exc)
+
+    logger.info(
+        "[Waitlist] Promoted entry %s (%s, %s on %s) → booking %s",
+        entry_id,
+        patient_name,
+        appointment_type,
+        preferred_date,
+        booking.get("uid") or booking.get("id"),
+    )
+
+    return {
+        "id": str(entry_id),
+        "status": WaitlistStatus.BOOKED.value,
+        "booked_at": now.isoformat(),
+        "appointment_type": appointment_type,
+        "patient_name": patient_name,
+        "patient_phone": patient_phone,
+        "scheduled_at": booking_start,
+        "forced": bool(force),
+        "booking": booking,
+    }
 
 
 # ── Expire stale entries (background task) ──────────────────────────────────

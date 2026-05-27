@@ -7,8 +7,9 @@ python-multipart>=0.0.18
 sqlalchemy[asyncio]>=2.0.36
 asyncpg>=0.30.0
 
-# LLM (Ollama via OpenAI-compatible API)
+# LLM (Ollama via OpenAI-compatible API, or Gemini)
 openai>=1.58.0
+google-genai>=2.0.0
 
 # Vapi.ai
 httpx>=0.28.0

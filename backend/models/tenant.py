@@ -54,6 +54,10 @@ class Tenant(Base):
     business_phone = Column(String(20), nullable=True)
     business_address = Column(Text, nullable=True)
     business_website = Column(String(255), nullable=True)
+    # Google Maps share-link or embed URL for the clinic's location.
+    # Collected during registration so admins can iframe-preview the address
+    # before approving, and so we have a definitive map source for templates.
+    google_maps_url = Column(Text, nullable=True)
     timezone = Column(String(50), nullable=False, default="America/Chicago")
 
     # ── Owner / admin contact ────────────────────────────────────────────
@@ -130,6 +134,13 @@ class Tenant(Base):
         JSONB, nullable=True,
         # e.g. {"monday": {"open": "08:00", "close": "18:00"}, "sunday": null}
     )
+
+    # ── Holidays / one-off closures ──────────────────────────────────────
+    # Each entry: {"date": "YYYY-MM-DD", "name": "Christmas Day"}
+    # Admin manages these via /api/tenants/{id}. When the AI is asked to
+    # book or check slots on one of these dates, the system refuses and
+    # the agent explains the office is closed for the holiday by name.
+    holidays = Column(JSONB, nullable=False, default=lambda: [])
 
     # ── Reminder settings ──────────────────────────────────────────────
     reminder_settings = Column(

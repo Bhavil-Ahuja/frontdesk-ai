@@ -6,6 +6,10 @@ const AuthContext = createContext(null);
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  // Holds the server message when the account is suspended/deactivated (403).
+  // The UI can check this to show a "your account has been disabled" page
+  // instead of silently logging the user out.
+  const [accountError, setAccountError] = useState(null);
 
   // Fetch current user from /api/auth/me on mount if token present
   useEffect(() => {
@@ -21,8 +25,18 @@ export function AuthProvider({ children }) {
         if (!cancelled) setUser(me);
       } catch (err) {
         if (!cancelled) {
-          clearToken();
-          setUser(null);
+          if (err.status === 403) {
+            // Account suspended/deactivated — keep token so user can see
+            // a friendly message, but clear the user object.
+            setUser(null);
+            setAccountError(
+              err.message || 'Your account has been deactivated. Contact support.'
+            );
+          } else {
+            // 401 or network error — bad/expired token
+            clearToken();
+            setUser(null);
+          }
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -41,6 +55,7 @@ export function AuthProvider({ children }) {
     });
     setToken(res.access_token);
     setUser(res.user);
+    setAccountError(null);
     return res.user;
   }, []);
 
@@ -51,20 +66,29 @@ export function AuthProvider({ children }) {
     });
     setToken(res.access_token);
     setUser(res.user);
+    setAccountError(null);
     return res.user;
   }, []);
 
   const logout = useCallback(() => {
     clearToken();
     setUser(null);
+    setAccountError(null);
   }, []);
 
   const refreshUser = useCallback(async () => {
     try {
       const me = await apiFetch('/api/auth/me');
       setUser(me);
+      setAccountError(null);
       return me;
-    } catch {
+    } catch (err) {
+      if (err.status === 403) {
+        setUser(null);
+        setAccountError(
+          err.message || 'Your account has been deactivated. Contact support.'
+        );
+      }
       return null;
     }
   }, []);
@@ -76,6 +100,7 @@ export function AuthProvider({ children }) {
     isAdmin: !!user?.is_admin,
     isPending: user?.status === 'PENDING',
     isActive: user?.status === 'ACTIVE',
+    accountError,
     login,
     register,
     logout,

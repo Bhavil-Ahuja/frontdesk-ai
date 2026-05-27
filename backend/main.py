@@ -1,5 +1,5 @@
 """
-Scheduler.ai — Multi-tenant AI Voice Agent Platform — FastAPI entry point.
+FrontDesk AI — Multi-tenant AI Voice Agent Platform — FastAPI entry point.
 
 Startup sequence:
   1. Connect to PostgreSQL and auto-create tables
@@ -38,6 +38,7 @@ from backend.routes.tenants import router as tenants_router
 from backend.routes.auth import router as auth_router
 from backend.routes.chat import router as chat_router
 from backend.routes.google_oauth import router as google_oauth_router
+from backend.routes.vapi_integration import router as vapi_integration_router
 from backend.routes.providers import router as providers_router
 from backend.routes.waitlist import router as waitlist_router
 from backend.routes.sms_webhook import router as sms_webhook_router
@@ -60,9 +61,25 @@ def _log_config_status():
     """Log which integrations are configured vs missing at startup."""
     logger.info("─── Configuration Check ───")
 
+    # Build checks list based on LLM provider
     checks = [
-        ("Ollama URL", settings.OLLAMA_BASE_URL, True),
-        ("Ollama Model", settings.OLLAMA_MODEL, True),
+        ("Database URL", settings.DATABASE_URL, True),
+    ]
+
+    # Add provider-specific checks
+    if settings.LLM_PROVIDER == "ollama":
+        checks.extend([
+            ("Ollama URL", settings.OLLAMA_BASE_URL, True),
+            ("Ollama Model", settings.OLLAMA_MODEL, True),
+        ])
+    elif settings.LLM_PROVIDER == "gemini":
+        checks.extend([
+            ("Gemini API Key", settings.GEMINI_API_KEY, True),
+            ("Gemini Model", settings.GEMINI_MODEL, True),
+        ])
+
+    # Add common optional checks
+    checks.extend([
         ("Vapi API Key", settings.VAPI_API_KEY, False),
         ("Vapi Phone Number ID", settings.VAPI_PHONE_NUMBER_ID, False),
         ("Vapi Assistant ID", settings.VAPI_ASSISTANT_ID, False),
@@ -71,8 +88,7 @@ def _log_config_status():
         ("Twilio Auth Token", settings.TWILIO_AUTH_TOKEN, False),
         ("Twilio Phone Number", settings.TWILIO_PHONE_NUMBER, False),
         ("Escalation Phone", settings.ESCALATION_PHONE_NUMBER, False),
-        ("Database URL", settings.DATABASE_URL, True),
-    ]
+    ])
 
     missing = []
     for name, value, required in checks:
@@ -86,6 +102,7 @@ def _log_config_status():
         else:
             logger.warning("  ○ %-30s not set (optional)", name)
 
+    logger.info("  %-30s %s", "LLM Provider", settings.LLM_PROVIDER.upper())
     logger.info("  %-30s %s", "Demo Mode", "ON" if settings.DEMO_MODE else "OFF")
     logger.info("  %-30s %s", "Google Calendar OAuth",
                 "ON" if (settings.GOOGLE_CLIENT_ID and settings.GOOGLE_CLIENT_SECRET) else "OFF (set GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET)")
@@ -102,7 +119,7 @@ def _log_config_status():
 async def lifespan(app: FastAPI):
     """Run startup tasks before the server accepts requests."""
     logger.info("=" * 60)
-    logger.info("  Scheduler.ai — AI Voice Agent Platform — Starting up")
+    logger.info("  FrontDesk AI — AI Voice Agent Platform — Starting up")
     logger.info("=" * 60)
 
     # 0. Config validation
@@ -129,24 +146,33 @@ async def lifespan(app: FastAPI):
     kb = load_knowledge_base()
     logger.info("✓ Knowledge base loaded (%d sections).", len(kb))
 
-    # 3. Ollama connectivity check
-    logger.info("Checking Ollama at %s ...", settings.OLLAMA_BASE_URL)
-    try:
-        from backend.services.http_client import http
-        resp = await http.get(f"{settings.OLLAMA_BASE_URL}/api/tags", timeout=5)
-        if resp.status_code == 200:
-            models = [m["name"] for m in resp.json().get("models", [])]
-            if any(settings.OLLAMA_MODEL in m for m in models):
-                logger.info("✓ Ollama running — model '%s' available.", settings.OLLAMA_MODEL)
+    # 3. LLM provider check
+    if settings.LLM_PROVIDER == "ollama":
+        logger.info("Checking Ollama at %s ...", settings.OLLAMA_BASE_URL)
+        try:
+            from backend.services.http_client import http
+            resp = await http.get(f"{settings.OLLAMA_BASE_URL}/api/tags", timeout=5)
+            if resp.status_code == 200:
+                models = [m["name"] for m in resp.json().get("models", [])]
+                if any(settings.OLLAMA_MODEL in m for m in models):
+                    logger.info("✓ Ollama running — model '%s' available.", settings.OLLAMA_MODEL)
+                else:
+                    logger.warning("⚠ Ollama running but model '%s' not found. Available: %s",
+                                   settings.OLLAMA_MODEL, models)
+                    logger.warning("  → Run: ollama pull %s", settings.OLLAMA_MODEL)
             else:
-                logger.warning("⚠ Ollama running but model '%s' not found. Available: %s",
-                               settings.OLLAMA_MODEL, models)
-                logger.warning("  → Run: ollama pull %s", settings.OLLAMA_MODEL)
+                logger.warning("⚠ Ollama responded with HTTP %s", resp.status_code)
+        except Exception as exc:
+            logger.warning("⚠ Cannot reach Ollama at %s: %s", settings.OLLAMA_BASE_URL, exc)
+            logger.warning("  → Is Ollama running? Start it with: ollama serve")
+    elif settings.LLM_PROVIDER == "gemini":
+        if settings.GEMINI_API_KEY:
+            logger.info("✓ Using Gemini API — model: %s", settings.GEMINI_MODEL)
         else:
-            logger.warning("⚠ Ollama responded with HTTP %s", resp.status_code)
-    except Exception as exc:
-        logger.warning("⚠ Cannot reach Ollama at %s: %s", settings.OLLAMA_BASE_URL, exc)
-        logger.warning("  → Is Ollama running? Start it with: ollama serve")
+            logger.error("✗ LLM_PROVIDER is 'gemini' but GEMINI_API_KEY is not set!")
+            logger.error("  → Get your key at: https://aistudio.google.com/app/apikey")
+    else:
+        logger.warning("⚠ Unknown LLM_PROVIDER: %s", settings.LLM_PROVIDER)
 
     # 4. Vapi assistant
     if settings.VAPI_API_KEY:
@@ -193,13 +219,13 @@ async def lifespan(app: FastAPI):
     from backend.services.http_client import close_http_client
     await close_http_client()
 
-    logger.info("Scheduler.ai shutting down.")
+    logger.info("FrontDesk AI shutting down.")
 
 
 # ── FastAPI app ───────────────────────────────────────────────────────────────
 
 app = FastAPI(
-    title="Scheduler.ai Voice Agent Platform",
+    title="FrontDesk AI Voice Agent Platform",
     description="Multi-tenant AI voice agent platform with scheduling, SMS, and admin dashboard.",
     version="1.0.0",
     lifespan=lifespan,
@@ -251,6 +277,7 @@ app.include_router(tenants_router)
 app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(google_oauth_router)
+app.include_router(vapi_integration_router)
 app.include_router(providers_router)
 app.include_router(waitlist_router)
 app.include_router(sms_webhook_router)
@@ -263,7 +290,7 @@ async def health_check():
     """Simple health check for uptime monitors."""
     return {
         "status": "healthy",
-        "service": "Scheduler.ai",
+        "service": "FrontDesk AI",
         "demo_mode": settings.DEMO_MODE,
     }
 
@@ -286,7 +313,7 @@ else:
     @app.get("/")
     async def root():
         return {
-            "message": "Scheduler.ai API",
+            "message": "FrontDesk AI API",
             "docs": "/docs",
             "dashboard": "Build the frontend first: cd frontend && npm run build",
         }

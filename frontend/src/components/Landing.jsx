@@ -11,6 +11,7 @@ import {
   ArrowRight,
   CheckCircle2,
 } from 'lucide-react';
+import ThemeToggle from './ThemeToggle';
 
 export default function Landing() {
   return (
@@ -22,9 +23,10 @@ export default function Landing() {
             <div className="w-9 h-9 bg-primary-500 rounded-xl flex items-center justify-center">
               <Sparkles className="w-5 h-5 text-white" />
             </div>
-            <span className="font-bold text-gray-900 dark:text-white text-lg">Scheduler.ai</span>
+            <span className="font-bold text-gray-900 dark:text-white text-lg">FrontDesk AI</span>
           </div>
           <div className="flex items-center gap-3">
+            <ThemeToggle />
             <Link
               to="/login"
               className="text-sm font-medium text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white px-3 py-2"
@@ -51,7 +53,7 @@ export default function Landing() {
           Never miss a patient call <span className="text-primary-500">again</span>
         </h1>
         <p className="text-lg text-gray-500 dark:text-gray-400 mt-6 max-w-2xl mx-auto">
-          Scheduler.ai answers your front desk calls 24/7, books appointments into your calendar,
+          FrontDesk AI answers your front desk calls 24/7, books appointments into your calendar,
           sends SMS reminders, and escalates emergencies — all automatically.
         </p>
         <div className="mt-8 flex items-center justify-center gap-3">
@@ -92,7 +94,7 @@ export default function Landing() {
           <Feature
             icon={Bot}
             title="Custom Agent Persona"
-            description="Configure your agent's name, voice, greeting, and knowledge base to match your brand."
+            description="Configure your agent's name, voice, greeting, and practice info to match your brand."
           />
           <Feature
             icon={ShieldCheck}
@@ -129,7 +131,7 @@ export default function Landing() {
           <Step
             number="4"
             title="Customize your agent"
-            description="Set the greeting, business hours, knowledge base, and emergency rules."
+            description="Set the greeting, business hours, practice info, and emergency rules."
           />
           <Step
             number="5"
@@ -158,7 +160,7 @@ export default function Landing() {
 
       <footer className="border-t border-gray-100 dark:border-gray-800 mt-12">
         <div className="max-w-6xl mx-auto px-6 py-6 text-center text-sm text-gray-400 dark:text-gray-500">
-          © 2026 Scheduler.ai · AI receptionists for healthcare
+          © 2026 FrontDesk AI · AI receptionists for healthcare
         </div>
       </footer>
     </div>

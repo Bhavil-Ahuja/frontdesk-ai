@@ -1,5 +1,5 @@
 #!/bin/bash
-# Scheduler.ai — One-command startup
+# FrontDesk AI — One-command startup
 # Starts tunnel, captures URL, updates .env, starts backend
 
 set -e
@@ -10,7 +10,7 @@ cd "$SCRIPT_DIR"
 ENV_FILE="$SCRIPT_DIR/.env"
 
 echo "=========================================="
-echo "  Scheduler.ai — Startup"
+echo "  FrontDesk AI — Startup"
 echo "=========================================="
 
 # ── Detect LOCAL_CHAT_MODE from .env ──
@@ -161,22 +161,30 @@ trap cleanup INT TERM
 python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload &
 UVICORN_PID=$!
 
-# ── 5. Warm Ollama in background so first Vapi call doesn't pay cold-start ──
-# Reads OLLAMA_MODEL from .env so this stays correct if the model is changed.
-(
-    sleep 3  # give uvicorn a moment to bind the port
-    OLLAMA_MODEL=$(grep -E "^OLLAMA_MODEL=" "$ENV_FILE" | cut -d= -f2- | tr -d '"' | tr -d "'")
-    OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2:latest}
-    echo "→ Warming Ollama model: $OLLAMA_MODEL ..."
-    if curl -sf -m 30 http://localhost:11434/v1/chat/completions \
-        -H "Content-Type: application/json" \
-        -d "{\"model\":\"$OLLAMA_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":5}" \
-        >/dev/null 2>&1; then
-        echo "✓ Ollama warmed — first Vapi call will be fast"
-    else
-        echo "⚠ Ollama warm-up failed (is Ollama running on localhost:11434?). Backend will still work but the first call may be slow."
-    fi
-) &
+# ── 5. Warm LLM in background so first call doesn't pay cold-start ──
+LLM_PROVIDER=$(grep -E "^LLM_PROVIDER=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d '"' | tr -d "'")
+LLM_PROVIDER=${LLM_PROVIDER:-ollama}
+
+if [ "$LLM_PROVIDER" = "ollama" ]; then
+    (
+        sleep 3  # give uvicorn a moment to bind the port
+        OLLAMA_MODEL=$(grep -E "^OLLAMA_MODEL=" "$ENV_FILE" | cut -d= -f2- | tr -d '"' | tr -d "'")
+        OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2:latest}
+        echo "→ Warming Ollama model: $OLLAMA_MODEL ..."
+        if curl -sf -m 30 http://localhost:11434/v1/chat/completions \
+            -H "Content-Type: application/json" \
+            -d "{\"model\":\"$OLLAMA_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":5}" \
+            >/dev/null 2>&1; then
+            echo "✓ Ollama warmed — first Vapi call will be fast"
+        else
+            echo "⚠ Ollama warm-up failed (is Ollama running on localhost:11434?). Backend will still work but the first call may be slow."
+        fi
+    ) &
+elif [ "$LLM_PROVIDER" = "gemini" ]; then
+    GEMINI_MODEL=$(grep -E "^GEMINI_MODEL=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d '"' | tr -d "'")
+    GEMINI_MODEL=${GEMINI_MODEL:-gemini-1.5-flash}
+    echo "✓ Using Gemini API (model: $GEMINI_MODEL) — no warm-up needed"
+fi
 
 # Wait for either process to exit
 wait $UVICORN_PID

@@ -11,6 +11,7 @@ Includes an in-memory TTL cache to avoid a DB hit on every request.
 """
 
 import logging
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -79,6 +80,9 @@ class TenantContext:
     agent_name: str
     greeting_message: str
     system_prompt_override: str | None
+    # Voice — drives the Vapi assistant's voice and the in-app preview/picker.
+    # Default: 11labs Rachel (matches the seed/default in the Tenant model).
+    voice_config: dict[str, Any]
 
     # Vapi
     vapi_api_key: str
@@ -103,6 +107,8 @@ class TenantContext:
     # Appointment config
     appointment_types: list[dict[str, Any]]
     business_hours: dict[str, Any] | None
+    # One-off holidays: each entry {"date": "YYYY-MM-DD", "name": "..."}
+    holidays: list[dict[str, Any]]
 
     # Knowledge
     knowledge_base: dict[str, Any]
@@ -147,6 +153,7 @@ def _tenant_to_context(t: Tenant) -> TenantContext:
         agent_name=t.agent_name or "Sarah",
         greeting_message=t.greeting_message or "Thank you for calling. How can I help you today?",
         system_prompt_override=t.system_prompt_override,
+        voice_config=t.voice_config or {"provider": "11labs", "voiceId": "21m00Tcm4TlvDq8ikWAM"},
         vapi_api_key=t.vapi_api_key or "",
         vapi_assistant_id=t.vapi_assistant_id or "",
         vapi_phone_number_id=t.vapi_phone_number_id or "",
@@ -161,6 +168,7 @@ def _tenant_to_context(t: Tenant) -> TenantContext:
         escalation_transfer_number=t.escalation_transfer_number or "",
         appointment_types=t.appointment_types or [],
         business_hours=t.business_hours,
+        holidays=t.holidays or [],
         knowledge_base=t.knowledge_base or {},
         emergency_guidance=t.emergency_guidance or "",
         reminder_settings=t.reminder_settings or {"2h_enabled": True, "confirmation_reply_enabled": True},
@@ -401,6 +409,7 @@ async def resolve_default_tenant() -> TenantContext | None:
             {"code": "consultation", "name": "Consultation", "duration_minutes": 45, "max_concurrent": 1},
         ],
         business_hours=None,
+        holidays=[],
         knowledge_base={},
         emergency_guidance="",
         reminder_settings={"2h_enabled": True, "confirmation_reply_enabled": True},
@@ -440,21 +449,82 @@ _DEFAULT_BUSINESS_HOURS = {
 }
 
 
+def _slugify(name: str) -> str:
+    """Turn a business name into a URL-safe slug."""
+    slug = re.sub(r"[^a-z0-9\s-]", "", name.lower()).strip()
+    slug = re.sub(r"\s+", "-", slug)
+    return slug[:100] or "tenant"
+
+
+async def _unique_slug(session: AsyncSession, base_slug: str) -> str:
+    """Return *base_slug* if it's free, otherwise append -1, -2, … until unique."""
+    candidate = base_slug
+    suffix = 0
+    while True:
+        result = await session.execute(
+            select(Tenant.id).where(Tenant.slug == candidate)
+        )
+        if result.scalar_one_or_none() is None:
+            return candidate
+        suffix += 1
+        candidate = f"{base_slug}-{suffix}"
+
+
+async def _resolve_google_maps_short_link(url: str) -> str:
+    """Follow maps.app.goo.gl / goo.gl/maps short-link redirects to get the
+    expanded URL containing coordinates or place data. Returns the original
+    URL unchanged if it's already expanded or if resolution fails."""
+    if not url:
+        return url
+    lower = url.lower()
+    # Only attempt resolution for short links
+    if "goo.gl" not in lower:
+        return url
+    try:
+        import httpx
+        # verify=False: this is just a redirect-follow to expand a Google
+        # Maps short link — not sensitive. Avoids corporate proxy SSL errors.
+        async with httpx.AsyncClient(follow_redirects=True, timeout=10, verify=False) as client:
+            resp = await client.get(url)
+            resolved = str(resp.url)
+            if resolved and len(resolved) > len(url):
+                logger.info("[TenantSvc] Resolved Google Maps link → %s", resolved[:200])
+                return resolved
+    except Exception as exc:
+        logger.warning("[TenantSvc] Could not resolve Google Maps short link: %s", exc)
+    return url
+
+
 async def create_tenant(data: dict[str, Any]) -> Tenant:
     """
     Create a new tenant in PENDING status (requires admin approval).
     Auto-assigns a test caller phone and default business hours.
+    Slug is auto-generated from business_name if not provided, with
+    collision resolution via -1, -2, … suffixes.
     """
+    # Generate slug from business_name, resolving duplicates
+    base_slug = data.get("slug") or _slugify(data["business_name"])
+    if not base_slug or len(base_slug) < 2:
+        base_slug = "tenant"
+
+    # Resolve Google Maps short links (goo.gl) to expanded URLs
+    maps_url = data.get("google_maps_url") or ""
+    maps_url = await _resolve_google_maps_short_link(maps_url)
+
     async with async_session() as session:
+        slug = await _unique_slug(session, base_slug)
+
         tenant = Tenant(
-            slug=data["slug"],
+            slug=slug,
             business_name=data["business_name"],
             business_type=data.get("business_type", "custom"),
             business_phone=data.get("owner_phone", ""),
             business_address=data.get("business_address", ""),
+            google_maps_url=maps_url,
             owner_name=data["owner_name"],
             owner_email=data["owner_email"],
             owner_phone=data.get("owner_phone"),
+            escalation_phone=data.get("escalation_phone"),
             timezone=data.get("timezone", "America/Chicago"),
             plan=data.get("plan", "starter"),
             status=TenantStatus.PENDING,
@@ -510,10 +580,13 @@ async def update_tenant(tenant_id: uuid.UUID, data: dict[str, Any]) -> Tenant | 
             "vapi_api_key", "vapi_assistant_id", "vapi_phone_number_id",
             "vapi_webhook_secret", "twilio_account_sid", "twilio_auth_token",
             "twilio_phone_number", "escalation_phone", "escalation_transfer_number",
-            "appointment_types", "business_hours", "knowledge_base",
+            "appointment_types", "business_hours", "holidays", "knowledge_base",
             "emergency_guidance", "demo_mode", "plan",
             "reminder_settings", "review_settings",
         }
+        # Normalize holidays — strip duplicates by date, drop blanks, sort ASC
+        if "holidays" in data and isinstance(data["holidays"], list):
+            data["holidays"] = _normalize_holidays(data["holidays"])
         for field_name, value in data.items():
             if field_name in allowed_fields:
                 setattr(tenant, field_name, value)
@@ -543,3 +616,77 @@ async def get_tenant(tenant_id: uuid.UUID) -> Tenant | None:
             select(Tenant).where(Tenant.id == tenant_id)
         )
         return result.scalar_one_or_none()
+
+
+# ── Holiday helpers ──────────────────────────────────────────────────────────
+
+
+def _normalize_holidays(raw: list[Any]) -> list[dict[str, str]]:
+    """
+    Clean up a holidays list before saving:
+      - Drop entries without a YYYY-MM-DD date.
+      - Trim names; default empty name to 'Holiday'.
+      - De-duplicate by date (last entry wins so admin edits replace old ones).
+      - Sort by date ascending so the UI/agent see a stable order.
+    """
+    from datetime import date as _date_cls, datetime as _dt
+    deduped: dict[str, dict[str, str]] = {}
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        date_str = (item.get("date") or "").strip()
+        if not date_str:
+            continue
+        try:
+            _dt.strptime(date_str, "%Y-%m-%d")
+        except (ValueError, TypeError):
+            continue
+        name = (item.get("name") or "").strip() or "Holiday"
+        deduped[date_str] = {"date": date_str, "name": name}
+    return sorted(deduped.values(), key=lambda h: h["date"])
+
+
+def find_holiday(tenant_ctx: Any | None, date_str: str) -> dict[str, str] | None:
+    """
+    Return the holiday entry matching the given YYYY-MM-DD date, or None.
+    Tolerates malformed dates / missing tenant_ctx — callers shouldn't have
+    to guard against either.
+    """
+    if not tenant_ctx or not date_str:
+        return None
+    holidays = getattr(tenant_ctx, "holidays", None) or []
+    for h in holidays:
+        if isinstance(h, dict) and h.get("date") == date_str:
+            return {"date": h["date"], "name": h.get("name") or "Holiday"}
+    return None
+
+
+def upcoming_holidays(tenant_ctx: Any | None, limit: int = 8) -> list[dict[str, str]]:
+    """
+    Return upcoming holidays (today + future) for the tenant, capped at
+    `limit`. Used by the system prompt and get_office_info so the AI agent
+    can mention closures proactively.
+    """
+    if not tenant_ctx:
+        return []
+    holidays = getattr(tenant_ctx, "holidays", None) or []
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo as _ZI
+    tz_name = getattr(tenant_ctx, "timezone", None) or "America/Chicago"
+    try:
+        tz = _ZI(tz_name)
+    except Exception:
+        tz = _ZI("America/Chicago")
+    today_local = _dt.now(tz).date()
+    upcoming: list[dict[str, str]] = []
+    for h in holidays:
+        if not isinstance(h, dict) or not h.get("date"):
+            continue
+        try:
+            d = _dt.strptime(h["date"], "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            continue
+        if d >= today_local:
+            upcoming.append({"date": h["date"], "name": h.get("name") or "Holiday"})
+    upcoming.sort(key=lambda x: x["date"])
+    return upcoming[:limit]

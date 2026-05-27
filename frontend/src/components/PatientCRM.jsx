@@ -11,11 +11,12 @@ import {
   ArrowLeft,
   Stethoscope,
   MessageSquare,
-  PhoneCall,
   FileText,
   Star,
   Save,
   CheckCircle,
+  CheckCircle2,
+  XCircle,
   User,
   ArrowUp,
   ArrowDown,
@@ -26,6 +27,7 @@ import {
 import { apiFetch } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 import { formatDateTime, formatDate, formatRelativeTime as fmtRelative } from '../lib/timezone';
+import ThemedSelect from './ui/ThemedSelect';
 
 // ── Status badge colors ────────────────────────────────────────────────────
 const STATUS_COLORS = {
@@ -33,14 +35,15 @@ const STATUS_COLORS = {
   COMPLETED: { bg: 'bg-blue-50 dark:bg-blue-900/30', text: 'text-blue-700 dark:text-blue-400', dot: 'bg-blue-500' },
   CANCELLED: { bg: 'bg-red-50 dark:bg-red-900/30', text: 'text-red-600 dark:text-red-400', dot: 'bg-red-400' },
   RESCHEDULED: { bg: 'bg-amber-50 dark:bg-amber-900/30', text: 'text-amber-700 dark:text-amber-400', dot: 'bg-amber-500' },
+  NO_SHOW: { bg: 'bg-amber-50 dark:bg-amber-900/30', text: 'text-amber-700 dark:text-amber-400', dot: 'bg-amber-500' },
 };
 
-const OUTCOME_COLORS = {
-  BOOKED: { bg: 'bg-green-50 dark:bg-green-900/30', text: 'text-green-700 dark:text-green-400' },
-  ESCALATED: { bg: 'bg-red-50 dark:bg-red-900/30', text: 'text-red-600 dark:text-red-400' },
-  INQUIRY: { bg: 'bg-blue-50 dark:bg-blue-900/30', text: 'text-blue-700 dark:text-blue-400' },
-  CANCELLED: { bg: 'bg-gray-50 dark:bg-gray-700/50', text: 'text-gray-600 dark:text-gray-400' },
-  ABANDONED: { bg: 'bg-gray-50 dark:bg-gray-700/50', text: 'text-gray-400' },
+const STATUS_LABELS = {
+  CONFIRMED: 'Confirmed',
+  CANCELLED: 'Cancelled',
+  RESCHEDULED: 'Rescheduled',
+  COMPLETED: 'Attended',
+  NO_SHOW: 'No Show',
 };
 
 export default function PatientCRM() {
@@ -100,7 +103,7 @@ export default function PatientCRM() {
           Patients
         </h2>
         <p className="text-gray-500 dark:text-gray-400 mt-1">
-          Your patient database — built automatically from AI bookings, calls, and SMS conversations.
+          Your patient database — built automatically from AI bookings and SMS conversations.
         </p>
       </div>
 
@@ -116,15 +119,16 @@ export default function PatientCRM() {
             className="w-full pl-10 pr-4 py-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 dark:bg-gray-700 dark:text-white"
           />
         </div>
-        <select
+        <ThemedSelect
           value={sort}
-          onChange={(e) => setSort(e.target.value)}
-          className="px-3 py-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm outline-none focus:border-primary-500 bg-white dark:bg-gray-700 dark:text-white"
-        >
-          <option value="recent">Most Recent</option>
-          <option value="name">Name A-Z</option>
-          <option value="visits">Most Visits</option>
-        </select>
+          onChange={setSort}
+          options={[
+            { value: 'recent', label: 'Most Recent' },
+            { value: 'name', label: 'Name A-Z' },
+            { value: 'visits', label: 'Most Visits' },
+          ]}
+          className="w-44"
+        />
       </div>
 
       {error && (
@@ -256,7 +260,11 @@ function PatientProfile({ patientId, tz, onBack }) {
   const [editForm, setEditForm] = useState({});
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [expandedCallId, setExpandedCallId] = useState(null);
+
+  // Status update state (mirrors AppointmentManager.jsx)
+  const [updatingStatus, setUpdatingStatus] = useState(false);
+  const [confirmAction, setConfirmAction] = useState(null); // { action, id, status }
+  const [expandedApptId, setExpandedApptId] = useState(null);
 
   const fetchProfile = useCallback(async () => {
     try {
@@ -292,6 +300,42 @@ function PatientProfile({ patientId, tz, onBack }) {
     }
   }
 
+  // ── Appointment status handlers (mirror AppointmentManager.jsx) ──────────
+  async function handleStatusUpdate(id, newStatus) {
+    setUpdatingStatus(true);
+    try {
+      await apiFetch(`/api/appointments/${id}`, {
+        method: 'PATCH',
+        body: { status: newStatus },
+      });
+      setConfirmAction(null);
+      await fetchProfile();
+    } catch (err) {
+      console.error('Status update failed:', err);
+      alert(err.message || 'Status update failed');
+    } finally {
+      setUpdatingStatus(false);
+    }
+  }
+
+  async function handleCancelAppt(id) {
+    setUpdatingStatus(true);
+    try {
+      await apiFetch(`/api/appointments/${id}/cancel`, { method: 'POST' });
+      setConfirmAction(null);
+      await fetchProfile();
+    } catch (err) {
+      console.error('Cancel failed:', err);
+      alert(err.message || 'Cancel failed');
+    } finally {
+      setUpdatingStatus(false);
+    }
+  }
+
+  function isPastAppointment(apt) {
+    return new Date(apt.scheduled_at) < new Date();
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -316,7 +360,6 @@ function PatientProfile({ patientId, tz, onBack }) {
 
   const p = data.patient;
   const appointments = data.appointments || [];
-  const calls = data.calls || [];
   const smsMessages = data.sms_messages || [];
 
   const upcomingAppts = appointments.filter(
@@ -328,7 +371,6 @@ function PatientProfile({ patientId, tz, onBack }) {
 
   const TABS = [
     { key: 'appointments', label: 'Appointments', icon: Calendar, count: appointments.length },
-    { key: 'calls', label: 'Call Logs', icon: PhoneCall, count: calls.length },
     { key: 'sms', label: 'SMS', icon: MessageSquare, count: smsMessages.length },
   ];
 
@@ -406,11 +448,6 @@ function PatientProfile({ patientId, tz, onBack }) {
                 value={upcomingAppts.length}
                 icon={Calendar}
                 color={upcomingAppts.length > 0 ? 'green' : 'gray'}
-              />
-              <StatBadge
-                label="Calls"
-                value={calls.length}
-                icon={PhoneCall}
               />
               <StatBadge
                 label="SMS"
@@ -528,17 +565,70 @@ function PatientProfile({ patientId, tz, onBack }) {
 
       {/* Tab content */}
       {activeTab === 'appointments' && (
-        <AppointmentsTab upcoming={upcomingAppts} past={pastAppts} tz={tz} />
-      )}
-      {activeTab === 'calls' && (
-        <CallsTab
-          calls={calls}
-          expandedCallId={expandedCallId}
-          setExpandedCallId={setExpandedCallId}
+        <AppointmentsTab
+          upcoming={upcomingAppts}
+          past={pastAppts}
           tz={tz}
+          expandedApptId={expandedApptId}
+          setExpandedApptId={setExpandedApptId}
+          isPastAppointment={isPastAppointment}
+          setConfirmAction={setConfirmAction}
+          updatingStatus={updatingStatus}
         />
       )}
       {activeTab === 'sms' && <SMSTab messages={smsMessages} tz={tz} />}
+
+      {/* Confirmation modal (mirrors AppointmentManager.jsx) */}
+      {confirmAction && (
+        <div
+          className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4"
+          onClick={() => setConfirmAction(null)}
+        >
+          <div
+            className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-sm w-full p-6 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-bold text-gray-900 dark:text-white">
+              {confirmAction.action === 'cancel' ? 'Cancel Appointment?' : 'Update Status?'}
+            </h3>
+            <p className="text-sm text-gray-600 dark:text-gray-400">
+              {confirmAction.action === 'attended' && 'Mark this appointment as attended?'}
+              {confirmAction.action === 'no-show' && 'Mark this appointment as no-show?'}
+              {confirmAction.action === 'correct-attended' && 'Change status from No Show to Attended?'}
+              {confirmAction.action === 'correct-no-show' && 'Change status from Attended to No Show?'}
+              {confirmAction.action === 'cancel' && 'Are you sure you want to cancel this appointment?'}
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setConfirmAction(null)}
+                disabled={updatingStatus}
+                className="flex-1 px-4 py-2.5 border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (confirmAction.action === 'cancel') {
+                    handleCancelAppt(confirmAction.id);
+                  } else {
+                    handleStatusUpdate(confirmAction.id, confirmAction.status);
+                  }
+                }}
+                disabled={updatingStatus}
+                className={`flex-1 px-4 py-2.5 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors ${
+                  confirmAction.action === 'cancel'
+                    ? 'bg-red-500 text-white hover:bg-red-600'
+                    : confirmAction.status === 'COMPLETED'
+                    ? 'bg-emerald-500 text-white hover:bg-emerald-600'
+                    : 'bg-amber-500 text-white hover:bg-amber-600'
+                }`}
+              >
+                {updatingStatus ? 'Updating...' : 'Confirm'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -560,7 +650,24 @@ function StatBadge({ label, value, icon: Icon, color = 'gray' }) {
   );
 }
 
-function AppointmentsTab({ upcoming, past, tz }) {
+function AppointmentsTab({
+  upcoming,
+  past,
+  tz,
+  expandedApptId,
+  setExpandedApptId,
+  isPastAppointment,
+  setConfirmAction,
+  updatingStatus,
+}) {
+  const rowProps = {
+    tz,
+    expandedApptId,
+    setExpandedApptId,
+    isPastAppointment,
+    setConfirmAction,
+    updatingStatus,
+  };
   return (
     <div className="space-y-4">
       {upcoming.length > 0 && (
@@ -571,7 +678,7 @@ function AppointmentsTab({ upcoming, past, tz }) {
           </h4>
           <div className="space-y-2">
             {upcoming.map((a) => (
-              <AppointmentRow key={a.id} appt={a} tz={tz} />
+              <AppointmentRow key={a.id} appt={a} {...rowProps} />
             ))}
           </div>
         </div>
@@ -584,7 +691,7 @@ function AppointmentsTab({ upcoming, past, tz }) {
           </h4>
           <div className="space-y-2">
             {past.map((a) => (
-              <AppointmentRow key={a.id} appt={a} tz={tz} />
+              <AppointmentRow key={a.id} appt={a} {...rowProps} />
             ))}
           </div>
         </div>
@@ -596,117 +703,141 @@ function AppointmentsTab({ upcoming, past, tz }) {
   );
 }
 
-function AppointmentRow({ appt, tz }) {
+function AppointmentRow({
+  appt,
+  tz,
+  expandedApptId,
+  setExpandedApptId,
+  isPastAppointment,
+  setConfirmAction,
+  updatingStatus,
+}) {
   const status = STATUS_COLORS[appt.status] || STATUS_COLORS.CONFIRMED;
-  return (
-    <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-3 flex items-center gap-4">
-      <div className={`w-2 h-2 rounded-full ${status.dot} shrink-0`}></div>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-sm font-medium text-gray-900 dark:text-white">
-            {appt.appointment_type?.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
-          </span>
-          <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${status.bg} ${status.text}`}>
-            {appt.status}
-          </span>
-          {appt.booked_via === 'AI' && (
-            <span className="px-1.5 py-0.5 bg-purple-50 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 rounded text-xs font-medium">
-              AI Booked
-            </span>
-          )}
-          {appt.confirmed_by_patient === true && (
-            <span className="px-1.5 py-0.5 bg-green-50 dark:bg-green-900/30 text-green-600 dark:text-green-400 rounded text-xs font-medium">
-              ✓ Confirmed
-            </span>
-          )}
-        </div>
-        <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-          {appt.scheduled_at ? formatDateTime(appt.scheduled_at, tz) : ''}{' '}
-          · {appt.duration_minutes} min
-        </p>
-      </div>
-    </div>
-  );
-}
+  const isExpanded = expandedApptId === appt.id;
+  const isPast = isPastAppointment(appt);
 
-function CallsTab({ calls, expandedCallId, setExpandedCallId, tz }) {
-  if (calls.length === 0) {
-    return <EmptyState icon={PhoneCall} message="No call records." />;
-  }
-  return (
-    <div className="space-y-2">
-      {calls.map((c) => {
-        const isExpanded = expandedCallId === c.id;
-        const outcome = OUTCOME_COLORS[c.outcome] || OUTCOME_COLORS.INQUIRY;
-        return (
-          <div key={c.id} className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
-            <button
-              onClick={() => setExpandedCallId(isExpanded ? null : c.id)}
-              className="w-full flex items-center gap-4 p-3 text-left hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
-            >
-              <PhoneCall className="w-4 h-4 text-gray-400 shrink-0" />
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium text-gray-900 dark:text-white">
-                    {c.started_at
-                      ? formatDateTime(c.started_at, tz, { weekday: undefined, year: undefined })
-                      : 'Unknown'}
-                  </span>
-                  {c.outcome && (
-                    <span
-                      className={`px-1.5 py-0.5 rounded text-xs font-medium ${outcome.bg} ${outcome.text}`}
-                    >
-                      {c.outcome}
-                    </span>
-                  )}
-                  {c.duration_seconds != null && (
-                    <span className="text-xs text-gray-400">
-                      {Math.floor(c.duration_seconds / 60)}:{String(c.duration_seconds % 60).padStart(2, '0')}
-                    </span>
-                  )}
-                </div>
-                {c.summary && (
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 truncate">{c.summary}</p>
-                )}
-              </div>
-              <ChevronRight
-                className={`w-4 h-4 text-gray-300 transition-transform ${
-                  isExpanded ? 'rotate-90' : ''
-                }`}
-              />
-            </button>
+  // Decide whether any actions are available for this appointment
+  const hasPastPendingActions = isPast && appt.status === 'CONFIRMED';
+  const hasCorrectAttended = appt.status === 'NO_SHOW';
+  const hasCorrectNoShow = appt.status === 'COMPLETED';
+  const hasCancel = appt.status === 'CONFIRMED' && !isPast;
+  const hasAnyActions =
+    hasPastPendingActions || hasCorrectAttended || hasCorrectNoShow || hasCancel;
 
-            {/* Transcript */}
-            {isExpanded && c.transcript && c.transcript.length > 0 && (
-              <div className="border-t border-gray-100 dark:border-gray-700 max-h-80 overflow-y-auto p-3 bg-gray-50 dark:bg-gray-700/50 space-y-2">
-                {c.transcript.map((msg, idx) => (
-                  <div
-                    key={idx}
-                    className={`flex ${
-                      msg.role === 'assistant' ? 'justify-end' : 'justify-start'
-                    }`}
-                  >
-                    <div
-                      className={`max-w-[75%] rounded-xl px-3 py-2 text-xs ${
-                        msg.role === 'assistant'
-                          ? 'bg-primary-500 text-white rounded-br-sm'
-                          : 'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 text-gray-800 dark:text-gray-200 rounded-bl-sm'
-                      }`}
-                    >
-                      <p className={`text-[10px] mb-0.5 ${
-                        msg.role === 'assistant' ? 'text-primary-100' : 'text-gray-400'
-                      }`}>
-                        {msg.role === 'assistant' ? 'AI Agent' : 'Patient'}
-                      </p>
-                      <p className="whitespace-pre-wrap">{msg.content}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
+  return (
+    <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
+      <button
+        type="button"
+        onClick={() => hasAnyActions && setExpandedApptId(isExpanded ? null : appt.id)}
+        disabled={!hasAnyActions}
+        className={`w-full p-3 flex items-center gap-4 text-left transition-colors ${
+          hasAnyActions ? 'hover:bg-gray-50 dark:hover:bg-gray-700/40 cursor-pointer' : 'cursor-default'
+        }`}
+      >
+        <div className={`w-2 h-2 rounded-full ${status.dot} shrink-0`}></div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm font-medium text-gray-900 dark:text-white">
+              {appt.appointment_type?.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
+            </span>
+            <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${status.bg} ${status.text}`}>
+              {STATUS_LABELS[appt.status] || appt.status}
+            </span>
+            {appt.booked_via === 'AI' && (
+              <span className="px-1.5 py-0.5 bg-purple-50 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 rounded text-xs font-medium">
+                AI Booked
+              </span>
+            )}
+            {appt.confirmed_by_patient === true && (
+              <span className="px-1.5 py-0.5 bg-green-50 dark:bg-green-900/30 text-green-600 dark:text-green-400 rounded text-xs font-medium">
+                ✓ Confirmed
+              </span>
             )}
           </div>
-        );
-      })}
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+            {appt.scheduled_at ? formatDateTime(appt.scheduled_at, tz) : ''}{' '}
+            · {appt.duration_minutes} min
+          </p>
+        </div>
+        {hasAnyActions && (
+          <ChevronRight
+            className={`w-4 h-4 text-gray-300 shrink-0 transition-transform ${
+              isExpanded ? 'rotate-90' : ''
+            }`}
+          />
+        )}
+      </button>
+
+      {/* Expanded actions */}
+      {isExpanded && hasAnyActions && (
+        <div className="border-t border-gray-100 dark:border-gray-700 p-3 bg-gray-50 dark:bg-gray-700/30 space-y-2">
+          {hasPastPendingActions && (
+            <>
+              <p className="text-xs text-amber-600 dark:text-amber-400 font-medium">
+                This appointment is in the past. Please update the outcome:
+              </p>
+              <div className="flex gap-2">
+                <button
+                  onClick={() =>
+                    setConfirmAction({ action: 'attended', id: appt.id, status: 'COMPLETED' })
+                  }
+                  disabled={updatingStatus}
+                  className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800 rounded-lg text-xs font-medium hover:bg-emerald-100 dark:hover:bg-emerald-900/50 disabled:opacity-50 transition-colors"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  Attended
+                </button>
+                <button
+                  onClick={() =>
+                    setConfirmAction({ action: 'no-show', id: appt.id, status: 'NO_SHOW' })
+                  }
+                  disabled={updatingStatus}
+                  className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 bg-amber-50 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 border border-amber-200 dark:border-amber-800 rounded-lg text-xs font-medium hover:bg-amber-100 dark:hover:bg-amber-900/50 disabled:opacity-50 transition-colors"
+                >
+                  <XCircle className="w-3.5 h-3.5" />
+                  No Show
+                </button>
+              </div>
+            </>
+          )}
+
+          {hasCorrectAttended && (
+            <button
+              onClick={() =>
+                setConfirmAction({ action: 'correct-attended', id: appt.id, status: 'COMPLETED' })
+              }
+              disabled={updatingStatus}
+              className="w-full flex items-center justify-center gap-1.5 py-2 px-3 bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800 rounded-lg text-xs font-medium hover:bg-emerald-100 dark:hover:bg-emerald-900/50 disabled:opacity-50 transition-colors"
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              Correct to Attended
+            </button>
+          )}
+
+          {hasCorrectNoShow && (
+            <button
+              onClick={() =>
+                setConfirmAction({ action: 'correct-no-show', id: appt.id, status: 'NO_SHOW' })
+              }
+              disabled={updatingStatus}
+              className="w-full flex items-center justify-center gap-1.5 py-2 px-3 bg-amber-50 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 border border-amber-200 dark:border-amber-800 rounded-lg text-xs font-medium hover:bg-amber-100 dark:hover:bg-amber-900/50 disabled:opacity-50 transition-colors"
+            >
+              <XCircle className="w-3.5 h-3.5" />
+              Correct to No Show
+            </button>
+          )}
+
+          {hasCancel && (
+            <button
+              onClick={() => setConfirmAction({ action: 'cancel', id: appt.id })}
+              disabled={updatingStatus}
+              className="w-full py-2 px-3 bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-800 rounded-lg text-xs font-medium hover:bg-red-100 dark:hover:bg-red-900/50 disabled:opacity-50 transition-colors"
+            >
+              Cancel Appointment
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

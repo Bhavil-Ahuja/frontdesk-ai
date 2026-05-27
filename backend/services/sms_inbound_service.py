@@ -279,6 +279,7 @@ async def _handle_cancel_request(
         appt_type = appt.appointment_type
         scheduled_at = appt.scheduled_at
         patient_name = appt.patient_name
+        cancelled_provider_id = appt.provider_id
         date_str = scheduled_at.strftime("%Y-%m-%d")
         slot_str = scheduled_at.isoformat()
 
@@ -307,6 +308,7 @@ async def _handle_cancel_request(
             date=date_str,
             available_slot=slot_str,
             tenant_ctx=tenant_ctx,
+            provider_id=cancelled_provider_id,
         )
     except Exception as exc:
         logger.error(

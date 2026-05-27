@@ -11,6 +11,7 @@ tools when Twilio isn't set up) and all downstream service calls receive the
 tenant context so they use the correct credentials.
 """
 
+import asyncio
 import json
 import logging
 import re as _re
@@ -19,6 +20,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 from openai import AsyncOpenAI, OpenAI
+
+# New `google-genai` SDK — supports ThinkingConfig with thinking_level=MINIMAL
+# which turns OFF Gemma's chain-of-thought reasoning at the source.
+# This replaces the deprecated `google-generativeai` v0.8.6 SDK.
+from google import genai
+from google.genai import types as gtypes
 
 from backend.config import settings
 from backend.services import calendar_service, sms_service, knowledge_service
@@ -120,6 +127,164 @@ def _get_async_client() -> AsyncOpenAI:
     return _async_client
 
 
+# ── Gemini client (google-genai SDK) ─────────────────────────────────────────
+
+_gemini_client: genai.Client | None = None
+
+
+def _get_gemini_client() -> genai.Client:
+    """Lazily create a singleton google-genai Client."""
+    global _gemini_client
+    if _gemini_client is None:
+        if not settings.GEMINI_API_KEY:
+            raise ValueError("GEMINI_API_KEY not set in .env")
+        _gemini_client = genai.Client(api_key=settings.GEMINI_API_KEY)
+        logger.info("Gemini client initialized — model: %s", settings.GEMINI_MODEL)
+    return _gemini_client
+
+
+def _build_gemini_config(
+    system_instruction: str = "",
+    tools: list | None = None,
+    cached_content: str | None = None,
+) -> gtypes.GenerateContentConfig:
+    """
+    Build a GenerateContentConfig with ThinkingLevel.MINIMAL.
+
+    For Gemma 4 (and other thinking-capable models) MINIMAL turns the
+    chain-of-thought OFF, so the model returns just the final response
+    without reasoning leakage.
+
+    If `cached_content` is provided, system_instruction and tools come from
+    the cache (cheaper) and we pass only the dynamic per-call portions.
+    """
+    kwargs: dict[str, Any] = {
+        "temperature": 0.7,
+        "max_output_tokens": 1024,
+        "thinking_config": gtypes.ThinkingConfig(
+            thinking_level=gtypes.ThinkingLevel.MINIMAL,
+        ),
+    }
+    if cached_content:
+        kwargs["cached_content"] = cached_content
+    else:
+        # Only set these when NOT using a cache — caches already contain them.
+        if system_instruction:
+            kwargs["system_instruction"] = system_instruction
+        if tools:
+            kwargs["tools"] = tools
+    return gtypes.GenerateContentConfig(**kwargs)
+
+
+# ── Gemini history trimming ──────────────────────────────────────────────────
+
+def _trim_gemini_history(
+    history: list["gtypes.Content"],
+    max_messages: int,
+) -> list["gtypes.Content"]:
+    """
+    Trim chat history to the last `max_messages` entries.
+
+    Preserves function_call ↔ function_response pairs: if the trim boundary
+    falls in the middle of a tool-call/tool-response pair, we drop the
+    dangling function_response(s) from the front so Gemini doesn't error
+    with "function_response without preceding function_call".
+    """
+    if max_messages <= 0 or len(history) <= max_messages:
+        return history
+
+    trimmed = history[-max_messages:]
+
+    # Drop any function_response(s) at the head with no matching call.
+    while trimmed:
+        first = trimmed[0]
+        has_fn_response = (
+            getattr(first, "role", None) == "user"
+            and getattr(first, "parts", None)
+            and any(getattr(p, "function_response", None) for p in first.parts)
+        )
+        if has_fn_response:
+            trimmed = trimmed[1:]
+        else:
+            break
+
+    logger.info(
+        "[Gemini] Trimmed history %d → %d messages (max=%d)",
+        len(history), len(trimmed), max_messages,
+    )
+    return trimmed
+
+
+# ── Gemini explicit context cache pool ───────────────────────────────────────
+
+# Per-tenant cache: tenant_id (or "default") → (cache_name, expires_at_unix)
+# The cache stores the static system prompt + tool declarations so we don't
+# re-send ~5–8K tokens of prefix on every call. Gemini bills cached input at
+# ~25% of the regular rate.
+_gemini_cache_pool: dict[str, tuple[str, float]] = {}
+
+
+def _gemini_cache_key(tenant_ctx: Any | None, model: str) -> str:
+    """Stable cache pool key per (tenant, model)."""
+    if tenant_ctx is None:
+        return f"default::{model}"
+    return f"{getattr(tenant_ctx, 'id', 'default')}::{model}"
+
+
+async def _get_or_create_gemini_cache(
+    system_prompt: str,
+    tools: list | None,
+    tenant_ctx: Any | None,
+) -> str | None:
+    """
+    Look up or lazily create a CachedContent for this (tenant, model).
+
+    Returns the cache resource name if successful, or None if caching
+    isn't supported / failed (so callers can fall back to inline send).
+    """
+    if not settings.GEMINI_USE_CONTEXT_CACHE:
+        return None
+    if not system_prompt and not tools:
+        return None
+
+    key = _gemini_cache_key(tenant_ctx, settings.GEMINI_MODEL)
+    now = time.time()
+    cached = _gemini_cache_pool.get(key)
+    # 60s safety buffer — refresh before TTL actually expires
+    if cached and cached[1] > now + 60:
+        return cached[0]
+
+    try:
+        client = _get_gemini_client()
+        cache = await client.aio.caches.create(
+            model=settings.GEMINI_MODEL,
+            config=gtypes.CreateCachedContentConfig(
+                system_instruction=system_prompt or None,
+                tools=tools,
+                ttl=f"{settings.GEMINI_CACHE_TTL_SECONDS}s",
+            ),
+        )
+        expires_at = now + settings.GEMINI_CACHE_TTL_SECONDS
+        _gemini_cache_pool[key] = (cache.name, expires_at)
+        logger.info(
+            "[Gemini] Created context cache %s for %s (TTL=%ds)",
+            cache.name, key, settings.GEMINI_CACHE_TTL_SECONDS,
+        )
+        return cache.name
+    except Exception as exc:
+        # Common failure modes: model doesn't support caching, prompt too
+        # small (<1024 tokens), API quota. Disable for this key so we don't
+        # retry hot in a loop.
+        logger.warning(
+            "[Gemini] Context cache creation failed for %s — falling back to "
+            "inline send. (%s: %s)",
+            key, type(exc).__name__, exc,
+        )
+        # Cache the failure for a minute so we don't hammer the API.
+        _gemini_cache_pool[key] = ("", now + 60)
+        return None
+
+
 # ── Tool definitions (sent to the LLM for function calling) ──────────────────
 
 # Full list of all tools. Use get_tools(tenant_ctx) to get the filtered
@@ -210,7 +375,7 @@ ALL_TOOLS = [
         "type": "function",
         "function": {
             "name": "escalate_to_human",
-            "description": "Transfer the call to a human receptionist.",
+            "description": "Transfer the call to a human receptionist. ONLY call this for: (1) immediate medical emergencies, severe distress, or explicit human requests — no confirmation needed; (2) office-specific questions you cannot answer, or billing disputes — but ONLY after asking 'Would you like me to connect you with a team member?' and the patient says yes. NEVER call this for general knowledge questions (medical info, health facts, world knowledge) — answer those directly using your training. NEVER call this on greetings or simple chat.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -297,7 +462,7 @@ ALL_TOOLS = [
         "type": "function",
         "function": {
             "name": "add_to_waitlist",
-            "description": "Add a patient to the waitlist when their preferred date/time has no available slots. The patient will be automatically notified by SMS if a slot opens up due to a cancellation.",
+            "description": "Add a patient to the waitlist when their preferred date/time has no available slots. The patient will be automatically notified by SMS if a slot opens up. CRITICAL: Reuse any patient_name, phone, appointment_type, and preferred_date you already learned in this conversation or from the CALLER INFORMATION section. Do NOT re-ask the patient for fields you already know — that's a failure mode. ALSO include preferred_time_start / preferred_time_end (24h HH:MM format) whenever the patient mentioned a time preference — admins rely on this to match slots and to contact the patient at the right time. If the patient asked for a specific doctor, pass that doctor's id as provider_id so the office can match them when the right doctor has an opening.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -305,6 +470,18 @@ ALL_TOOLS = [
                     "phone": {"type": "string", "description": "Patient's phone number."},
                     "appointment_type": {"type": "string", "description": "Type of appointment."},
                     "preferred_date": {"type": "string", "description": "Preferred date in YYYY-MM-DD format."},
+                    "preferred_time_start": {
+                        "type": "string",
+                        "description": "Optional start of the patient's preferred time window in 24-hour HH:MM format (e.g. '09:00'). Pass this whenever the patient says they want morning/afternoon/evening or names a time.",
+                    },
+                    "preferred_time_end": {
+                        "type": "string",
+                        "description": "Optional end of the patient's preferred time window in 24-hour HH:MM format (e.g. '12:00').",
+                    },
+                    "provider_id": {
+                        "type": "string",
+                        "description": "Optional UUID of the doctor the patient asked for. Use the id from get_providers. Omit if the patient said 'anyone is fine'.",
+                    },
                 },
                 "required": ["patient_name", "phone", "appointment_type", "preferred_date"],
             },
@@ -565,6 +742,61 @@ def end_session(call_id: str) -> dict[str, Any] | None:
     return session
 
 
+# ── Gemini helpers (format conversion) ──────────────────────────────────────
+
+
+def _extract_gemini_text(response) -> str:
+    """Extract only the spoken-text parts from a Gemini response,
+    skipping 'thought' parts that contain chain-of-thought reasoning."""
+    try:
+        parts = response.candidates[0].content.parts
+    except (IndexError, AttributeError):
+        return ""
+
+    text_parts = []
+    for part in parts:
+        # Skip thought/thinking parts (Gemma thinking_config)
+        if hasattr(part, "thought") and part.thought:
+            continue
+        # Skip function calls
+        if part.function_call and part.function_call.name:
+            continue
+        # Collect actual text
+        if hasattr(part, "text") and part.text:
+            text_parts.append(part.text)
+
+    return "".join(text_parts).strip()
+
+
+def _openai_tools_to_gemini(tools: list[dict]) -> list | None:
+    """
+    Convert OpenAI tool format to google-genai FunctionDeclaration objects.
+
+    OpenAI: {"type": "function", "function": {"name": "...", "parameters": {...}}}
+    google-genai: types.Tool(function_declarations=[types.FunctionDeclaration(...)])
+
+    The new SDK accepts raw JSON Schema via `parameters_json_schema` so we
+    don't need to convert types to uppercase enums.
+    """
+    function_declarations = []
+    for tool in tools:
+        if tool.get("type") == "function":
+            func = tool["function"]
+            params = func.get("parameters", {})
+
+            function_declarations.append(
+                gtypes.FunctionDeclaration(
+                    name=func["name"],
+                    description=func.get("description", ""),
+                    parameters_json_schema=params,
+                )
+            )
+
+    if not function_declarations:
+        return None
+    return [gtypes.Tool(function_declarations=function_declarations)]
+
+
 # ── Core LLM conversation ────────────────────────────────────────────────────
 
 
@@ -583,6 +815,253 @@ async def process_message(
             capabilities and all service calls use the tenant's credentials.
         caller_number: Caller phone number for system prompt injection.
     """
+    # Route based on LLM provider
+    if settings.LLM_PROVIDER == "gemini":
+        return await _process_message_gemini(call_id, user_message, tenant_ctx, caller_number)
+    else:
+        return await _process_message_ollama(call_id, user_message, tenant_ctx, caller_number)
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    """Detect a rate-limit (429) error from any of the google-genai error paths."""
+    name = type(exc).__name__
+    msg = str(exc).lower()
+    return (
+        name in ("ResourceExhausted", "ClientError", "APIError")
+        and ("429" in msg or "resource_exhausted" in msg or "rate" in msg or "quota" in msg)
+    )
+
+
+async def _gemini_send_with_retry(chat, content):
+    """Send a message via async chat with retry on rate-limit (429) errors."""
+    MAX_RETRIES = 3
+    for attempt in range(MAX_RETRIES):
+        try:
+            return await chat.send_message(content)
+        except Exception as exc:
+            if _is_rate_limit_error(exc) and attempt < MAX_RETRIES - 1:
+                wait = min(15 * (2 ** attempt), 60)
+                logger.warning(
+                    "Gemini rate limited — retrying in %.0fs (attempt %d/%d): %s",
+                    wait, attempt + 1, MAX_RETRIES, exc,
+                )
+                await asyncio.sleep(wait)
+                continue
+            raise
+
+
+async def _process_message_gemini(
+    call_id: str,
+    user_message: str,
+    tenant_ctx: Any | None = None,
+    caller_number: str = "",
+) -> str:
+    """
+    Gemini implementation with function calling support (google-genai SDK).
+    Uses ThinkingLevel.MINIMAL to disable Gemma's chain-of-thought output.
+    NOTE: For MVP/testing with fake data ONLY — not HIPAA-compliant.
+    """
+    session = get_session(call_id)
+    if session is None:
+        session = create_session(call_id, caller_number=caller_number, tenant_ctx=tenant_ctx)
+    if tenant_ctx and not session.get("tenant_ctx"):
+        session["tenant_ctx"] = tenant_ctx
+
+    effective_ctx = session.get("tenant_ctx")
+
+    session["messages"].append({
+        "role": "user",
+        "content": user_message,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
+
+    logger.info("[Call %s] Processing (Gemini) user message (%d chars)", call_id, len(user_message))
+
+    try:
+        t0 = time.time()
+
+        # Simple chat detection (same as Ollama)
+        suppress_tools = _looks_like_simple_chat(user_message, session["messages"])
+        tools_for_request = None if suppress_tools else get_tools(effective_ctx)
+        if suppress_tools:
+            logger.info("[Call %s] Simple chat detected — suppressing tools (Gemini)", call_id)
+
+        # Extract system prompt and build Gemini history (including tool calls).
+        # google-genai uses types.Content / types.Part objects.
+        history: list[gtypes.Content] = []
+        system_prompt = ""
+        all_msgs = session["messages"]
+        for i, msg in enumerate(all_msgs):
+            if msg["role"] == "system":
+                system_prompt = msg["content"]
+            elif msg["role"] == "user":
+                if msg["content"] != user_message:  # Skip the current message
+                    history.append(gtypes.Content(
+                        role="user",
+                        parts=[gtypes.Part(text=msg["content"])],
+                    ))
+            elif msg["role"] == "assistant":
+                if msg.get("tool_calls"):
+                    parts = []
+                    for tc in msg["tool_calls"]:
+                        try:
+                            args = json.loads(tc["arguments"]) if isinstance(tc["arguments"], str) else tc["arguments"]
+                        except (json.JSONDecodeError, TypeError):
+                            args = {}
+                        parts.append(gtypes.Part(
+                            function_call=gtypes.FunctionCall(name=tc["name"], args=args),
+                        ))
+                    history.append(gtypes.Content(role="model", parts=parts))
+                elif msg.get("content"):
+                    history.append(gtypes.Content(
+                        role="model",
+                        parts=[gtypes.Part(text=msg["content"])],
+                    ))
+            elif msg["role"] == "tool":
+                try:
+                    result = json.loads(msg["content"]) if isinstance(msg["content"], str) else msg["content"]
+                except (json.JSONDecodeError, TypeError):
+                    result = {"result": msg.get("content", "")}
+                if not isinstance(result, dict):
+                    result = {"result": result}
+                tool_name = "unknown"
+                if i > 0 and all_msgs[i - 1].get("tool_calls"):
+                    tool_name = all_msgs[i - 1]["tool_calls"][0]["name"]
+                history.append(gtypes.Content(
+                    role="user",
+                    parts=[gtypes.Part(
+                        function_response=gtypes.FunctionResponse(name=tool_name, response=result),
+                    )],
+                ))
+
+        # Trim history before sending so long calls don't keep growing the
+        # per-request token count. Full transcript is still saved in
+        # session["messages"] — only the *forwarded* history is trimmed.
+        history = _trim_gemini_history(
+            history,
+            max_messages=settings.GEMINI_HISTORY_MAX_MESSAGES,
+        )
+
+        # Build config with ThinkingLevel.MINIMAL — disables CoT output for Gemma 4.
+        gemini_tools = _openai_tools_to_gemini(tools_for_request) if tools_for_request else None
+
+        # Optionally use an explicit context cache for the system prompt + tools.
+        # This is a per-tenant cache that's lazily created and reused for an
+        # hour, cutting per-call cost ~75% on the cached prefix. If caching
+        # isn't supported (or fails) we silently fall back to inline send.
+        cached_name = await _get_or_create_gemini_cache(
+            system_prompt=system_prompt,
+            tools=gemini_tools,
+            tenant_ctx=effective_ctx,
+        )
+        if cached_name:
+            config = _build_gemini_config(cached_content=cached_name)
+        else:
+            config = _build_gemini_config(
+                system_instruction=system_prompt,
+                tools=gemini_tools,
+            )
+
+        # Create async chat
+        client = _get_gemini_client()
+        chat = client.aio.chats.create(
+            model=settings.GEMINI_MODEL,
+            config=config,
+            history=history,
+        )
+
+        response = await _gemini_send_with_retry(chat, user_message)
+
+        llm_time = (time.time() - t0) * 1000
+        logger.info("[Call %s] Gemini responded in %.0fms", call_id, llm_time)
+
+        # Handle function calls
+        MAX_TOOL_ROUNDS = 5
+        reply = ""
+
+        for tool_round in range(MAX_TOOL_ROUNDS):
+            if not response.candidates or not response.candidates[0].content or not response.candidates[0].content.parts:
+                logger.warning("[Call %s] Gemini returned empty response (possibly blocked by safety filters)", call_id)
+                reply = "I'm sorry, I wasn't able to process that. Could you rephrase your question?"
+                break
+
+            # Find a function_call part (skipping thought parts)
+            fc_part = None
+            for part in response.candidates[0].content.parts:
+                if getattr(part, "thought", False):
+                    continue
+                if part.function_call and part.function_call.name:
+                    fc_part = part
+                    break
+
+            if fc_part:
+                fn_name = fc_part.function_call.name
+                fn_args = dict(fc_part.function_call.args) if fc_part.function_call.args else {}
+
+                logger.info("[Call %s] Gemini function call: %s(%s)", call_id, fn_name, fn_args)
+
+                tool_result = await _execute_tool(call_id, fn_name, fn_args, tenant_ctx=effective_ctx)
+                logger.info("[Call %s] Tool result: %s", call_id, json.dumps(tool_result, default=str)[:500])
+
+                # Ensure tool_result is a dict (FunctionResponse.response expects a dict)
+                if not isinstance(tool_result, dict):
+                    tool_result = {"result": tool_result}
+
+                # Send the function response back
+                response = await _gemini_send_with_retry(
+                    chat,
+                    gtypes.Part(
+                        function_response=gtypes.FunctionResponse(
+                            name=fn_name, response=tool_result,
+                        ),
+                    ),
+                )
+
+                session["messages"].append({
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{"name": fn_name, "arguments": json.dumps(fn_args)}],
+                })
+                session["messages"].append({
+                    "role": "tool",
+                    "content": json.dumps(tool_result),
+                })
+            else:
+                reply = _extract_gemini_text(response)
+                break
+        else:
+            reply = _extract_gemini_text(response) or "I apologize, I'm having difficulty. Could you repeat that?"
+            logger.warning("[Call %s] Exceeded %d tool rounds (Gemini)", call_id, MAX_TOOL_ROUNDS)
+
+        if not reply:
+            reply = "I'm sorry, could you say that again?"
+
+        # Save reply
+        session["messages"].append({
+            "role": "assistant",
+            "content": reply,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+
+        total_time = (time.time() - t0) * 1000
+        logger.info("[Call %s] Gemini final reply (%.0fms): %s", call_id, total_time, reply[:200])
+        return reply
+
+    except Exception as exc:
+        logger.error("Gemini processing error for call %s: %s", call_id, exc, exc_info=True)
+        return (
+            "I apologize, I'm having a brief technical difficulty. "
+            "Could you repeat that? Or I can connect you with a team member."
+        )
+
+
+async def _process_message_ollama(
+    call_id: str,
+    user_message: str,
+    tenant_ctx: Any | None = None,
+    caller_number: str = "",
+) -> str:
+    """Ollama/OpenAI implementation (original code)."""
     session = get_session(call_id)
     if session is None:
         session = create_session(call_id, caller_number=caller_number, tenant_ctx=tenant_ctx)
@@ -760,7 +1239,21 @@ async def process_message_stream(
     streams token-by-token.
 
     Yields: str (content token fragments)
+
+    NOTE: Gemini streaming not yet implemented — falls back to non-streaming
+    for Gemini provider.
     """
+    # Gemini: non-streaming API, then simulate token-by-token delivery
+    if settings.LLM_PROVIDER == "gemini":
+        reply = await process_message(call_id, user_message, tenant_ctx, caller_number)
+        # Yield word-by-word with tiny async pauses so the event loop
+        # actually flushes each SSE chunk to the browser
+        words = reply.split(" ")
+        for i, word in enumerate(words):
+            yield word if i == 0 else " " + word
+            await asyncio.sleep(0.03)  # 30ms per word ≈ natural reading speed
+        return
+
     session = get_session(call_id)
     if session is None:
         session = create_session(call_id, caller_number=caller_number, tenant_ctx=tenant_ctx)
@@ -1038,6 +1531,43 @@ async def _execute_tool(
                                        call_id, date, resolved)
                         date = resolved
 
+            # ── Past-date guard: never run scheduling for a date that has
+            #    already passed. The LLM sometimes obeys a literal user
+            #    request ("book for 26th May") without noticing today is the
+            #    27th. We refuse here so the agent doesn't loop into a
+            #    "no slots → waitlist" suggestion for an impossible date.
+            try:
+                from datetime import date as _date_cls
+                from zoneinfo import ZoneInfo as _ZI
+                _tz_name = (tenant_ctx.timezone if tenant_ctx and getattr(tenant_ctx, "timezone", None) else "America/Chicago")
+                try:
+                    _tz = _ZI(_tz_name)
+                except Exception:
+                    _tz = _ZI("America/Chicago")
+                _today_local = datetime.now(_tz).date()
+                _req_date = datetime.strptime(date, "%Y-%m-%d").date()
+                if _req_date < _today_local:
+                    friendly = _req_date.strftime("%A, %B %d")
+                    logger.warning("[Call %s] get_available_slots refused — past date %s (today=%s)",
+                                   call_id, date, _today_local.isoformat())
+                    return {
+                        "ok": False,
+                        "error": "past_date",
+                        "date": date,
+                        "today": _today_local.isoformat(),
+                        "summary_for_assistant": (
+                            f"That date ({friendly}) has already passed — today is "
+                            f"{_today_local.strftime('%A, %B %d, %Y')}. Politely let the patient know "
+                            f"that date is in the past and ask which upcoming day they'd like instead. "
+                            f"Do NOT offer the waitlist for a past date. Do NOT call add_to_waitlist."
+                        ),
+                        "available_slots": [],
+                        "count": 0,
+                    }
+            except (ValueError, TypeError):
+                # If date parsing fails, fall through — downstream will handle it.
+                pass
+
             # ── Get provider-aware slots ──────────────────────────────────
             from backend.services import native_scheduling
             import uuid as uuid_mod
@@ -1065,7 +1595,38 @@ async def _execute_tool(
                 business_hours=tenant_ctx.business_hours if tenant_ctx else None,
                 tz_name=tenant_ctx.timezone if tenant_ctx else "America/Chicago",
                 provider_id=provider_uuid,
+                holidays=(tenant_ctx.holidays if tenant_ctx and getattr(tenant_ctx, "holidays", None) else None),
             )
+
+            # ── Holiday short-circuit ─────────────────────────────────────
+            #    If the requested date is a configured tenant holiday, the
+            #    slot generator returns {"holiday": {...}} with empty slots.
+            #    Tell the LLM exactly why so it can communicate the closure
+            #    by name (and refuse waitlist).
+            holiday_info = provider_slots_result.get("holiday")
+            if holiday_info:
+                try:
+                    from dateutil import parser as dt_parser
+                    _friendly = dt_parser.parse(date).strftime("%A, %B %d")
+                except Exception:
+                    _friendly = date
+                holiday_name = holiday_info.get("name") or "a holiday"
+                logger.info("[Call %s] get_available_slots refused — %s is a holiday (%s) for tenant",
+                            call_id, date, holiday_name)
+                return {
+                    "ok": False,
+                    "error": "holiday",
+                    "date": date,
+                    "holiday": holiday_info,
+                    "summary_for_assistant": (
+                        f"The office is CLOSED on {_friendly} for {holiday_name}. "
+                        f"Tell the patient we're closed that day for {holiday_name} and "
+                        f"ask which other day works. Do NOT offer the waitlist for a holiday. "
+                        f"Do NOT call add_to_waitlist for this date."
+                    ),
+                    "available_slots": [],
+                    "count": 0,
+                }
 
             provider_slots = provider_slots_result.get("slots", [])
 
@@ -1281,7 +1842,27 @@ async def _execute_tool(
                 start_time=slot_time,
                 tenant_ctx=tenant_ctx,
                 appointment_type_key=appt_type,
+                provider_id=provider_id,
             )
+
+            # Race lost — the unique-index fired because someone booked this
+            # provider+time between when we showed the slot and committed.
+            # Hand control back to the LLM with a clear message so it can
+            # apologize and offer a different slot.
+            if result and isinstance(result, dict) and result.get("status") == "CONFLICT":
+                elapsed = (time.time() - t0) * 1000
+                logger.warning(
+                    "[Call %s] Booking conflict — slot taken (provider=%s, %s) in %.0fms",
+                    call_id, provider_id, slot_time, elapsed,
+                )
+                return {
+                    "ok": False,
+                    "error": "slot_taken",
+                    "summary_for_assistant": (
+                        "That slot was just booked by someone else. "
+                        "Apologize, then offer the patient another available time."
+                    ),
+                }
             if result:
                 # Send SMS confirmation (uses tenant's Twilio — will no-op if unconfigured)
                 try:
@@ -1462,11 +2043,23 @@ async def _execute_tool(
             )
             if session:
                 session["current_state"] = "escalated"
-            esc_phone = tenant_ctx.escalation_phone if tenant_ctx else settings.ESCALATION_PHONE_NUMBER
+            # Prefer the dedicated `escalation_transfer_number` (set by an
+            # admin for live phone transfers) — fall back to `escalation_phone`
+            # so older tenants still escalate even if they only set one field.
+            if tenant_ctx:
+                transfer_dest = (
+                    (tenant_ctx.escalation_transfer_number or "").strip()
+                    or (tenant_ctx.escalation_phone or "").strip()
+                )
+            else:
+                transfer_dest = (
+                    (settings.ESCALATION_TRANSFER_NUMBER or "").strip()
+                    or (settings.ESCALATION_PHONE_NUMBER or "").strip()
+                )
             return {
                 "success": True,
                 "action": "transfer",
-                "destination": esc_phone,
+                "destination": transfer_dest,
             }
 
         elif name == "send_callback_request":
@@ -1532,12 +2125,30 @@ async def _execute_tool(
 
         elif name == "add_to_waitlist":
             from backend.services import waitlist_service
+            import uuid as uuid_mod
+
+            # Capture the patient's preferred doctor (if any) so the admin
+            # UI can match the right opening to them — and so the waitlist
+            # auto-notifier scopes to that doctor's cancellations.
+            wl_provider_uuid = None
+            wl_provider_id_str = (args.get("provider_id") or "").strip()
+            if wl_provider_id_str:
+                try:
+                    wl_provider_uuid = uuid_mod.UUID(wl_provider_id_str)
+                except (ValueError, TypeError):
+                    logger.warning("[Call %s] add_to_waitlist got invalid provider_id %r",
+                                   call_id, wl_provider_id_str)
+
             result = await waitlist_service.add_to_waitlist(
                 tenant_id=tenant_ctx.tenant_id if tenant_ctx else None,
                 patient_name=args.get("patient_name", ""),
                 patient_phone=args.get("phone", ""),
                 appointment_type=args.get("appointment_type", "consultation"),
                 preferred_date=args.get("preferred_date", ""),
+                preferred_time_start=args.get("preferred_time_start") or None,
+                preferred_time_end=args.get("preferred_time_end") or None,
+                provider_id=wl_provider_uuid,
+                tenant_ctx=tenant_ctx,
             )
             elapsed = (time.time() - t0) * 1000
             logger.info("[Call %s] add_to_waitlist → %s in %.0fms", call_id, result.get("status"), elapsed)
@@ -1831,6 +2442,26 @@ def _build_office_info(topic: str, tenant_ctx: Any | None) -> dict[str, Any]:
         else:
             hours_text = "Business hours have not been configured yet."
         parts.append(hours_text)
+
+        # ── Upcoming holidays / closures ────────────────────────────────
+        try:
+            from backend.services.tenant_service import upcoming_holidays as _upcoming
+            upcoming = _upcoming(tenant_ctx, limit=6) if tenant_ctx else []
+        except Exception:
+            upcoming = []
+        if upcoming:
+            from datetime import datetime as _dt
+            holiday_lines = []
+            for h in upcoming:
+                try:
+                    d = _dt.strptime(h["date"], "%Y-%m-%d").date()
+                    holiday_lines.append(f"{d.strftime('%B %-d')} for {h.get('name') or 'Holiday'}")
+                except Exception:
+                    holiday_lines.append(f"{h.get('date')} for {h.get('name') or 'Holiday'}")
+            parts.append(
+                "We're also closed on the following upcoming dates: "
+                + "; ".join(holiday_lines) + "."
+            )
 
     # ── Location / contact ───────────────────────────────────────────────
     if topic in ("location", "all"):

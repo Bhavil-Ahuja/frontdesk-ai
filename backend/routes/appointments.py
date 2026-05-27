@@ -299,6 +299,29 @@ async def update_appointment(
         except Exception as exc:
             logger.warning("Patient record update on status change failed: %s", exc)
 
+        # ── Outbound SMS for status change (no-show / completed) ────────
+        try:
+            tenant_ctx_sms = None
+            if apt.tenant_id:
+                tenant_ctx_sms = await tenant_service.resolve_by_id(apt.tenant_id)
+            if apt.patient_phone:
+                if new_status == AppointmentStatus.NO_SHOW and old_status != AppointmentStatus.NO_SHOW:
+                    sms_service.send_no_show(
+                        patient_name=apt.patient_name,
+                        phone=apt.patient_phone,
+                        appointment_type=apt.appointment_type,
+                        scheduled_at=apt.scheduled_at,
+                        tenant_ctx=tenant_ctx_sms,
+                    )
+                elif new_status == AppointmentStatus.COMPLETED and old_status != AppointmentStatus.COMPLETED:
+                    sms_service.send_followup(
+                        patient_name=apt.patient_name,
+                        phone=apt.patient_phone,
+                        tenant_ctx=tenant_ctx_sms,
+                    )
+        except Exception as exc:
+            logger.warning("Outbound SMS on status change failed (non-fatal): %s", exc)
+
     # ── Notes update ─────────────────────────────────────────────────────
     if body.notes is not None:
         apt.notes = body.notes.strip() if body.notes.strip() else None

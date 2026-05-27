@@ -89,7 +89,7 @@ export default function ProviderManager() {
 
   async function handleSave() {
     if (!form.name.trim()) {
-      setError('Provider name is required.');
+      setError('Doctor name is required.');
       return;
     }
     setSaving(true);
@@ -179,10 +179,10 @@ export default function ProviderManager() {
         <div>
           <h2 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
             <Users className="w-7 h-7 text-primary-500" />
-            Providers
+            Doctors
           </h2>
           <p className="text-gray-500 dark:text-gray-400 mt-1">
-            Manage practitioners and staff members. Each provider can have
+            Manage practitioners and staff members. Each doctor can have
             their own calendar and appointment types.
           </p>
         </div>
@@ -192,7 +192,7 @@ export default function ProviderManager() {
             className="flex items-center gap-2 px-4 py-2.5 bg-primary-500 text-white rounded-lg text-sm font-medium hover:bg-primary-600 transition-colors shadow-sm"
           >
             <UserPlus className="w-4 h-4" />
-            Add Provider
+            Add Doctor
           </button>
         )}
       </div>
@@ -417,16 +417,16 @@ export default function ProviderManager() {
       {providers.length === 0 && editingId === null ? (
         <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-12 text-center">
           <Users className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-1">No providers yet</h3>
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-1">No doctors yet</h3>
           <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
-            Add your practitioners so the AI agent can schedule appointments with specific providers.
+            Add your practitioners so the AI agent can schedule appointments with specific doctors.
           </p>
           <button
             onClick={startCreate}
             className="inline-flex items-center gap-2 px-4 py-2.5 bg-primary-500 text-white rounded-lg text-sm font-medium hover:bg-primary-600 transition-colors"
           >
             <UserPlus className="w-4 h-4" />
-            Add Your First Provider
+            Add Your First Doctor
           </button>
         </div>
       ) : (

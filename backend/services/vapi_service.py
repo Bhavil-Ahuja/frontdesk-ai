@@ -49,12 +49,23 @@ async def register_assistant(tenant_ctx: Any | None = None) -> str | None:
         agent_name = tenant_ctx.agent_name or "Sarah"
         business_name = tenant_ctx.business_name or "Office"
         greeting = tenant_ctx.greeting_message or f"Thank you for calling {business_name}. How can I help you today?"
+        # Resolve tenant's chosen voice. voice_config is a JSONB dict that may
+        # be a plain mapping or, defensively, an attribute-style object.
+        voice_cfg = getattr(tenant_ctx, "voice_config", None) or {}
+        if isinstance(voice_cfg, dict):
+            voice_provider = voice_cfg.get("provider") or "11labs"
+            voice_id = voice_cfg.get("voiceId") or "21m00Tcm4TlvDq8ikWAM"
+        else:
+            voice_provider = "11labs"
+            voice_id = "21m00Tcm4TlvDq8ikWAM"
     else:
         api_key = settings.VAPI_API_KEY
         assistant_id = settings.VAPI_ASSISTANT_ID
         agent_name = "Sarah"
         business_name = settings.OFFICE_NAME
         greeting = f"Thank you for calling {business_name}. This is {agent_name}. How can I help you today?"
+        voice_provider = "11labs"
+        voice_id = "21m00Tcm4TlvDq8ikWAM"
 
     if not api_key:
         logger.warning("VAPI_API_KEY not set — skipping assistant registration.")
@@ -71,8 +82,8 @@ async def register_assistant(tenant_ctx: Any | None = None) -> str | None:
             "model": settings.OLLAMA_MODEL,
         },
         "voice": {
-            "provider": "11labs",
-            "voiceId": "21m00Tcm4TlvDq8ikWAM",  # Rachel
+            "provider": voice_provider,
+            "voiceId": voice_id,
             "stability": 0.5,
             "similarityBoost": 0.75,
         },
@@ -176,10 +187,19 @@ async def _handle_assistant_request(assistant_id: str = "") -> dict[str, Any]:
         agent_name = tenant_ctx.agent_name or "Sarah"
         business_name = tenant_ctx.business_name
         greeting = tenant_ctx.greeting_message or f"Thank you for calling {business_name}. How can I help you today?"
+        voice_cfg = getattr(tenant_ctx, "voice_config", None) or {}
+        if isinstance(voice_cfg, dict):
+            voice_provider = voice_cfg.get("provider") or "11labs"
+            voice_id = voice_cfg.get("voiceId") or "21m00Tcm4TlvDq8ikWAM"
+        else:
+            voice_provider = "11labs"
+            voice_id = "21m00Tcm4TlvDq8ikWAM"
     else:
         agent_name = "Sarah"
         business_name = settings.OFFICE_NAME
         greeting = f"Thank you for calling {business_name}. This is {agent_name}. How can I help you today?"
+        voice_provider = "11labs"
+        voice_id = "21m00Tcm4TlvDq8ikWAM"
 
     return {
         "assistant": {
@@ -190,8 +210,8 @@ async def _handle_assistant_request(assistant_id: str = "") -> dict[str, Any]:
                 "model": settings.OLLAMA_MODEL,
             },
             "voice": {
-                "provider": "11labs",
-                "voiceId": "21m00Tcm4TlvDq8ikWAM",
+                "provider": voice_provider,
+                "voiceId": voice_id,
             },
             "firstMessage": greeting,
         }

@@ -26,12 +26,29 @@ import {
   Square,
   Volume2,
   Loader2,
+  AlertTriangle,
+  ChevronDown,
+  ChevronUp,
+  Wrench,
+  CalendarX,
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import { getToken } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
+import ThemedDatePicker from './ui/ThemedDatePicker';
 
 const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+
+// Convert an appointment-type display name into the lowercase underscored
+// "code" the backend stores internally. Strips non-alphanumerics so users
+// never have to think about slugs / IDs.
+function slugifyTypeName(name) {
+  return (name || '')
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
 const VOICE_OPTIONS = [
   { id: '21m00Tcm4TlvDq8ikWAM', name: 'Rachel', description: 'Young female, warm and professional tone' },
   { id: 'AZnzlk1XvdvUeBnXmlld', name: 'Domi', description: 'Young female, confident and direct delivery' },
@@ -48,6 +65,10 @@ export default function AgentConfig() {
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState(null);
   const [showSecrets, setShowSecrets] = useState({});
+  // The Vapi / Twilio credential blocks are developer concerns — clinic owners
+  // shouldn't have to deal with cryptic IDs and SIDs. We hide them behind a
+  // single "Advanced — Developer Settings" collapsible.
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   // Voice preview state
   const [playingVoiceId, setPlayingVoiceId] = useState(null);
@@ -120,25 +141,40 @@ export default function AgentConfig() {
         return;
       }
 
-      // Fallback: use browser SpeechSynthesis
+      // Fallback: use browser SpeechSynthesis. We make each VOICE_OPTION sound
+      // distinct by (a) deterministically picking a different OS voice from
+      // the matching gender pool based on the voice index, and (b) varying
+      // rate/pitch slightly per voice.
       if ('speechSynthesis' in window) {
         const utterance = new SpeechSynthesisUtterance(
           'Hi there! Thank you for calling. How can I help you today?'
         );
-        utterance.rate = 0.95;
-        utterance.pitch = 1.0;
 
-        // Try to pick a voice that roughly matches
         const voices = window.speechSynthesis.getVoices();
-        const voice = VOICE_OPTIONS.find((v) => v.id === voiceId);
-        if (voice && voices.length > 0) {
-          const isM = voice.description?.toLowerCase().includes('male') &&
-                      !voice.description?.toLowerCase().includes('female');
-          const match = voices.find((v) =>
-            v.lang.startsWith('en') &&
-            (isM ? v.name.toLowerCase().includes('male') : v.name.toLowerCase().includes('female'))
-          ) || voices.find((v) => v.lang.startsWith('en'));
-          if (match) utterance.voice = match;
+        const voiceMeta = VOICE_OPTIONS.find((v) => v.id === voiceId);
+        const voiceIdx = VOICE_OPTIONS.findIndex((v) => v.id === voiceId);
+
+        // Vary pitch/rate so even when all OS voices are identical, the user
+        // can still tell the previews apart. Range stays in a natural band.
+        utterance.rate = 0.9 + (voiceIdx % 5) * 0.04;   // 0.90, 0.94, 0.98, 1.02, 1.06
+        utterance.pitch = 0.85 + (voiceIdx % 5) * 0.10; // 0.85, 0.95, 1.05, 1.15, 1.25
+
+        if (voiceMeta && voices.length > 0) {
+          const desc = (voiceMeta.description || '').toLowerCase();
+          const isMale = desc.includes('male') && !desc.includes('female');
+          // Pool of en-* voices matching the expected gender (best effort —
+          // browsers don't expose gender directly, so we match on name).
+          const enVoices = voices.filter((v) => v.lang.startsWith('en'));
+          const genderPool = enVoices.filter((v) => {
+            const n = v.name.toLowerCase();
+            return isMale
+              ? n.includes('male') && !n.includes('female')
+              : n.includes('female') || /alex|samantha|victoria|karen|tessa|moira|fiona|kate|allison|ava/.test(n);
+          });
+          const pool = genderPool.length > 0 ? genderPool : enVoices;
+          if (pool.length > 0) {
+            utterance.voice = pool[voiceIdx % pool.length];
+          }
         }
 
         utterance.onstart = () => {
@@ -297,12 +333,18 @@ export default function AgentConfig() {
               className="input"
             />
           </Field>
-          <Field label="Timezone">
+          <Field
+            label="Timezone"
+            help="Timezone is set at registration and cannot be changed here. Contact support if you need to relocate."
+          >
             <input
               type="text"
               value={config.timezone || ''}
-              onChange={(e) => update('timezone', e.target.value)}
-              className="input"
+              readOnly
+              disabled
+              tabIndex={-1}
+              aria-readonly="true"
+              className="input cursor-not-allowed bg-gray-100 dark:bg-gray-700/50 text-gray-500 dark:text-gray-400"
             />
           </Field>
         </div>
@@ -412,9 +454,36 @@ export default function AgentConfig() {
       {/* Escalation */}
       <Section icon={PhoneIcon} title="Escalation & Emergencies">
         <div className="space-y-4">
+          {/* Prompt the owner to fill in emergency guidance when it's still blank.
+              Escalation phone is now collected at signup, so it should already
+              be populated — but emergency guidance is optional at signup and
+              should be filled in here. */}
+          {!config.emergency_guidance?.trim() && (
+            <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl p-4 flex items-start gap-3">
+              <AlertTriangle className="w-5 h-5 text-amber-500 dark:text-amber-400 mt-0.5 shrink-0" />
+              <div className="text-sm">
+                <p className="font-medium text-amber-900 dark:text-amber-300">
+                  Add emergency guidance below
+                </p>
+                <p className="text-amber-700 dark:text-amber-400 mt-1">
+                  Your agent doesn't have any emergency instructions yet. Without
+                  this, callers describing a medical emergency may not get
+                  appropriate first-aid steps. Add a short list of common
+                  scenarios and what the agent should say or do — for example,
+                  knocked-out tooth, severe bleeding, chest pain, or trouble
+                  breathing.
+                </p>
+              </div>
+            </div>
+          )}
+
           <Field
-            label="Escalation Phone Number"
-            help="When the AI escalates a call, it transfers to this number."
+            label={
+              <>
+                Escalation Phone Number <span className="text-red-400">*</span>
+              </>
+            }
+            help="When the AI escalates a call, it transfers to this number. Set during signup; update here if it changes."
           >
             <input
               type="tel"
@@ -426,14 +495,19 @@ export default function AgentConfig() {
           </Field>
           <Field
             label="Emergency Guidance"
-            help="Instructions the agent follows for medical emergencies."
+            help="First-aid instructions the agent gives callers in emergencies, before transferring. Recommended."
           >
             <textarea
               value={config.emergency_guidance || ''}
               onChange={(e) => update('emergency_guidance', e.target.value)}
-              rows={2}
-              placeholder="If the caller mentions severe pain, swelling, or trauma, transfer immediately."
-              className="input resize-none"
+              rows={5}
+              placeholder={
+                '- Knocked-out tooth: keep moist in milk or saliva, come in within 30 minutes, do not touch the root\n' +
+                '- Severe bleeding: apply firm pressure with clean gauze, ER if it does not stop\n' +
+                '- Chest pain or trouble breathing: call 911 immediately\n' +
+                '- Severe swelling or abscess: same-day visit, advise ER if breathing affected'
+              }
+              className="input resize-none font-mono text-xs"
             />
           </Field>
         </div>
@@ -496,6 +570,19 @@ export default function AgentConfig() {
         </div>
       </Section>
 
+      {/* Holidays / Office Closures */}
+      <Section icon={CalendarX} title="Holidays & Office Closures">
+        <p className="text-sm text-gray-500 dark:text-gray-400 -mt-2 mb-3">
+          One-off days the office is closed (in addition to your weekly schedule above).
+          The agent will refuse bookings and proactively tell callers we're closed for the named holiday.
+          Add as many as you like, edit any time.
+        </p>
+        <HolidaysEditor
+          holidays={config.holidays || []}
+          onChange={(list) => update('holidays', list)}
+        />
+      </Section>
+
       {/* Appointment Types */}
       <Section icon={Stethoscope} title="Appointment Types">
         <p className="text-sm text-gray-500 dark:text-gray-400 -mt-2 mb-3">
@@ -506,27 +593,24 @@ export default function AgentConfig() {
         <div className="space-y-3">
           {(config.appointment_types || []).map((at, idx) => (
             <div key={idx} className="flex items-start gap-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3 border border-gray-100 dark:border-gray-700">
-              <div className="flex-1 grid grid-cols-2 md:grid-cols-4 gap-3">
-                <Field label="Short Code">
-                  <input
-                    type="text"
-                    value={at.code || ''}
-                    onChange={(e) => {
-                      const types = [...(config.appointment_types || [])];
-                      types[idx] = { ...types[idx], code: e.target.value.toLowerCase().replace(/\s+/g, '_') };
-                      update('appointment_types', types);
-                    }}
-                    placeholder="consultation"
-                    className="input"
-                  />
-                </Field>
-                <Field label="Display Name">
+              <div className="flex-1 grid grid-cols-2 md:grid-cols-3 gap-3">
+                <Field label="Name">
                   <input
                     type="text"
                     value={at.name || ''}
                     onChange={(e) => {
                       const types = [...(config.appointment_types || [])];
-                      types[idx] = { ...types[idx], name: e.target.value };
+                      const newName = e.target.value;
+                      // Auto-generate the internal code from the display name so
+                      // the clinic owner never has to think about developer slugs.
+                      // We only regenerate when the existing code looks
+                      // auto-generated (matches the previous slugified name) or
+                      // is empty — preserves any custom code already in place.
+                      const prev = types[idx] || {};
+                      const prevSlug = slugifyTypeName(prev.name || '');
+                      const shouldAutoCode = !prev.code || prev.code === prevSlug;
+                      const nextCode = shouldAutoCode ? slugifyTypeName(newName) : prev.code;
+                      types[idx] = { ...prev, name: newName, code: nextCode };
                       update('appointment_types', types);
                     }}
                     placeholder="Consultation"
@@ -587,89 +671,160 @@ export default function AgentConfig() {
             <Plus className="w-4 h-4" />
             Add Appointment Type
           </button>
+          <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">
+            Tip: the internal short code is generated for you from the name.
+            Existing custom codes are preserved.
+          </p>
         </div>
       </Section>
 
-      {/* Vapi integration */}
-      <IntegrationSection
-        icon={PhoneIcon}
-        title="Vapi (Voice Agent)"
-        description="Required to receive phone calls. Get credentials at vapi.ai → Settings → API Keys."
-        configured={config.vapi_configured}
-        accent="indigo"
-        learnMore="https://vapi.ai"
-      >
-        <SecretField
-          label="Vapi API Key"
-          fieldKey="vapi_api_key"
-          showSecrets={showSecrets}
-          setShowSecrets={setShowSecrets}
-          masked={config.vapi_api_key_masked}
-          value={config.vapi_api_key}
-          onChange={(v) => update('vapi_api_key', v)}
-          placeholder="vapi_sk_..."
-        />
-        <Field label="Vapi Assistant ID">
-          <input
-            type="text"
-            value={config.vapi_assistant_id || ''}
-            onChange={(e) => update('vapi_assistant_id', e.target.value)}
-            placeholder="asst_..."
-            className="input"
+      {/* ── Connections ── high-level connected/not-connected status. The
+          gnarly cryptic IDs live below in the "Developer Settings" drawer so
+          clinic owners only see them when they need them. */}
+      <Section icon={LinkIcon} title="Connections">
+        <p className="text-sm text-gray-500 dark:text-gray-400 -mt-2 mb-2">
+          Status of each service your AI agent uses. Open
+          "Developer Settings" below if you need to update credentials.
+        </p>
+        <div className="space-y-2">
+          <VapiConnectionRow
+            connected={config.vapi_configured}
+            onConnected={fetchConfig}
           />
-        </Field>
-        <Field label="Vapi Phone Number ID">
-          <input
-            type="text"
-            value={config.vapi_phone_number_id || ''}
-            onChange={(e) => update('vapi_phone_number_id', e.target.value)}
-            placeholder="phone_..."
-            className="input"
+          <ConnectionStatusRow
+            icon={Mail}
+            label="Twilio (SMS Reminders)"
+            connected={config.twilio_configured}
+            connectedText="SMS reminders and confirmations are active"
+            notConnectedText="SMS features are disabled until configured"
           />
-        </Field>
-      </IntegrationSection>
+        </div>
+      </Section>
 
-      {/* Google Calendar integration */}
+      {/* Google Calendar integration — kept visible because OAuth is friendly
+          and there are no cryptic IDs to enter. */}
       <GoogleCalendarSection config={config} onUpdate={fetchConfig} />
 
-      {/* Twilio integration */}
-      <IntegrationSection
-        icon={Mail}
-        title="Twilio (SMS)"
-        description="Optional. Send SMS reminders & follow-ups. Get credentials at twilio.com → Console."
-        configured={config.twilio_configured}
-        accent="pink"
-        learnMore="https://www.twilio.com"
-      >
-        <Field label="Twilio Account SID">
-          <input
-            type="text"
-            value={config.twilio_account_sid || ''}
-            onChange={(e) => update('twilio_account_sid', e.target.value)}
-            placeholder="AC..."
-            className="input"
-          />
-        </Field>
-        <SecretField
-          label="Twilio Auth Token"
-          fieldKey="twilio_auth_token"
-          showSecrets={showSecrets}
-          setShowSecrets={setShowSecrets}
-          masked={config.twilio_auth_token_masked}
-          value={config.twilio_auth_token}
-          onChange={(v) => update('twilio_auth_token', v)}
-          placeholder="32-char auth token"
-        />
-        <Field label="Twilio SMS-from Phone">
-          <input
-            type="tel"
-            value={config.twilio_phone_number || ''}
-            onChange={(e) => update('twilio_phone_number', e.target.value)}
-            placeholder="+15125550100"
-            className="input"
-          />
-        </Field>
-      </IntegrationSection>
+      {/* ── Developer Settings (collapsible) ──
+          Vapi + Twilio credentials live here. Hidden by default so clinic
+          owners don't see cryptic API keys and IDs unless they need them. */}
+      <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setShowAdvanced(!showAdvanced)}
+          className="w-full flex items-center justify-between p-6 text-left hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
+        >
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-gray-100 dark:bg-gray-700 flex items-center justify-center">
+              <Wrench className="w-5 h-5 text-gray-500 dark:text-gray-400" />
+            </div>
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                Developer Settings
+              </h3>
+              <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+                API keys and integration IDs. Most users never need to touch
+                these — your platform admin handles them during onboarding.
+              </p>
+            </div>
+          </div>
+          {showAdvanced ? (
+            <ChevronUp className="w-5 h-5 text-gray-400 shrink-0" />
+          ) : (
+            <ChevronDown className="w-5 h-5 text-gray-400 shrink-0" />
+          )}
+        </button>
+
+        {showAdvanced && (
+          <div className="border-t border-gray-200 dark:border-gray-700 p-6 space-y-6 bg-gray-50/50 dark:bg-gray-900/30">
+            <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-3 flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
+              <p className="text-xs text-amber-800 dark:text-amber-300">
+                Changing these values can take your agent offline. Only edit
+                them if your platform admin asked you to.
+              </p>
+            </div>
+
+            {/* Vapi integration */}
+            <IntegrationSection
+              icon={PhoneIcon}
+              title="Vapi (Voice Agent)"
+              description="Required to receive phone calls. Get credentials at vapi.ai → Settings → API Keys."
+              configured={config.vapi_configured}
+              accent="indigo"
+              learnMore="https://vapi.ai"
+            >
+              <SecretField
+                label="Vapi API Key"
+                fieldKey="vapi_api_key"
+                showSecrets={showSecrets}
+                setShowSecrets={setShowSecrets}
+                masked={config.vapi_api_key_masked}
+                value={config.vapi_api_key}
+                onChange={(v) => update('vapi_api_key', v)}
+                placeholder="vapi_sk_..."
+              />
+              <Field label="Vapi Assistant ID">
+                <input
+                  type="text"
+                  value={config.vapi_assistant_id || ''}
+                  onChange={(e) => update('vapi_assistant_id', e.target.value)}
+                  placeholder="asst_..."
+                  className="input"
+                />
+              </Field>
+              <Field label="Vapi Phone Number ID">
+                <input
+                  type="text"
+                  value={config.vapi_phone_number_id || ''}
+                  onChange={(e) => update('vapi_phone_number_id', e.target.value)}
+                  placeholder="phone_..."
+                  className="input"
+                />
+              </Field>
+            </IntegrationSection>
+
+            {/* Twilio integration */}
+            <IntegrationSection
+              icon={Mail}
+              title="Twilio (SMS)"
+              description="Optional. Send SMS reminders & follow-ups. Get credentials at twilio.com → Console."
+              configured={config.twilio_configured}
+              accent="pink"
+              learnMore="https://www.twilio.com"
+            >
+              <Field label="Twilio Account SID">
+                <input
+                  type="text"
+                  value={config.twilio_account_sid || ''}
+                  onChange={(e) => update('twilio_account_sid', e.target.value)}
+                  placeholder="AC..."
+                  className="input"
+                />
+              </Field>
+              <SecretField
+                label="Twilio Auth Token"
+                fieldKey="twilio_auth_token"
+                showSecrets={showSecrets}
+                setShowSecrets={setShowSecrets}
+                masked={config.twilio_auth_token_masked}
+                value={config.twilio_auth_token}
+                onChange={(v) => update('twilio_auth_token', v)}
+                placeholder="32-char auth token"
+              />
+              <Field label="Twilio SMS-from Phone">
+                <input
+                  type="tel"
+                  value={config.twilio_phone_number || ''}
+                  onChange={(e) => update('twilio_phone_number', e.target.value)}
+                  placeholder="+15125550100"
+                  className="input"
+                />
+              </Field>
+            </IntegrationSection>
+          </div>
+        )}
+      </div>
 
       {/* Appointment Reminders */}
       <Section icon={Bell} title="Appointment Reminders">
@@ -826,6 +981,420 @@ function Field({ label, help, children, className = '' }) {
       <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">{label}</label>
       {children}
       {help && <p className="text-xs text-gray-400 mt-1">{help}</p>}
+    </div>
+  );
+}
+
+// Convert a "YYYY-MM-DD" string into a local-time Date (no TZ shift) so the
+// themed calendar lands on the same day the user typed. Returns null for
+// empty/invalid strings so the picker shows its placeholder state.
+function isoToLocalDate(iso) {
+  if (!iso || typeof iso !== 'string') return null;
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+}
+
+// Inverse of isoToLocalDate — formats a Date back to "YYYY-MM-DD" in local
+// time. Used when persisting the picker's selection.
+function localDateToIso(d) {
+  if (!d) return '';
+  const y = d.getFullYear();
+  const mo = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${mo}-${day}`;
+}
+
+// Editor for tenant.holidays — array of {date: 'YYYY-MM-DD', name: string}.
+// Normalizes (dedupes + sorts ascending) on every change so the persisted
+// shape always matches what the backend expects.
+function HolidaysEditor({ holidays, onChange }) {
+  const [newDate, setNewDate] = useState('');
+  const [newName, setNewName] = useState('');
+  const [err, setErr] = useState(null);
+
+  // Always render in chronological order — caller may pass unsorted data.
+  const sorted = React.useMemo(() => {
+    return [...(holidays || [])]
+      .filter((h) => h && h.date)
+      .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  }, [holidays]);
+
+  function add() {
+    setErr(null);
+    const date = (newDate || '').trim();
+    const name = (newName || '').trim();
+    if (!date) {
+      setErr('Pick a date.');
+      return;
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      setErr('Date must be YYYY-MM-DD.');
+      return;
+    }
+    if (!name) {
+      setErr('Give the holiday a name (e.g. "Christmas Day").');
+      return;
+    }
+    // Dedupe by date — later add for same date wins on name.
+    const next = [
+      ...sorted.filter((h) => h.date !== date),
+      { date, name },
+    ].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    onChange(next);
+    setNewDate('');
+    setNewName('');
+  }
+
+  function remove(date) {
+    onChange(sorted.filter((h) => h.date !== date));
+  }
+
+  function updateName(date, name) {
+    onChange(
+      sorted.map((h) => (h.date === date ? { ...h, name } : h))
+    );
+  }
+
+  // Friendly display label — falls back to the raw ISO date if parsing fails.
+  function fmtDate(iso) {
+    try {
+      // Parse as local date to avoid TZ off-by-one shifts.
+      const [y, m, d] = iso.split('-').map((v) => parseInt(v, 10));
+      const dt = new Date(y, m - 1, d);
+      return dt.toLocaleDateString(undefined, {
+        weekday: 'short',
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+      });
+    } catch {
+      return iso;
+    }
+  }
+
+  // Today (local) — used to dim past entries so admins can spot stale rows.
+  const todayIso = (() => {
+    const d = new Date();
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  })();
+
+  return (
+    <div className="space-y-3">
+      {/* Existing entries */}
+      {sorted.length === 0 ? (
+        <p className="text-sm text-gray-400 italic">No holidays configured yet.</p>
+      ) : (
+        <div className="space-y-2">
+          {sorted.map((h) => {
+            const isPast = h.date < todayIso;
+            return (
+              <div
+                key={h.date}
+                className={`flex items-center gap-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3 border border-gray-100 dark:border-gray-700 ${
+                  isPast ? 'opacity-60' : ''
+                }`}
+              >
+                <div className="w-44 shrink-0">
+                  <div className="text-sm font-medium text-gray-900 dark:text-white">
+                    {fmtDate(h.date)}
+                  </div>
+                  <div className="text-xs text-gray-400 font-mono">{h.date}</div>
+                </div>
+                <input
+                  type="text"
+                  value={h.name || ''}
+                  onChange={(e) => updateName(h.date, e.target.value)}
+                  className="flex-1 px-3 py-1.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 dark:text-white focus:ring-2 focus:ring-primary-500 outline-none"
+                  placeholder="Holiday name"
+                />
+                <button
+                  type="button"
+                  onClick={() => remove(h.date)}
+                  className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
+                  title="Remove holiday"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Add new row */}
+      <div className="flex items-end gap-3 pt-2 border-t border-gray-100 dark:border-gray-700">
+        <div className="min-w-[12rem]">
+          <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+            Date
+          </label>
+          <ThemedDatePicker
+            value={isoToLocalDate(newDate)}
+            onChange={(d) => setNewDate(localDateToIso(d))}
+            onClear={() => setNewDate('')}
+            placeholder="Pick a date"
+            min={isoToLocalDate(todayIso)}
+            accent="primary"
+          />
+        </div>
+        <div className="flex-1">
+          <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+            Holiday name
+          </label>
+          <input
+            type="text"
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                add();
+              }
+            }}
+            placeholder='e.g. "Christmas Day", "Thanksgiving"'
+            className="w-full px-3 py-1.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 dark:text-white focus:ring-2 focus:ring-primary-500 outline-none"
+          />
+        </div>
+        <button
+          type="button"
+          onClick={add}
+          className="px-4 py-1.5 bg-primary-500 hover:bg-primary-600 text-white rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5"
+        >
+          <Plus className="w-4 h-4" />
+          Add
+        </button>
+      </div>
+
+      {err && (
+        <p className="text-xs text-red-600 dark:text-red-400 flex items-center gap-1">
+          <AlertCircle className="w-3 h-3" />
+          {err}
+        </p>
+      )}
+
+      <p className="text-xs text-gray-400">
+        Don't forget to click <span className="font-medium">Save Changes</span> at the top to apply.
+      </p>
+    </div>
+  );
+}
+
+function VapiConnectionRow({ connected, onConnected }) {
+  const [open, setOpen] = useState(false);
+  const [apiKey, setApiKey] = useState('');
+  const [phoneNumberId, setPhoneNumberId] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [err, setErr] = useState(null);
+  const [okMsg, setOkMsg] = useState(null);
+
+  async function handleConnect() {
+    if (!apiKey.trim()) {
+      setErr('Paste your Vapi API key first.');
+      return;
+    }
+    setSubmitting(true);
+    setErr(null);
+    setOkMsg(null);
+    try {
+      const body = { api_key: apiKey.trim() };
+      if (phoneNumberId.trim()) body.phone_number_id = phoneNumberId.trim();
+      const data = await apiFetch('/api/integrations/vapi/connect', {
+        method: 'POST',
+        body,
+      });
+      setOkMsg(data.message || 'Connected!');
+      setApiKey('');
+      setPhoneNumberId('');
+      // Give the user a second to see the success message before closing.
+      setTimeout(() => {
+        setOpen(false);
+        setOkMsg(null);
+        onConnected?.();
+      }, 1500);
+    } catch (e) {
+      setErr(e.message || 'Connection failed.');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleDisconnect() {
+    if (!confirm('Disconnect Vapi? Your phone agent will stop answering calls.')) return;
+    setSubmitting(true);
+    setErr(null);
+    try {
+      await apiFetch('/api/integrations/vapi/disconnect', { method: 'POST' });
+      onConnected?.();
+    } catch (e) {
+      setErr(e.message || 'Disconnect failed.');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div
+      className={`rounded-lg border ${
+        connected
+          ? 'bg-green-50/50 dark:bg-green-900/10 border-green-200 dark:border-green-800'
+          : 'bg-gray-50 dark:bg-gray-700/50 border-gray-200 dark:border-gray-700'
+      }`}
+    >
+      <div className="flex items-center gap-3 p-3">
+        <div
+          className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
+            connected
+              ? 'bg-green-100 dark:bg-green-900/30 text-green-600'
+              : 'bg-gray-200 dark:bg-gray-600 text-gray-500'
+          }`}
+        >
+          <PhoneIcon className="w-4 h-4" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium text-gray-900 dark:text-white">Vapi (Voice Calls)</p>
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            {connected
+              ? 'Phone agent is live — your Vapi number is answering calls.'
+              : 'Phone agent is not configured yet. Click "Connect" to provision one.'}
+          </p>
+        </div>
+        {connected ? (
+          <>
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-full text-xs font-medium shrink-0">
+              <CheckCircle className="w-3 h-3" />
+              Connected
+            </span>
+            <button
+              type="button"
+              onClick={handleDisconnect}
+              disabled={submitting}
+              className="text-xs font-medium text-red-600 dark:text-red-400 hover:underline shrink-0 disabled:opacity-50"
+            >
+              Disconnect
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setOpen((o) => !o)}
+            className="px-3 py-1.5 bg-primary-500 text-white rounded-lg text-xs font-medium hover:bg-primary-600 shrink-0 transition-colors"
+          >
+            {open ? 'Cancel' : 'Connect with Vapi'}
+          </button>
+        )}
+      </div>
+
+      {open && !connected && (
+        <div className="border-t border-gray-200 dark:border-gray-700 p-4 space-y-3 bg-white/60 dark:bg-gray-800/60">
+          <p className="text-xs text-gray-600 dark:text-gray-400">
+            Paste your Vapi API key. We'll create a new assistant pre-configured
+            with your greeting, voice, and business info. Get the key at{' '}
+            <a
+              href="https://dashboard.vapi.ai/account"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-primary-600 hover:underline"
+            >
+              dashboard.vapi.ai → Account → API Keys
+            </a>.
+          </p>
+          <div>
+            <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Vapi API Key <span className="text-red-400">*</span>
+            </label>
+            <input
+              type="password"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              placeholder="vapi_sk_..."
+              className="input"
+              autoComplete="off"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Vapi Phone Number ID (optional)
+            </label>
+            <input
+              type="text"
+              value={phoneNumberId}
+              onChange={(e) => setPhoneNumberId(e.target.value)}
+              placeholder="Leave blank to set up later"
+              className="input"
+            />
+            <p className="text-[11px] text-gray-400 mt-1">
+              Only needed if you've already bought a phone number on Vapi.
+            </p>
+          </div>
+          {err && (
+            <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg p-2.5 text-xs text-red-700 dark:text-red-400">
+              {err}
+            </div>
+          )}
+          {okMsg && (
+            <div className="bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 rounded-lg p-2.5 text-xs text-green-700 dark:text-green-400 flex items-start gap-2">
+              <CheckCircle className="w-4 h-4 mt-0.5 shrink-0" />
+              <span>{okMsg}</span>
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={handleConnect}
+            disabled={submitting || !apiKey.trim()}
+            className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-primary-500 text-white rounded-lg text-sm font-medium hover:bg-primary-600 disabled:opacity-50 transition-colors"
+          >
+            {submitting ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Provisioning your AI agent…
+              </>
+            ) : (
+              'Provision Assistant'
+            )}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ConnectionStatusRow({ icon: Icon, label, connected, connectedText, notConnectedText }) {
+  return (
+    <div
+      className={`flex items-center gap-3 p-3 rounded-lg border ${
+        connected
+          ? 'bg-green-50/50 dark:bg-green-900/10 border-green-200 dark:border-green-800'
+          : 'bg-gray-50 dark:bg-gray-700/50 border-gray-200 dark:border-gray-700'
+      }`}
+    >
+      <div
+        className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
+          connected
+            ? 'bg-green-100 dark:bg-green-900/30 text-green-600'
+            : 'bg-gray-200 dark:bg-gray-600 text-gray-500'
+        }`}
+      >
+        <Icon className="w-4 h-4" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium text-gray-900 dark:text-white">{label}</p>
+        <p className="text-xs text-gray-500 dark:text-gray-400">
+          {connected ? connectedText : notConnectedText}
+        </p>
+      </div>
+      {connected ? (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-full text-xs font-medium shrink-0">
+          <CheckCircle className="w-3 h-3" />
+          Connected
+        </span>
+      ) : (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-gray-200 dark:bg-gray-600 text-gray-600 dark:text-gray-300 rounded-full text-xs font-medium shrink-0">
+          Not connected
+        </span>
+      )}
     </div>
   );
 }

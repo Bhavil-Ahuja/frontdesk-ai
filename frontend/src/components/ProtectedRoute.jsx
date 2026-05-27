@@ -1,6 +1,7 @@
 import React from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { AlertCircle, LogOut } from 'lucide-react';
 
 /**
  * ProtectedRoute — guards routes based on auth state.
@@ -11,7 +12,7 @@ import { useAuth } from '../contexts/AuthContext';
  *   <ProtectedRoute requireActive>...</ProtectedRoute> — requires ACTIVE status
  */
 export default function ProtectedRoute({ children, requireAdmin = false, requireActive = true }) {
-  const { user, loading, isAuthenticated, isAdmin, isPending } = useAuth();
+  const { user, loading, isAuthenticated, isAdmin, isPending, accountError, logout } = useAuth();
   const location = useLocation();
 
   // Wait for initial /auth/me load
@@ -19,6 +20,33 @@ export default function ProtectedRoute({ children, requireAdmin = false, require
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500"></div>
+      </div>
+    );
+  }
+
+  // Account disabled (403 from /me) — show a friendly message instead of
+  // silently kicking to /login with no explanation.
+  if (accountError && !isAuthenticated) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 px-4">
+        <div className="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-lg max-w-md w-full p-8 text-center space-y-4">
+          <div className="mx-auto w-14 h-14 bg-red-100 dark:bg-red-900/30 rounded-full flex items-center justify-center">
+            <AlertCircle className="w-7 h-7 text-red-500" />
+          </div>
+          <h2 className="text-xl font-bold text-gray-900 dark:text-white">
+            Account Unavailable
+          </h2>
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            {accountError}
+          </p>
+          <button
+            onClick={logout}
+            className="inline-flex items-center gap-2 px-4 py-2.5 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg text-sm font-medium hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+          >
+            <LogOut className="w-4 h-4" />
+            Back to Login
+          </button>
+        </div>
       </div>
     );
   }
