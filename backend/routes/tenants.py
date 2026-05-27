@@ -22,8 +22,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.config import settings
 from backend.database import get_db
 from backend.services import tenant_service, auth_service
+from backend.services.usage_service import get_usage_summary, get_plan_limits
 from backend.models.tenant import Tenant, TenantStatus, BusinessType, PlanTier
 
 logger = logging.getLogger(__name__)
@@ -99,6 +101,8 @@ class TenantOut(BaseModel):
     # Integration status (show whether configured, don't expose keys)
     vapi_configured: bool
     twilio_configured: bool
+    # Per-tenant Twilio phone number (assigned by admin under Option A)
+    twilio_phone_number: Optional[str]
     google_calendar_connected: bool
     google_calendar_email: Optional[str]
     created_at: Optional[datetime]
@@ -126,8 +130,17 @@ def _tenant_to_out(t: Tenant) -> TenantOut:
         demo_mode=t.demo_mode if t.demo_mode is not None else True,
         agent_name=t.agent_name,
         greeting_message=t.greeting_message,
-        vapi_configured=bool(t.vapi_api_key and t.vapi_assistant_id),
-        twilio_configured=bool(t.twilio_account_sid and t.twilio_auth_token),
+        # Option A: Vapi is "configured" if an assistant_id has been assigned
+        # (by admin or auto-provision). The global API key handles auth.
+        vapi_configured=bool(t.vapi_assistant_id),
+        # Twilio is "configured" if the platform has credentials AND a phone
+        # number is assigned to this tenant.
+        twilio_configured=bool(
+            (t.twilio_account_sid or settings.TWILIO_ACCOUNT_SID) and
+            (t.twilio_auth_token or settings.TWILIO_AUTH_TOKEN) and
+            (t.twilio_phone_number or settings.TWILIO_PHONE_NUMBER)
+        ),
+        twilio_phone_number=t.twilio_phone_number or "",
         google_calendar_connected=bool(t.google_calendar_connected),
         google_calendar_email=t.google_calendar_email or "",
         created_at=t.created_at,
@@ -407,4 +420,32 @@ async def purge_tenant(
         "detail": f"Tenant '{tenant_name}' ({tenant_email}) permanently deleted.",
         "slug": tenant_slug,
         "email": tenant_email,
+    }
+
+
+# ── Usage / billing endpoints ───────────────────────────────────────────────
+
+
+@router.get("/usage")
+async def get_my_usage(user=Depends(auth_service.get_current_user)):
+    """Return current billing-period usage for the authenticated tenant."""
+    tenant_id = user.get("tenant_id") if isinstance(user, dict) else getattr(user, "tenant_id", None)
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="No tenant associated with this account.")
+    summary = await get_usage_summary(tenant_id)
+    if not summary:
+        raise HTTPException(status_code=404, detail="Tenant not found.")
+    return summary
+
+
+@router.get("/plans")
+async def list_plans():
+    """Return all available plans and their limits (public endpoint)."""
+    from backend.services.usage_service import PLAN_LIMITS
+    return {
+        plan: {
+            "call_minutes": limits["call_minutes"],
+            "sms": limits["sms"],
+        }
+        for plan, limits in PLAN_LIMITS.items()
     }

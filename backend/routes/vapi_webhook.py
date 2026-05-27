@@ -142,6 +142,13 @@ async def _persist_call_end(
         logger.info("Call %s persisted: outcome=%s duration=%ds tenant=%s",
                      call_id, call.outcome, call.duration_seconds or 0, tenant_id)
 
+        # Record call minutes for billing (Option A usage metering)
+        duration_secs = call.duration_seconds or 0
+        if tenant_id and duration_secs > 0:
+            from backend.services.usage_service import record_call_minutes
+            minutes = round(duration_secs / 60, 2)
+            await record_call_minutes(tenant_id, minutes)
+
         # Clean up session
         llm_service.end_session(call_id)
 

@@ -101,6 +101,11 @@ _MIGRATIONS: list[str] = [
            scheduled_at
        )
        WHERE status IN ('CONFIRMED', 'RESCHEDULED')""",
+
+    # ── tenants table — usage metering columns (Option A billing) ────────
+    "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS call_minutes_used DOUBLE PRECISION NOT NULL DEFAULT 0",
+    "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS sms_sent INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS current_period_start TIMESTAMPTZ",
 ]
 
 

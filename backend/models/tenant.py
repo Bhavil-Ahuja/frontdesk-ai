@@ -10,7 +10,7 @@ import enum
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Column, DateTime, Enum, String, Text, Integer
+from sqlalchemy import Boolean, Column, DateTime, Enum, Float, String, Text, Integer
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 from backend.database import Base
@@ -92,15 +92,28 @@ class Tenant(Base):
     )
 
     # ── Vapi integration ─────────────────────────────────────────────────
+    # Under Option A (centralised SaaS), vapi_api_key is unused — all
+    # tenants share the platform's global key from .env. We keep the column
+    # for backwards compat but it can be left NULL.
     vapi_api_key = Column(String(255), nullable=True)
     vapi_assistant_id = Column(String(255), nullable=True, unique=True, index=True)
     vapi_phone_number_id = Column(String(255), nullable=True)
     vapi_webhook_secret = Column(String(255), nullable=True)
 
     # ── Twilio integration ───────────────────────────────────────────────
+    # Under Option A, twilio_account_sid and twilio_auth_token are unused —
+    # all tenants share the platform's global Twilio account. Only the
+    # per-tenant phone number matters (each clinic gets a unique number).
     twilio_account_sid = Column(String(255), nullable=True)
     twilio_auth_token = Column(String(255), nullable=True)
     twilio_phone_number = Column(String(20), nullable=True)
+
+    # ── Usage metering (Option A — platform manages billing) ─────────────
+    # Tracks consumption in the current billing period. Reset by a monthly
+    # cron or when current_period_start rolls over.
+    call_minutes_used = Column(Float, nullable=False, default=0.0)
+    sms_sent = Column(Integer, nullable=False, default=0)
+    current_period_start = Column(DateTime(timezone=True), nullable=True)
 
     # ── Google Calendar OAuth ───────────────────────────────────────────
     google_calendar_refresh_token = Column(String(512), nullable=True)

@@ -6,12 +6,13 @@ import {
   CheckCircle2,
   Circle,
   AlertCircle,
-  ExternalLink,
   ChevronDown,
   ChevronUp,
   Settings,
   Sparkles,
   ArrowRight,
+  ShieldCheck,
+  Zap,
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
@@ -19,14 +20,20 @@ import { Link } from 'react-router-dom';
 
 /**
  * SetupGuide — guided onboarding for new tenants.
- * Shows the 3 integrations (Vapi / Calendar / Twilio) with explanations,
- * what's configured, what's not, and links to set them up.
+ *
+ * Under Option A (platform-managed SaaS), Vapi and Twilio are handled by
+ * FrontDesk AI. The tenant only needs to:
+ *   1. Configure business info & appointment types
+ *   2. (Optional) Connect Google Calendar
+ *   3. Wait for admin to provision their phone line
+ *
+ * No API keys, no Twilio accounts, no Vapi dashboards.
  */
 export default function SetupGuide() {
   const { user, refreshUser } = useAuth();
   const [config, setConfig] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [expanded, setExpanded] = useState({ vapi: true, calendar: false, twilio: false });
+  const [expanded, setExpanded] = useState({ business: true, calendar: false, integrations: false });
 
   useEffect(() => {
     let cancelled = false;
@@ -46,61 +53,62 @@ export default function SetupGuide() {
     };
   }, []);
 
-  const integrations = [
+  const calendarConnected = config?.google_calendar_connected ?? false;
+  const vapiConfigured = config?.vapi_configured ?? user?.vapi_configured ?? false;
+  const twilioConfigured = config?.twilio_configured ?? user?.twilio_configured ?? false;
+
+  // Steps the tenant actually needs to complete
+  const steps = [
     {
-      key: 'vapi',
-      icon: Phone,
-      title: 'Vapi (Voice Agent)',
-      configured: config?.vapi_configured ?? user?.vapi_configured ?? false,
-      shortDesc: 'Required — handles all incoming phone calls.',
-      whatItDoes: [
-        'Receives every patient call to your business phone number',
-        'Lets the AI agent talk naturally with the caller',
-        'Records call audio + transcript for your dashboard',
+      key: 'business',
+      icon: Settings,
+      title: 'Configure Your Business',
+      done: true, // always "done" once they've registered
+      shortDesc: 'Set up your business hours, appointment types, and agent personality.',
+      details: [
+        'Set your business hours so the AI knows when you\'re open',
+        'Define appointment types (consultation, follow-up, etc.) with durations',
+        'Customise your AI agent\'s name, greeting, and voice',
+        'Add your knowledge base — FAQs, policies, directions',
       ],
-      howToSetup: [
+      setupSteps: [
         {
-          step: 'Create a Vapi account',
-          detail: 'Sign up at vapi.ai (free tier available).',
-          link: 'https://vapi.ai',
+          step: 'Open Agent Config',
+          detail: 'Go to the Settings page and configure your business hours, appointment types, and agent details.',
         },
         {
-          step: 'Get your API key',
-          detail: 'Dashboard → Settings → API Keys → copy the private key.',
+          step: 'Customise your AI agent',
+          detail: 'Set the agent name, greeting message, and voice. The AI will use these when answering calls.',
         },
         {
-          step: 'Buy or import a phone number',
-          detail: 'Vapi Dashboard → Phone Numbers → Buy or BYO Twilio number.',
-        },
-        {
-          step: 'Paste credentials in Agent Config',
-          detail: 'Open Agent Config below and enter your Vapi API key + phone number ID.',
+          step: 'Add knowledge base entries',
+          detail: 'Add FAQs, insurance info, directions, and policies so the AI can answer patient questions accurately.',
         },
       ],
-      bgColor: 'bg-indigo-50 dark:bg-indigo-900/30',
-      borderColor: 'border-indigo-200 dark:border-indigo-800',
-      iconColor: 'text-indigo-600 dark:text-indigo-400',
-      iconBg: 'bg-indigo-100 dark:bg-indigo-900/30',
+      bgColor: 'bg-blue-50 dark:bg-blue-900/30',
+      borderColor: 'border-blue-200 dark:border-blue-800',
+      iconColor: 'text-blue-600 dark:text-blue-400',
+      iconBg: 'bg-blue-100 dark:bg-blue-900/30',
     },
     {
       key: 'calendar',
       icon: CalendarCheck,
-      title: 'Calendar (Booking)',
-      configured: config?.google_calendar_connected ?? false,
-      shortDesc: 'Connect Google Calendar (free, 1-click) or use the built-in scheduler.',
-      whatItDoes: [
-        'Lets the agent check available slots in real time',
-        'Creates actual bookings in your calendar (no double-bookings)',
-        'Google Calendar: free, connects with one click — no API keys needed',
+      title: 'Connect Google Calendar',
+      done: calendarConnected,
+      shortDesc: 'One-click OAuth — lets the AI check availability and create bookings.',
+      details: [
+        'Lets the agent check your real-time availability before booking',
+        'Creates actual calendar events (no double-bookings)',
+        'Free, connects in one click — no API keys needed',
       ],
-      howToSetup: [
+      setupSteps: [
         {
           step: 'Connect Google Calendar (Recommended)',
           detail: 'Go to Agent Config → Google Calendar section → click "Connect Google Calendar". One-click OAuth — no API keys needed.',
         },
         {
-          step: 'Or skip it',
-          detail: 'Without Google Calendar, the built-in scheduler uses your Business Hours to manage availability automatically.',
+          step: 'Or use the built-in scheduler',
+          detail: 'Without Google Calendar, the system uses your configured business hours to manage availability automatically.',
         },
       ],
       bgColor: 'bg-emerald-50 dark:bg-emerald-900/30',
@@ -109,46 +117,32 @@ export default function SetupGuide() {
       iconBg: 'bg-emerald-100 dark:bg-emerald-900/30',
     },
     {
-      key: 'twilio',
-      icon: MessageSquare,
-      title: 'Twilio (SMS Reminders)',
-      configured: config?.twilio_configured ?? user?.twilio_configured ?? false,
-      shortDesc: 'Optional but recommended — SMS reminders & follow-ups.',
-      whatItDoes: [
-        'Sends 24-hour appointment reminder texts',
-        'Sends post-visit follow-up messages',
-        'Sends emergency escalation alerts to your on-call provider',
+      key: 'integrations',
+      icon: Zap,
+      title: 'Phone & SMS (Managed by FrontDesk AI)',
+      done: vapiConfigured && twilioConfigured,
+      shortDesc: 'Voice calls and SMS are handled by the platform — no setup needed from you.',
+      details: [
+        'Vapi (voice AI) and Twilio (SMS) are managed centrally by FrontDesk AI',
+        'Your dedicated phone number is assigned by the platform admin after approval',
+        'All call recordings, transcripts, and SMS are billed under your plan',
+        'No API keys, no third-party accounts to create — it just works',
       ],
-      howToSetup: [
+      setupSteps: [
         {
-          step: 'Create a Twilio account',
-          detail: 'Sign up at twilio.com — free trial credit included.',
-          link: 'https://www.twilio.com',
-        },
-        {
-          step: 'Buy an SMS-capable phone number',
-          detail: 'Twilio Console → Phone Numbers → Buy a number with SMS enabled.',
-        },
-        {
-          step: 'Get your Account SID and Auth Token',
-          detail: 'Twilio Console → Account dashboard → copy both values.',
-        },
-        {
-          step: 'Paste credentials in Agent Config',
-          detail: 'Open Agent Config and enter Twilio SID, auth token, and SMS-from number.',
+          step: 'Nothing to do here!',
+          detail: 'Once your account is approved, the platform admin will assign your dedicated phone number and voice assistant. You\'ll see them appear on your dashboard.',
         },
       ],
-      bgColor: 'bg-pink-50 dark:bg-pink-900/30',
-      borderColor: 'border-pink-200 dark:border-pink-800',
-      iconColor: 'text-pink-600 dark:text-pink-400',
-      iconBg: 'bg-pink-100 dark:bg-pink-900/30',
+      bgColor: 'bg-violet-50 dark:bg-violet-900/30',
+      borderColor: 'border-violet-200 dark:border-violet-800',
+      iconColor: 'text-violet-600 dark:text-violet-400',
+      iconBg: 'bg-violet-100 dark:bg-violet-900/30',
     },
   ];
 
-  const configuredCount = integrations.filter((i) => i.configured).length;
-  const requiredCount = 2; // Vapi + Calendar are required
-  const requiredConfigured = integrations.slice(0, 2).filter((i) => i.configured).length;
-  const allReady = requiredConfigured === requiredCount;
+  const requiredDone = calendarConnected || true; // Calendar is optional; business config is always "done"
+  const allReady = vapiConfigured && twilioConfigured;
 
   if (loading) {
     return (
@@ -169,7 +163,7 @@ export default function SetupGuide() {
           <div>
             <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Welcome, {user?.business_name}!</h1>
             <p className="text-sm text-gray-500 dark:text-gray-400">
-              Let's get your AI voice agent set up. It takes about 10 minutes.
+              Let's get your AI voice agent set up. Most of the heavy lifting is done for you.
             </p>
           </div>
         </div>
@@ -197,7 +191,7 @@ export default function SetupGuide() {
             >
               {allReady
                 ? 'You\'re ready to go live!'
-                : `${requiredConfigured} of ${requiredCount} required integrations configured`}
+                : 'Almost there — configure your business and wait for admin provisioning'}
             </p>
             <p
               className={`text-sm mt-1 ${
@@ -205,8 +199,8 @@ export default function SetupGuide() {
               }`}
             >
               {allReady
-                ? 'All required services are connected. Your AI agent can now answer calls and book appointments.'
-                : 'Connect Vapi (for phone calls) and a calendar (Google Calendar or built-in scheduler) to activate your agent. Twilio is optional.'}
+                ? 'All services are connected. Your AI agent can now answer calls, book appointments, and send SMS reminders.'
+                : 'Set up your business info and calendar. Phone and SMS will be activated by the platform admin after your account is approved.'}
             </p>
             <div className="mt-3 flex items-center gap-3">
               <Link
@@ -230,47 +224,70 @@ export default function SetupGuide() {
         </div>
       </div>
 
-      {/* Integration cards */}
+      {/* Platform-managed banner */}
+      <div className="rounded-2xl border border-violet-200 dark:border-violet-800 bg-violet-50 dark:bg-violet-900/20 p-4 flex items-start gap-3">
+        <ShieldCheck className="w-5 h-5 text-violet-600 dark:text-violet-400 mt-0.5 shrink-0" />
+        <div>
+          <p className="text-sm font-semibold text-violet-900 dark:text-violet-300">
+            Phone & SMS are managed for you
+          </p>
+          <p className="text-xs text-violet-700 dark:text-violet-400 mt-0.5">
+            FrontDesk AI handles all Vapi (voice) and Twilio (SMS) infrastructure. You don't need to create
+            accounts with these services or manage any API keys. Your dedicated phone number is assigned by
+            the admin after account approval.
+          </p>
+        </div>
+      </div>
+
+      {/* Step cards */}
       <div className="space-y-4">
-        {integrations.map((integration) => {
-          const Icon = integration.icon;
-          const isOpen = expanded[integration.key];
+        {steps.map((step, stepIdx) => {
+          const Icon = step.icon;
+          const isOpen = expanded[step.key];
           return (
             <div
-              key={integration.key}
-              className={`rounded-2xl border ${integration.borderColor} bg-white dark:bg-gray-800 overflow-hidden`}
+              key={step.key}
+              className={`rounded-2xl border ${step.borderColor} bg-white dark:bg-gray-800 overflow-hidden`}
             >
               {/* Header */}
               <button
                 onClick={() =>
                   setExpanded((prev) => ({
                     ...prev,
-                    [integration.key]: !prev[integration.key],
+                    [step.key]: !prev[step.key],
                   }))
                 }
                 className="w-full p-5 flex items-center gap-4 text-left hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
               >
+                {/* Step number */}
                 <div
-                  className={`w-12 h-12 rounded-xl ${integration.iconBg} flex items-center justify-center shrink-0`}
+                  className={`w-12 h-12 rounded-xl ${step.iconBg} flex items-center justify-center shrink-0 relative`}
                 >
-                  <Icon className={`w-6 h-6 ${integration.iconColor}`} />
+                  <Icon className={`w-6 h-6 ${step.iconColor}`} />
+                  <span className={`absolute -top-1 -left-1 w-5 h-5 rounded-full text-[10px] font-bold flex items-center justify-center ${
+                    step.done
+                      ? 'bg-green-500 text-white'
+                      : 'bg-gray-300 dark:bg-gray-600 text-gray-700 dark:text-gray-300'
+                  }`}>
+                    {step.done ? <CheckCircle2 className="w-3.5 h-3.5" /> : stepIdx + 1}
+                  </span>
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="font-semibold text-gray-900 dark:text-white">{integration.title}</h3>
-                    {integration.configured ? (
+                    <h3 className="font-semibold text-gray-900 dark:text-white">{step.title}</h3>
+                    {step.done ? (
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-full text-xs font-medium">
                         <CheckCircle2 className="w-3 h-3" />
-                        Connected
+                        {step.key === 'integrations' ? 'Provisioned' : 'Done'}
                       </span>
                     ) : (
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 rounded-full text-xs font-medium">
                         <Circle className="w-3 h-3" />
-                        Not connected
+                        {step.key === 'integrations' ? 'Pending admin setup' : 'To do'}
                       </span>
                     )}
                   </div>
-                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">{integration.shortDesc}</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">{step.shortDesc}</p>
                 </div>
                 {isOpen ? (
                   <ChevronUp className="w-5 h-5 text-gray-400 shrink-0" />
@@ -281,15 +298,15 @@ export default function SetupGuide() {
 
               {/* Expanded details */}
               {isOpen && (
-                <div className={`border-t ${integration.borderColor} ${integration.bgColor} p-5 space-y-4`}>
+                <div className={`border-t ${step.borderColor} ${step.bgColor} p-5 space-y-4`}>
                   {/* What it does */}
                   <div>
-                    <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-2">What it does</h4>
+                    <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-2">What this covers</h4>
                     <ul className="space-y-1.5">
-                      {integration.whatItDoes.map((item, idx) => (
+                      {step.details.map((item, idx) => (
                         <li key={idx} className="flex items-start gap-2 text-sm text-gray-700 dark:text-gray-300">
                           <CheckCircle2
-                            className={`w-4 h-4 ${integration.iconColor} mt-0.5 shrink-0`}
+                            className={`w-4 h-4 ${step.iconColor} mt-0.5 shrink-0`}
                           />
                           {item}
                         </li>
@@ -300,46 +317,75 @@ export default function SetupGuide() {
                   {/* How to set up */}
                   <div>
                     <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-2">
-                      How to set it up
+                      {step.key === 'integrations' ? 'How it works' : 'How to set it up'}
                     </h4>
                     <ol className="space-y-3">
-                      {integration.howToSetup.map((s, idx) => (
+                      {step.setupSteps.map((s, idx) => (
                         <li key={idx} className="flex items-start gap-3">
                           <span
-                            className={`shrink-0 w-6 h-6 rounded-full ${integration.iconBg} ${integration.iconColor} flex items-center justify-center text-xs font-bold`}
+                            className={`shrink-0 w-6 h-6 rounded-full ${step.iconBg} ${step.iconColor} flex items-center justify-center text-xs font-bold`}
                           >
-                            {idx + 1}
+                            {step.key === 'integrations' ? <ShieldCheck className="w-3.5 h-3.5" /> : idx + 1}
                           </span>
                           <div className="flex-1">
                             <p className="text-sm font-medium text-gray-900 dark:text-white">{s.step}</p>
                             <p className="text-xs text-gray-600 dark:text-gray-400 mt-0.5">{s.detail}</p>
-                            {s.link && (
-                              <a
-                                href={s.link}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className={`inline-flex items-center gap-1 text-xs font-medium ${integration.iconColor} hover:underline mt-1`}
-                              >
-                                {s.link}
-                                <ExternalLink className="w-3 h-3" />
-                              </a>
-                            )}
                           </div>
                         </li>
                       ))}
                     </ol>
                   </div>
 
-                  {/* CTA */}
-                  <div className="pt-2">
-                    <Link
-                      to="/settings"
-                      className="inline-flex items-center gap-2 px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 rounded-lg text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
-                    >
-                      <Settings className="w-4 h-4" />
-                      Configure {integration.title.split(' ')[0]} in Agent Config
-                    </Link>
-                  </div>
+                  {/* CTA — only for business and calendar steps */}
+                  {step.key !== 'integrations' && (
+                    <div className="pt-2">
+                      <Link
+                        to="/settings"
+                        className="inline-flex items-center gap-2 px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 rounded-lg text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
+                      >
+                        <Settings className="w-4 h-4" />
+                        {step.key === 'business' ? 'Open Agent Config' : 'Connect Calendar in Agent Config'}
+                      </Link>
+                    </div>
+                  )}
+
+                  {/* Integration status badges for the managed section */}
+                  {step.key === 'integrations' && (
+                    <div className="pt-2 space-y-2">
+                      <div className="flex items-center gap-3 p-3 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+                        <Phone className="w-4 h-4 text-indigo-500" />
+                        <div className="flex-1">
+                          <p className="text-sm font-medium text-gray-900 dark:text-white">Vapi Voice Agent</p>
+                          <p className="text-xs text-gray-500 dark:text-gray-400">Handles incoming calls and AI conversation</p>
+                        </div>
+                        {vapiConfigured ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-full text-xs font-medium">
+                            <CheckCircle2 className="w-3 h-3" /> Active
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2 py-1 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 rounded-full text-xs font-medium">
+                            <Circle className="w-3 h-3" /> Awaiting setup
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-3 p-3 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+                        <MessageSquare className="w-4 h-4 text-pink-500" />
+                        <div className="flex-1">
+                          <p className="text-sm font-medium text-gray-900 dark:text-white">Twilio SMS</p>
+                          <p className="text-xs text-gray-500 dark:text-gray-400">Appointment reminders and follow-up texts</p>
+                        </div>
+                        {twilioConfigured ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-full text-xs font-medium">
+                            <CheckCircle2 className="w-3 h-3" /> Active
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2 py-1 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 rounded-full text-xs font-medium">
+                            <Circle className="w-3 h-3" /> Awaiting setup
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

@@ -21,6 +21,7 @@ from typing import Any
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.config import settings
 from backend.database import async_session
 from backend.models.tenant import Tenant, TenantStatus
 
@@ -154,13 +155,15 @@ def _tenant_to_context(t: Tenant) -> TenantContext:
         greeting_message=t.greeting_message or "Thank you for calling. How can I help you today?",
         system_prompt_override=t.system_prompt_override,
         voice_config=t.voice_config or {"provider": "11labs", "voiceId": "21m00Tcm4TlvDq8ikWAM"},
-        vapi_api_key=t.vapi_api_key or "",
+        # Option A: fall back to global .env credentials when tenant fields are empty.
+        # This lets all tenants share the platform's Vapi/Twilio account seamlessly.
+        vapi_api_key=t.vapi_api_key or settings.VAPI_API_KEY,
         vapi_assistant_id=t.vapi_assistant_id or "",
         vapi_phone_number_id=t.vapi_phone_number_id or "",
-        vapi_webhook_secret=t.vapi_webhook_secret or "",
-        twilio_account_sid=t.twilio_account_sid or "",
-        twilio_auth_token=t.twilio_auth_token or "",
-        twilio_phone_number=t.twilio_phone_number or "",
+        vapi_webhook_secret=t.vapi_webhook_secret or settings.VAPI_WEBHOOK_SECRET,
+        twilio_account_sid=t.twilio_account_sid or settings.TWILIO_ACCOUNT_SID,
+        twilio_auth_token=t.twilio_auth_token or settings.TWILIO_AUTH_TOKEN,
+        twilio_phone_number=t.twilio_phone_number or settings.TWILIO_PHONE_NUMBER,
         google_calendar_refresh_token=t.google_calendar_refresh_token or "",
         google_calendar_email=t.google_calendar_email or "",
         google_calendar_connected=t.google_calendar_connected if t.google_calendar_connected is not None else False,
@@ -376,7 +379,6 @@ async def resolve_default_tenant() -> TenantContext | None:
         return ctx
 
     # No tenants in DB — build from legacy .env settings
-    from backend.config import settings
     logger.info("[TenantSvc] No tenants in DB — using legacy .env config")
     ctx = TenantContext(
         tenant_id=uuid.UUID("00000000-0000-0000-0000-000000000000"),
@@ -575,7 +577,7 @@ async def update_tenant(tenant_id: uuid.UUID, data: dict[str, Any]) -> Tenant | 
         # Only update provided fields
         allowed_fields = {
             "business_name", "business_type", "business_phone", "business_address",
-            "business_website", "timezone", "agent_name", "greeting_message",
+            "business_website", "google_maps_url", "timezone", "agent_name", "greeting_message",
             "system_prompt_override", "voice_config", "end_call_phrases",
             "vapi_api_key", "vapi_assistant_id", "vapi_phone_number_id",
             "vapi_webhook_secret", "twilio_account_sid", "twilio_auth_token",

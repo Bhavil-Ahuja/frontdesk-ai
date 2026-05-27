@@ -27,9 +27,6 @@ import {
   Volume2,
   Loader2,
   AlertTriangle,
-  ChevronDown,
-  ChevronUp,
-  Wrench,
   CalendarX,
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
@@ -66,10 +63,6 @@ export default function AgentConfig() {
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState(null);
   const [showSecrets, setShowSecrets] = useState({});
-  // The Vapi / Twilio credential blocks are developer concerns — clinic owners
-  // shouldn't have to deal with cryptic IDs and SIDs. We hide them behind a
-  // single "Advanced — Developer Settings" collapsible.
-  const [showAdvanced, setShowAdvanced] = useState(false);
 
   // Voice preview state
   const [playingVoiceId, setPlayingVoiceId] = useState(null);
@@ -680,152 +673,11 @@ export default function AgentConfig() {
       </Section>
 
       {/* ── Connections ── high-level connected/not-connected status. The
-          gnarly cryptic IDs live below in the "Developer Settings" drawer so
-          clinic owners only see them when they need them. */}
-      <Section icon={LinkIcon} title="Connections">
-        <p className="text-sm text-gray-500 dark:text-gray-400 -mt-2 mb-2">
-          Status of each service your AI agent uses. Open
-          "Developer Settings" below if you need to update credentials.
-        </p>
-        <div className="space-y-2">
-          <VapiConnectionRow
-            connected={config.vapi_configured}
-            onConnected={fetchConfig}
-          />
-          <ConnectionStatusRow
-            icon={Mail}
-            label="Twilio (SMS Reminders)"
-            connected={config.twilio_configured}
-            connectedText="SMS reminders and confirmations are active"
-            notConnectedText="SMS features are disabled until configured"
-          />
-        </div>
-      </Section>
-
-      {/* Google Calendar integration — kept visible because OAuth is friendly
-          and there are no cryptic IDs to enter. */}
+          Platform-managed integrations — no API keys needed from the user. */}
       <GoogleCalendarSection config={config} onUpdate={fetchConfig} />
 
-      {/* ── Developer Settings (collapsible) ──
-          Vapi + Twilio credentials live here. Hidden by default so clinic
-          owners don't see cryptic API keys and IDs unless they need them. */}
-      <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
-        <button
-          type="button"
-          onClick={() => setShowAdvanced(!showAdvanced)}
-          className="w-full flex items-center justify-between p-6 text-left hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
-        >
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-gray-100 dark:bg-gray-700 flex items-center justify-center">
-              <Wrench className="w-5 h-5 text-gray-500 dark:text-gray-400" />
-            </div>
-            <div>
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-                Developer Settings
-              </h3>
-              <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
-                API keys and integration IDs. Most users never need to touch
-                these — your platform admin handles them during onboarding.
-              </p>
-            </div>
-          </div>
-          {showAdvanced ? (
-            <ChevronUp className="w-5 h-5 text-gray-400 shrink-0" />
-          ) : (
-            <ChevronDown className="w-5 h-5 text-gray-400 shrink-0" />
-          )}
-        </button>
-
-        {showAdvanced && (
-          <div className="border-t border-gray-200 dark:border-gray-700 p-6 space-y-6 bg-gray-50/50 dark:bg-gray-900/30">
-            <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-3 flex items-start gap-2">
-              <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
-              <p className="text-xs text-amber-800 dark:text-amber-300">
-                Changing these values can take your agent offline. Only edit
-                them if your platform admin asked you to.
-              </p>
-            </div>
-
-            {/* Vapi integration */}
-            <IntegrationSection
-              icon={PhoneIcon}
-              title="Vapi (Voice Agent)"
-              description="Required to receive phone calls. Get credentials at vapi.ai → Settings → API Keys."
-              configured={config.vapi_configured}
-              accent="indigo"
-              learnMore="https://vapi.ai"
-            >
-              <SecretField
-                label="Vapi API Key"
-                fieldKey="vapi_api_key"
-                showSecrets={showSecrets}
-                setShowSecrets={setShowSecrets}
-                masked={config.vapi_api_key_masked}
-                value={config.vapi_api_key}
-                onChange={(v) => update('vapi_api_key', v)}
-                placeholder="vapi_sk_..."
-              />
-              <Field label="Vapi Assistant ID">
-                <input
-                  type="text"
-                  value={config.vapi_assistant_id || ''}
-                  onChange={(e) => update('vapi_assistant_id', e.target.value)}
-                  placeholder="asst_..."
-                  className="input"
-                />
-              </Field>
-              <Field label="Vapi Phone Number ID">
-                <input
-                  type="text"
-                  value={config.vapi_phone_number_id || ''}
-                  onChange={(e) => update('vapi_phone_number_id', e.target.value)}
-                  placeholder="phone_..."
-                  className="input"
-                />
-              </Field>
-            </IntegrationSection>
-
-            {/* Twilio integration */}
-            <IntegrationSection
-              icon={Mail}
-              title="Twilio (SMS)"
-              description="Optional. Send SMS reminders & follow-ups. Get credentials at twilio.com → Console."
-              configured={config.twilio_configured}
-              accent="pink"
-              learnMore="https://www.twilio.com"
-            >
-              <Field label="Twilio Account SID">
-                <input
-                  type="text"
-                  value={config.twilio_account_sid || ''}
-                  onChange={(e) => update('twilio_account_sid', e.target.value)}
-                  placeholder="AC..."
-                  className="input"
-                />
-              </Field>
-              <SecretField
-                label="Twilio Auth Token"
-                fieldKey="twilio_auth_token"
-                showSecrets={showSecrets}
-                setShowSecrets={setShowSecrets}
-                masked={config.twilio_auth_token_masked}
-                value={config.twilio_auth_token}
-                onChange={(v) => update('twilio_auth_token', v)}
-                placeholder="32-char auth token"
-              />
-              <Field label="Twilio SMS-from Phone">
-                <input
-                  type="tel"
-                  value={config.twilio_phone_number || ''}
-                  onChange={(e) => update('twilio_phone_number', e.target.value)}
-                  placeholder="+15125550100"
-                  className="input"
-                />
-              </Field>
-            </IntegrationSection>
-          </div>
-        )}
-      </div>
+      {/* ── Usage & Plan (includes platform-managed connection statuses) ── */}
+      <UsagePlanSection />
 
       {/* Appointment Reminders */}
       <Section icon={Bell} title="Appointment Reminders">
@@ -958,6 +810,126 @@ export default function AgentConfig() {
           box-shadow: 0 0 0 2px rgba(20,184,166,0.3);
         }
       `}</style>
+    </div>
+  );
+}
+
+// ── Usage & Plan section ─────────────────────────────────────────────────────
+
+function UsageBar({ label, used, limit, unit, color = 'primary' }) {
+  const percent = limit > 0 ? Math.min(100, (used / limit) * 100) : 0;
+  const remaining = Math.max(0, limit - used);
+  const isWarning = percent >= 80;
+  const isDanger = percent >= 95;
+  const barColor = isDanger ? 'bg-red-500' : isWarning ? 'bg-amber-500' : `bg-${color}-500`;
+
+  return (
+    <div>
+      <div className="flex justify-between items-baseline mb-1">
+        <span className="text-sm font-medium text-gray-700 dark:text-gray-300">{label}</span>
+        <span className="text-xs text-gray-500 dark:text-gray-400">
+          {typeof used === 'number' && used % 1 !== 0 ? used.toFixed(1) : used} / {limit >= 99999 ? 'Unlimited' : limit} {unit}
+        </span>
+      </div>
+      <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2.5">
+        <div
+          className={`h-2.5 rounded-full transition-all duration-500 ${isDanger ? 'bg-red-500' : isWarning ? 'bg-amber-500' : 'bg-primary-500'}`}
+          style={{ width: `${Math.min(100, percent)}%` }}
+        />
+      </div>
+      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+        {limit >= 99999 ? 'Unlimited' : `${typeof remaining === 'number' && remaining % 1 !== 0 ? remaining.toFixed(1) : remaining} ${unit} remaining`}
+        {isWarning && !isDanger && ' — approaching limit'}
+        {isDanger && ' — limit reached, overage may apply'}
+      </p>
+    </div>
+  );
+}
+
+function UsagePlanSection() {
+  const [usage, setUsage] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const data = await apiFetch('/api/tenants/usage');
+        if (!cancelled) setUsage(data);
+      } catch {
+        // Silently fail — endpoint may not exist on older backends
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    load();
+    return () => { cancelled = true; };
+  }, []);
+
+  const planLabels = {
+    starter: 'Starter',
+    professional: 'Professional',
+    enterprise: 'Enterprise',
+  };
+
+  return (
+    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 space-y-5">
+      <div className="flex items-center justify-between">
+        <h3 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+          <Bot className="w-5 h-5 text-primary-500" />
+          Usage & Plan
+        </h3>
+        {usage && (
+          <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-primary-100 text-primary-700 dark:bg-primary-900/30 dark:text-primary-300 uppercase tracking-wide">
+            {planLabels[usage.plan] || usage.plan}
+          </span>
+        )}
+      </div>
+
+      {loading ? (
+        <div className="flex items-center gap-2 text-sm text-gray-400">
+          <Loader2 className="w-4 h-4 animate-spin" /> Loading usage...
+        </div>
+      ) : usage ? (
+        <div className="space-y-4">
+          <UsageBar
+            label="Call Minutes"
+            used={usage.calls.used}
+            limit={usage.calls.limit}
+            unit="min"
+          />
+          <UsageBar
+            label="SMS Messages"
+            used={usage.sms.used}
+            limit={usage.sms.limit}
+            unit="SMS"
+          />
+          <p className="text-xs text-gray-400 dark:text-gray-500">
+            Billing period started {new Date(usage.period_start).toLocaleDateString()}.
+            Usage resets monthly. Contact support to upgrade your plan.
+          </p>
+        </div>
+      ) : (
+        <p className="text-sm text-gray-400">Usage data not available.</p>
+      )}
+
+      <div className="pt-3 border-t border-gray-100 dark:border-gray-700">
+        <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Connections</h4>
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-2 text-sm">
+            <PhoneIcon className="w-4 h-4 text-gray-400" />
+            <span className="text-gray-600 dark:text-gray-300">Voice Agent (Vapi)</span>
+            <CheckCircle className="w-4 h-4 text-green-500 ml-auto" />
+            <span className="text-xs text-green-600 dark:text-green-400">Managed by platform</span>
+          </div>
+          <div className="flex items-center gap-2 text-sm">
+            <Mail className="w-4 h-4 text-gray-400" />
+            <span className="text-gray-600 dark:text-gray-300">SMS (Twilio)</span>
+            <CheckCircle className="w-4 h-4 text-green-500 ml-auto" />
+            <span className="text-xs text-green-600 dark:text-green-400">Managed by platform</span>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

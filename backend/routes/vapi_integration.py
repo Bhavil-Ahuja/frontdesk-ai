@@ -1,29 +1,35 @@
 """
-Vapi integration routes — connect, provision/sync assistant, disconnect, status.
+Vapi integration routes — admin provisioning and tenant status.
 
-Replaces the "just save credentials" flow with a real provisioning step. When
-the clinic owner clicks "Connect with Vapi" in the UI, we:
+Under Option A (centralised SaaS), all Vapi/Twilio credentials belong to the
+platform. Individual tenants don't manage API keys. Instead, the admin:
 
-  1. Accept their Vapi API key (only — no need to ask for cryptic IDs).
-  2. Call Vapi's /assistant endpoint to create a new assistant pre-configured
-     with the tenant's greeting, voice, and our custom-LLM webhook URL.
-  3. Save the returned assistant_id back to the tenant.
-  4. Return success so the UI can flip to "Connected".
+  1. Creates a Vapi assistant (via the Vapi dashboard or API) using the
+     platform's global API key.
+  2. Buys a Twilio phone number in the platform's Twilio Console.
+  3. Uses the /assign endpoint to bind these to a tenant.
+
+The /status endpoint still works for tenants to check their own provisioning.
 
 Routes:
-  POST /api/integrations/vapi/connect      → provision an assistant on Vapi
-  POST /api/integrations/vapi/sync         → re-sync existing assistant config
-  POST /api/integrations/vapi/disconnect   → clear stored credentials
-  GET  /api/integrations/vapi/status       → check connection
+  POST /api/integrations/vapi/assign           → admin assigns Vapi/Twilio IDs to a tenant
+  GET  /api/integrations/vapi/admin/{tenant_id} → admin fetches a tenant's integration details
+  GET  /api/integrations/vapi/admin/{tenant_id}/usage → admin fetches a tenant's usage stats
+  POST /api/integrations/vapi/provision        → admin auto-provisions a Vapi assistant for a tenant
+  POST /api/integrations/vapi/sync             → re-sync existing assistant config
+  POST /api/integrations/vapi/disconnect       → clear stored integration IDs
+  GET  /api/integrations/vapi/status           → tenant checks own connection
 """
 
 import logging
+import uuid
 from typing import Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from backend.config import settings
 from backend.models.tenant import Tenant
 from backend.services import auth_service, tenant_service, vapi_service
 
@@ -32,51 +38,150 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/integrations/vapi", tags=["Vapi"])
 
 
-class VapiConnectRequest(BaseModel):
-    """User-supplied Vapi credentials for the Connect flow."""
-    api_key: str = Field(..., min_length=10, max_length=255)
-    # Optional: bind to an existing Vapi phone number the user already owns.
-    phone_number_id: Optional[str] = Field(None, max_length=255)
+# ── Request / Response schemas ──────────────────────────────────────────────
 
 
-@router.post("/connect")
-async def vapi_connect(
-    req: VapiConnectRequest,
-    current_user: Tenant = Depends(auth_service.get_current_user),
+class VapiAssignRequest(BaseModel):
+    """Admin assigns Vapi + Twilio identifiers to a tenant."""
+    tenant_id: str = Field(..., description="UUID of the tenant to provision")
+    vapi_assistant_id: Optional[str] = Field(None, max_length=255)
+    vapi_phone_number_id: Optional[str] = Field(None, max_length=255)
+    twilio_phone_number: Optional[str] = Field(None, max_length=20)
+
+
+class VapiProvisionRequest(BaseModel):
+    """Admin triggers auto-provisioning of a Vapi assistant for a tenant."""
+    tenant_id: str = Field(..., description="UUID of the tenant")
+    phone_number_id: Optional[str] = Field(None, max_length=255,
+        description="Optional: bind to an existing Vapi phone number")
+
+
+# ── Admin routes ────────────────────────────────────────────────────────────
+
+
+@router.post("/assign")
+async def vapi_assign(
+    req: VapiAssignRequest,
+    admin: Tenant = Depends(auth_service.require_admin),
 ):
     """
-    Provision a Vapi assistant for this tenant.
-
-    Saves the API key, then calls Vapi to create a new assistant configured
-    with this tenant's greeting, voice, agent name, and our LLM webhook.
-    The assistant_id is stored back to the tenant on success.
+    Admin assigns Vapi assistant ID, Vapi phone number ID, and/or Twilio
+    phone number to a tenant. This is the primary provisioning action under
+    the platform-managed (Option A) model.
     """
-    logger.info("[VapiConnect] %s connecting to Vapi", current_user.slug)
+    try:
+        uid = uuid.UUID(req.tenant_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid tenant ID format.")
 
-    # Step 1 — persist the API key so register_assistant can read it.
-    update_fields = {"vapi_api_key": req.api_key.strip()}
+    update_fields = {}
+    if req.vapi_assistant_id is not None:
+        update_fields["vapi_assistant_id"] = req.vapi_assistant_id.strip() or ""
+    if req.vapi_phone_number_id is not None:
+        update_fields["vapi_phone_number_id"] = req.vapi_phone_number_id.strip() or ""
+    if req.twilio_phone_number is not None:
+        update_fields["twilio_phone_number"] = req.twilio_phone_number.strip() or ""
+
+    if not update_fields:
+        raise HTTPException(status_code=400, detail="No fields to update.")
+
+    tenant = await tenant_service.update_tenant(uid, update_fields)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found.")
+
+    logger.info("[VapiAssign] Admin %s assigned integrations for tenant %s: %s",
+                admin.slug, tenant.slug, list(update_fields.keys()))
+
+    return {
+        "status": "assigned",
+        "tenant_slug": tenant.slug,
+        "vapi_assistant_id": tenant.vapi_assistant_id or None,
+        "vapi_phone_number_id": tenant.vapi_phone_number_id or None,
+        "twilio_phone_number": tenant.twilio_phone_number or None,
+    }
+
+
+@router.get("/admin/{tenant_id}")
+async def admin_get_tenant_integrations(
+    tenant_id: str,
+    admin: Tenant = Depends(auth_service.require_admin),
+):
+    """Admin fetches the current Vapi/Twilio integration details for a tenant."""
+    try:
+        uid = uuid.UUID(tenant_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid tenant ID format.")
+
+    tenant = await tenant_service.get_tenant(uid)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found.")
+
+    return {
+        "tenant_id": str(tenant.id),
+        "slug": tenant.slug,
+        "vapi_assistant_id": tenant.vapi_assistant_id or "",
+        "vapi_phone_number_id": tenant.vapi_phone_number_id or "",
+        "twilio_phone_number": tenant.twilio_phone_number or "",
+        "vapi_configured": bool(tenant.vapi_assistant_id),
+        "twilio_configured": bool(tenant.twilio_phone_number),
+    }
+
+
+@router.get("/admin/{tenant_id}/usage")
+async def admin_get_tenant_usage(
+    tenant_id: str,
+    admin: Tenant = Depends(auth_service.require_admin),
+):
+    """Admin fetches the current usage stats for a tenant."""
+    try:
+        uid = uuid.UUID(tenant_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid tenant ID format.")
+
+    from backend.services.usage_service import get_usage_summary
+    summary = await get_usage_summary(uid)
+    if not summary:
+        raise HTTPException(status_code=404, detail="Tenant not found or no usage data.")
+
+    return summary
+
+
+@router.post("/provision")
+async def vapi_provision(
+    req: VapiProvisionRequest,
+    admin: Tenant = Depends(auth_service.require_admin),
+):
+    """
+    Admin auto-provisions a Vapi assistant for a tenant using the platform's
+    global API key. Creates the assistant on Vapi with the tenant's greeting,
+    voice config, and LLM webhook, then saves the assistant_id back.
+    """
+    try:
+        uid = uuid.UUID(req.tenant_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid tenant ID format.")
+
+    # Optionally save phone_number_id first
     if req.phone_number_id:
-        update_fields["vapi_phone_number_id"] = req.phone_number_id.strip()
-    await tenant_service.update_tenant(current_user.id, update_fields)
+        await tenant_service.update_tenant(uid, {
+            "vapi_phone_number_id": req.phone_number_id.strip(),
+        })
 
-    # Step 2 — resolve refreshed context (so voice_config, greeting, etc. flow
-    # into the Vapi assistant payload).
-    tenant_ctx = await tenant_service.resolve_by_id(current_user.id)
+    tenant_ctx = await tenant_service.resolve_by_id(uid)
     if not tenant_ctx:
-        raise HTTPException(status_code=404, detail="Tenant not found after update.")
-    if not tenant_ctx.vapi_api_key:
-        raise HTTPException(status_code=400, detail="Vapi API key was not stored correctly.")
+        raise HTTPException(status_code=404, detail="Tenant not found.")
 
-    # Step 3 — call Vapi. register_assistant() handles create-vs-update based
-    # on whether vapi_assistant_id is already set.
+    if not (tenant_ctx.vapi_api_key or settings.VAPI_API_KEY):
+        raise HTTPException(
+            status_code=400,
+            detail="No Vapi API key configured (neither tenant nor platform global).",
+        )
+
     try:
         assistant_id = await vapi_service.register_assistant(tenant_ctx=tenant_ctx)
     except httpx.HTTPStatusError as exc:
-        logger.error(
-            "[VapiConnect] HTTP %s from Vapi: %s",
-            exc.response.status_code, exc.response.text[:300],
-        )
-        # Try to surface Vapi's own error message — much more helpful than 500.
+        logger.error("[VapiProvision] HTTP %s from Vapi: %s",
+                     exc.response.status_code, exc.response.text[:300])
         try:
             body = exc.response.json()
             detail = body.get("message") or body.get("error") or exc.response.text
@@ -84,28 +189,29 @@ async def vapi_connect(
             detail = exc.response.text or "Vapi returned an error."
         raise HTTPException(status_code=400, detail=f"Vapi rejected the request: {detail}")
     except Exception as exc:
-        logger.error("[VapiConnect] Unexpected error: %s", exc, exc_info=True)
+        logger.error("[VapiProvision] Unexpected error: %s", exc, exc_info=True)
         raise HTTPException(status_code=502, detail=f"Could not reach Vapi: {exc}")
 
     if not assistant_id:
         raise HTTPException(
             status_code=502,
-            detail="Vapi did not return an assistant ID. Double-check your API key.",
+            detail="Vapi did not return an assistant ID.",
         )
 
-    # Step 4 — persist the returned assistant_id.
-    await tenant_service.update_tenant(
-        current_user.id,
-        {"vapi_assistant_id": assistant_id},
-    )
-    logger.info("[VapiConnect] %s now provisioned with assistant %s",
-                current_user.slug, assistant_id)
+    # Persist the returned assistant_id
+    await tenant_service.update_tenant(uid, {"vapi_assistant_id": assistant_id})
+    logger.info("[VapiProvision] Admin %s provisioned assistant %s for tenant %s",
+                admin.slug, assistant_id, tenant_ctx.slug)
 
     return {
-        "status": "connected",
+        "status": "provisioned",
         "assistant_id": assistant_id,
-        "message": "Your AI agent is now provisioned on Vapi. Test it by calling your Vapi phone number.",
+        "tenant_slug": tenant_ctx.slug,
+        "message": f"Vapi assistant provisioned for {tenant_ctx.business_name}.",
     }
+
+
+# ── Tenant self-service routes ──────────────────────────────────────────────
 
 
 @router.post("/sync")
@@ -114,8 +220,8 @@ async def vapi_sync(
 ):
     """Re-sync the existing Vapi assistant with the tenant's current config."""
     tenant_ctx = await tenant_service.resolve_by_id(current_user.id)
-    if not tenant_ctx or not tenant_ctx.vapi_api_key:
-        raise HTTPException(status_code=400, detail="Vapi is not connected for this tenant.")
+    if not tenant_ctx or not tenant_ctx.vapi_assistant_id:
+        raise HTTPException(status_code=400, detail="No Vapi assistant configured for this tenant.")
 
     try:
         assistant_id = await vapi_service.register_assistant(tenant_ctx=tenant_ctx)
@@ -140,16 +246,16 @@ async def vapi_sync(
 async def vapi_disconnect(
     current_user: Tenant = Depends(auth_service.get_current_user),
 ):
-    """Clear stored Vapi credentials. Does NOT delete the assistant on Vapi."""
+    """Clear stored Vapi/Twilio identifiers. Does NOT delete the assistant on Vapi."""
     await tenant_service.update_tenant(
         current_user.id,
         {
-            "vapi_api_key": "",
             "vapi_assistant_id": "",
             "vapi_phone_number_id": "",
+            "twilio_phone_number": "",
         },
     )
-    logger.info("[VapiDisconnect] %s disconnected from Vapi", current_user.slug)
+    logger.info("[VapiDisconnect] %s disconnected integrations", current_user.slug)
     return {"status": "disconnected"}
 
 
@@ -157,9 +263,13 @@ async def vapi_disconnect(
 async def vapi_status(
     current_user: Tenant = Depends(auth_service.get_current_user),
 ):
-    """Connection status — used by the UI to show Connected/Not connected."""
+    """
+    Connection status — used by the tenant UI to show provisioning state.
+    Under Option A, we check for assistant_id (assigned by admin), not API key.
+    """
     return {
-        "connected": bool(current_user.vapi_api_key and current_user.vapi_assistant_id),
+        "connected": bool(current_user.vapi_assistant_id),
         "assistant_id": current_user.vapi_assistant_id or None,
         "phone_number_id": current_user.vapi_phone_number_id or None,
+        "twilio_phone_number": current_user.twilio_phone_number or None,
     }

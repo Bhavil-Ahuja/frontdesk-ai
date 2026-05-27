@@ -43,8 +43,10 @@ async def register_assistant(tenant_ctx: Any | None = None) -> str | None:
     If tenant_ctx is provided, uses tenant-specific config (name, voice, greeting).
     Otherwise uses legacy global settings.
     """
+    # Option A (centralised SaaS): one global Vapi API key for all tenants.
+    # Tenant-level key is used as override only if explicitly set (legacy).
     if tenant_ctx:
-        api_key = tenant_ctx.vapi_api_key
+        api_key = tenant_ctx.vapi_api_key or settings.VAPI_API_KEY
         assistant_id = tenant_ctx.vapi_assistant_id
         agent_name = tenant_ctx.agent_name or "Sarah"
         business_name = tenant_ctx.business_name or "Office"

@@ -22,6 +22,10 @@ import {
   AlertCircle,
   History,
   MapPin,
+  Save,
+  PhoneCall,
+  MessageSquare,
+  BarChart3,
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import { useModal } from '../contexts/ModalContext';
@@ -291,6 +295,7 @@ export default function TenantAdmin() {
               onAction={(action, method) => performAction(tenant.id, action, method)}
               onPurge={() => purgeAccount(tenant.id, tenant.business_name, tenant.owner_email)}
               actionLoading={actionLoading === tenant.id}
+              onRefresh={fetchTenants}
             />
           ))}
         </div>
@@ -301,8 +306,8 @@ export default function TenantAdmin() {
 
 // ── Individual tenant row ────────────────────────────────────────────────────
 
-function TenantRow({ tenant, expanded, onToggle, onAction, onPurge, actionLoading }) {
-  const { confirm } = useModal();
+function TenantRow({ tenant, expanded, onToggle, onAction, onPurge, actionLoading, onRefresh }) {
+  const { confirm, toast } = useModal();
   const cfg = STATUS_CONFIG[tenant.status] || STATUS_CONFIG.PENDING;
   const StatusIcon = cfg.icon;
 
@@ -326,6 +331,11 @@ function TenantRow({ tenant, expanded, onToggle, onAction, onPurge, actionLoadin
             {tenant.demo_mode && (
               <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-400">
                 Demo
+              </span>
+            )}
+            {tenant.plan && (
+              <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-400">
+                {tenant.plan}
               </span>
             )}
           </div>
@@ -395,6 +405,12 @@ function TenantRow({ tenant, expanded, onToggle, onAction, onPurge, actionLoadin
               </div>
             </div>
           </div>
+
+          {/* ── Admin Provisioning: Vapi + Twilio assignment ──────────── */}
+          <ProvisioningSection tenantId={tenant.id} tenant={tenant} onSaved={onRefresh} />
+
+          {/* ── Tenant Usage Stats ─────────────────────────────────────── */}
+          <TenantUsageStats tenantId={tenant.id} />
 
           {/* Greeting message */}
           {tenant.greeting_message && (
@@ -609,6 +625,255 @@ function TenantChangeHistory({ tenantId }) {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Admin Provisioning Panel ────────────────────────────────────────────────
+// Lets admin assign Vapi assistant ID, Vapi phone number ID, and Twilio
+// phone number to a tenant. These are the per-tenant integration identifiers
+// under the platform-managed (Option A) SaaS model.
+
+function ProvisioningSection({ tenantId, tenant, onSaved }) {
+  const { toast } = useModal();
+  const [show, setShow] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [fields, setFields] = useState({
+    vapi_assistant_id: '',
+    vapi_phone_number_id: '',
+    twilio_phone_number: '',
+  });
+
+  // Load current values when opened
+  useEffect(() => {
+    if (show) {
+      loadCurrentValues();
+    }
+  }, [show]);
+
+  async function loadCurrentValues() {
+    try {
+      const data = await apiFetch(`/api/integrations/vapi/admin/${tenantId}`);
+      setFields({
+        vapi_assistant_id: data.vapi_assistant_id || '',
+        vapi_phone_number_id: data.vapi_phone_number_id || '',
+        twilio_phone_number: data.twilio_phone_number || '',
+      });
+    } catch (err) {
+      // Fallback: use tenant data from list (may not have these fields)
+      console.warn('Could not load provisioning details:', err);
+    }
+  }
+
+  async function handleSave() {
+    setSaving(true);
+    try {
+      await apiFetch(`/api/integrations/vapi/assign`, {
+        method: 'POST',
+        body: JSON.stringify({
+          tenant_id: tenantId,
+          vapi_assistant_id: fields.vapi_assistant_id.trim() || null,
+          vapi_phone_number_id: fields.vapi_phone_number_id.trim() || null,
+          twilio_phone_number: fields.twilio_phone_number.trim() || null,
+        }),
+      });
+      toast.success('Integration settings saved.');
+      if (onSaved) onSaved();
+    } catch (err) {
+      console.error('Failed to save provisioning:', err);
+      toast.error(err.message || 'Failed to save integration settings.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="mt-4">
+      <button
+        onClick={() => setShow(!show)}
+        className="flex items-center gap-2 text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 transition-colors"
+      >
+        <PhoneCall className="w-4 h-4" />
+        {show ? 'Hide' : 'Manage'} Integration Provisioning
+        {show ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+      </button>
+
+      {show && (
+        <div className="mt-3 p-4 bg-white dark:bg-gray-800 rounded-lg border border-indigo-200 dark:border-indigo-800 space-y-4">
+          <div>
+            <p className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider mb-3">
+              Platform Integration Assignment
+            </p>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+              Assign Vapi and Twilio resources to this tenant. These are managed under the platform's global accounts.
+            </p>
+          </div>
+
+          {/* Vapi Assistant ID */}
+          <div>
+            <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <Phone className="w-3.5 h-3.5 inline mr-1" />
+              Vapi Assistant ID
+            </label>
+            <input
+              type="text"
+              value={fields.vapi_assistant_id}
+              onChange={(e) => setFields((f) => ({ ...f, vapi_assistant_id: e.target.value }))}
+              placeholder="e.g. asst_abc123..."
+              className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none dark:bg-gray-700 dark:text-white font-mono"
+            />
+            <p className="text-[11px] text-gray-400 mt-1">The Vapi assistant provisioned for this tenant's voice agent.</p>
+          </div>
+
+          {/* Vapi Phone Number ID */}
+          <div>
+            <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <PhoneCall className="w-3.5 h-3.5 inline mr-1" />
+              Vapi Phone Number ID
+            </label>
+            <input
+              type="text"
+              value={fields.vapi_phone_number_id}
+              onChange={(e) => setFields((f) => ({ ...f, vapi_phone_number_id: e.target.value }))}
+              placeholder="e.g. phn_xyz789..."
+              className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none dark:bg-gray-700 dark:text-white font-mono"
+            />
+            <p className="text-[11px] text-gray-400 mt-1">Vapi phone number ID assigned to this tenant (from the platform's Vapi account).</p>
+          </div>
+
+          {/* Twilio Phone Number */}
+          <div>
+            <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <MessageSquare className="w-3.5 h-3.5 inline mr-1" />
+              Twilio Phone Number
+            </label>
+            <input
+              type="text"
+              value={fields.twilio_phone_number}
+              onChange={(e) => setFields((f) => ({ ...f, twilio_phone_number: e.target.value }))}
+              placeholder="e.g. +14155551234"
+              className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none dark:bg-gray-700 dark:text-white font-mono"
+            />
+            <p className="text-[11px] text-gray-400 mt-1">
+              Twilio SMS number from the platform account. Buy numbers in the Twilio Console, then assign here.
+            </p>
+          </div>
+
+          {/* Save button */}
+          <div className="pt-2 flex items-center gap-3">
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              className="inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors disabled:opacity-50"
+            >
+              {saving ? (
+                <div className="animate-spin rounded-full h-3.5 w-3.5 border-b-2 border-white"></div>
+              ) : (
+                <Save className="w-3.5 h-3.5" />
+              )}
+              Save Integration Settings
+            </button>
+            <button
+              onClick={() => setShow(false)}
+              className="px-3 py-2 text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Tenant Usage Stats (inline) ─────────────────────────────────────────────
+
+function TenantUsageStats({ tenantId }) {
+  const [usage, setUsage] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [show, setShow] = useState(false);
+
+  async function loadUsage() {
+    if (usage) {
+      setShow(!show);
+      return;
+    }
+    setLoading(true);
+    try {
+      const data = await apiFetch(`/api/integrations/vapi/admin/${tenantId}/usage`);
+      setUsage(data);
+      setShow(true);
+    } catch (err) {
+      console.error('Failed to load usage:', err);
+      setShow(true);
+      setUsage(null);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="mt-4">
+      <button
+        onClick={loadUsage}
+        className="flex items-center gap-2 text-sm font-medium text-gray-600 dark:text-gray-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors"
+      >
+        {loading ? (
+          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-current"></div>
+        ) : (
+          <BarChart3 className="w-4 h-4" />
+        )}
+        {show ? 'Hide' : 'Show'} Usage Stats
+      </button>
+
+      {show && (
+        <div className="mt-3 p-4 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+          {!usage ? (
+            <p className="text-xs text-gray-400">Could not load usage data for this tenant.</p>
+          ) : (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
+                <span>Plan: <strong className="text-gray-900 dark:text-white">{usage.plan || '—'}</strong></span>
+                {usage.period_start && (
+                  <span>Period started: {new Date(usage.period_start).toLocaleDateString()}</span>
+                )}
+              </div>
+
+              {/* Call minutes bar */}
+              <div>
+                <div className="flex items-center justify-between text-xs mb-1">
+                  <span className="text-gray-600 dark:text-gray-400">Call Minutes</span>
+                  <span className="font-medium text-gray-900 dark:text-white">
+                    {usage.call_minutes_used?.toFixed(1) || '0'} / {usage.call_minutes_limit ?? '∞'}
+                  </span>
+                </div>
+                <MiniUsageBar used={usage.call_minutes_used || 0} limit={usage.call_minutes_limit} />
+              </div>
+
+              {/* SMS bar */}
+              <div>
+                <div className="flex items-center justify-between text-xs mb-1">
+                  <span className="text-gray-600 dark:text-gray-400">SMS Sent</span>
+                  <span className="font-medium text-gray-900 dark:text-white">
+                    {usage.sms_sent || 0} / {usage.sms_limit ?? '∞'}
+                  </span>
+                </div>
+                <MiniUsageBar used={usage.sms_sent || 0} limit={usage.sms_limit} />
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MiniUsageBar({ used, limit }) {
+  const pct = limit ? Math.min((used / limit) * 100, 100) : 0;
+  const color = pct >= 95 ? 'bg-red-500' : pct >= 80 ? 'bg-amber-500' : 'bg-green-500';
+  return (
+    <div className="w-full h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+      <div className={`h-full ${color} rounded-full transition-all`} style={{ width: `${pct}%` }} />
     </div>
   );
 }

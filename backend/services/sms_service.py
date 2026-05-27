@@ -31,24 +31,28 @@ TWILIO_API_URL = "https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json
 
 
 def _resolve_twilio(tenant_ctx: Any | None) -> tuple[str, str, str]:
-    """Return (account_sid, auth_token, from_number) from tenant or global settings.
+    """Return (account_sid, auth_token, from_number).
 
-    IMPORTANT: when called from a tenant-authenticated path (tenant_ctx is not
-    None) we ONLY use the tenant's own credentials. If the tenant hasn't
-    configured Twilio we return empty strings — which causes _send_sms to log a
-    "credentials not configured" warning and skip the send. We NEVER fall back
-    to the global .env credentials from a tenant-scoped request, because that
-    would leak one tenant's Twilio to another (or to a test account that
-    shouldn't be sending real SMS).
+    Option A (centralised SaaS): the platform owns ONE Twilio account. All
+    tenants share the global SID + auth token from .env. Only the from-number
+    differs per tenant — each clinic gets its own Twilio number so patients
+    see a local caller-ID.
+
+    If a tenant has its own credentials stored (legacy Option B), they are
+    used as an override so the migration path stays smooth.
     """
+    # Global credentials from .env (platform account)
+    global_sid = settings.TWILIO_ACCOUNT_SID
+    global_token = settings.TWILIO_AUTH_TOKEN
+
     if tenant_ctx:
-        return (
-            tenant_ctx.twilio_account_sid,
-            tenant_ctx.twilio_auth_token,
-            tenant_ctx.twilio_phone_number,
-        )
-    # Legacy single-tenant / no-tenant path — use global .env
-    return settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN, settings.TWILIO_PHONE_NUMBER
+        # Use tenant-specific creds if set (legacy), else fall back to global
+        sid = tenant_ctx.twilio_account_sid or global_sid
+        token = tenant_ctx.twilio_auth_token or global_token
+        from_number = tenant_ctx.twilio_phone_number or settings.TWILIO_PHONE_NUMBER
+        return sid, token, from_number
+
+    return global_sid, global_token, settings.TWILIO_PHONE_NUMBER
 
 
 def _business_name(tenant_ctx: Any | None) -> str:
@@ -141,6 +145,8 @@ def _send_sms(to: str, body: str, tenant_ctx: Any | None = None) -> bool:
         if resp.status_code in (200, 201):
             msg_sid = resp.json().get("sid", "unknown")
             logger.info("✓ SMS sent to %s (SID: %s)", to, msg_sid)
+            # Record SMS usage for billing
+            _record_sms_usage(tenant_ctx)
             return True
         else:
             error = resp.json().get("message", resp.text[:200])
@@ -154,6 +160,21 @@ def _send_sms(to: str, body: str, tenant_ctx: Any | None = None) -> bool:
     except Exception as exc:
         logger.error("✗ Failed to send SMS to %s: %s", to, exc)
         return False
+
+
+def _record_sms_usage(tenant_ctx: Any | None) -> None:
+    """Fire-and-forget SMS usage recording for billing."""
+    if not tenant_ctx:
+        return
+    tenant_id = getattr(tenant_ctx, "tenant_id", None)
+    if not tenant_id:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+        from backend.services.usage_service import record_sms
+        loop.create_task(record_sms(tenant_id))
+    except RuntimeError:
+        pass  # No event loop — skip metering (rare, e.g. test harness)
 
 
 # ── Outbound SMS logging ─────────────────────────────────────────────────────
