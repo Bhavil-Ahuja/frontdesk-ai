@@ -327,8 +327,9 @@ async def reschedule_appointment(
     new_start_time: str,
     reason: str = "",
     tenant_ctx: Any | None = None,
+    provider_id: str | None = None,
 ) -> dict[str, Any] | None:
-    """Reschedule an existing booking."""
+    """Reschedule an existing booking, optionally changing the provider."""
     slug = tenant_ctx.slug if tenant_ctx else "default"
     tz = tenant_ctx.timezone if tenant_ctx else DEFAULT_TIMEZONE
 
@@ -338,7 +339,7 @@ async def reschedule_appointment(
     # ── Priority 1: Native scheduling (DB is source of truth) ───────────
     if tenant_ctx:
         logger.info("[Calendar][%s] Using native reschedule", slug)
-        result = await native_scheduling.reschedule_native_booking(booking_uid, new_start_time)
+        result = await native_scheduling.reschedule_native_booking(booking_uid, new_start_time, provider_id=provider_id)
 
         # ── Google Calendar sync (fire-and-forget, non-blocking) ────────
         if result and tenant_ctx.google_calendar_connected and tenant_ctx.google_calendar_refresh_token:

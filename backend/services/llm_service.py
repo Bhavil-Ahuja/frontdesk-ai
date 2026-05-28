@@ -400,12 +400,13 @@ ALL_TOOLS = [
         "type": "function",
         "function": {
             "name": "reschedule_appointment",
-            "description": "Reschedule an existing appointment. IMPORTANT: Before calling this, ALWAYS call get_available_slots first to get valid time slots. Use the exact_slot_time from that result as the new_slot_time — do NOT construct times yourself.",
+            "description": "Reschedule an existing appointment. IMPORTANT: Before calling this, ALWAYS call get_available_slots first to get valid time slots. Use the exact_slot_time from that result as the new_slot_time — do NOT construct times yourself. If the patient wants a different provider, pass the provider_id from the available_providers list.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "booking_uid": {"type": "string", "description": "Booking reference ID from the original booking."},
                     "new_slot_time": {"type": "string", "description": "EXACT exact_slot_time string from get_available_slots. Do NOT construct this yourself — always use a value returned by get_available_slots."},
+                    "provider_id": {"type": "string", "description": "UUID of the provider to reassign this appointment to. Use the 'id' from the available_providers list returned by get_available_slots. Pass this whenever the patient picks a specific doctor."},
                 },
                 "required": ["booking_uid", "new_slot_time"],
             },
@@ -2040,6 +2041,7 @@ async def _execute_tool(
         elif name == "reschedule_appointment":
             booking_uid = args.get("booking_uid", "")
             new_slot_time = args.get("new_slot_time", "")
+            new_provider_id = args.get("provider_id", "") or None
             if not booking_uid or not new_slot_time:
                 return {
                     "success": False,
@@ -2050,6 +2052,7 @@ async def _execute_tool(
                 booking_uid=booking_uid,
                 new_start_time=new_slot_time,
                 tenant_ctx=tenant_ctx,
+                provider_id=new_provider_id,
             )
             if result:
                 # Send reschedule SMS
@@ -2065,21 +2068,25 @@ async def _execute_tool(
                     )
                 except Exception as sms_exc:
                     logger.warning("[Call %s] Reschedule SMS failed: %s", call_id, sms_exc)
-                # Update appointment in DB
-                try:
-                    from backend.database import async_session as get_async_session
-                    from sqlalchemy import select as sa_select
-                    from backend.models.appointment import Appointment as ApptModel
-                    async with get_async_session() as db_session:
-                        stmt = sa_select(ApptModel).where(ApptModel.cal_booking_uid == booking_uid)
-                        db_result = await db_session.execute(stmt)
-                        appt = db_result.scalar_one_or_none()
-                        if appt:
-                            appt.scheduled_at = datetime.fromisoformat(new_slot_time)
-                            await db_session.commit()
-                            logger.info("[Call %s] ✓ DB appointment rescheduled: %s", call_id, booking_uid)
-                except Exception as db_exc:
-                    logger.warning("[Call %s] DB reschedule update failed: %s", call_id, db_exc)
+                # Note: native_scheduling.reschedule_native_booking already updated
+                # the DB (time + provider). This is a safety fallback for non-native paths.
+                if not tenant_ctx:
+                    try:
+                        from backend.database import async_session as get_async_session
+                        from sqlalchemy import select as sa_select
+                        from backend.models.appointment import Appointment as ApptModel
+                        async with get_async_session() as db_session:
+                            stmt = sa_select(ApptModel).where(ApptModel.cal_booking_uid == booking_uid)
+                            db_result = await db_session.execute(stmt)
+                            appt = db_result.scalar_one_or_none()
+                            if appt:
+                                appt.scheduled_at = datetime.fromisoformat(new_slot_time)
+                                await db_session.commit()
+                                logger.info("[Call %s] ✓ DB appointment rescheduled: %s", call_id, booking_uid)
+                    except Exception as db_exc:
+                        logger.warning("[Call %s] DB reschedule update failed: %s", call_id, db_exc)
+                else:
+                    logger.info("[Call %s] ✓ DB appointment already updated by native reschedule: %s", call_id, booking_uid)
                 elapsed = (time.time() - t0) * 1000
                 logger.info("[Call %s] reschedule → SUCCESS in %.0fms", call_id, elapsed)
                 return {"success": True, "reschedule": result}

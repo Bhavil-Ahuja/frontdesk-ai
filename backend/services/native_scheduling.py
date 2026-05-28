@@ -547,8 +547,10 @@ async def cancel_native_booking(
 async def reschedule_native_booking(
     booking_uid: str,
     new_start_time: str,
+    provider_id: str | None = None,
 ) -> dict[str, Any] | None:
-    """Reschedule an appointment to a new time. Returns result dict or None."""
+    """Reschedule an appointment to a new time, optionally changing the provider.
+    Returns result dict or None."""
     try:
         new_dt = datetime.fromisoformat(new_start_time)
         # Convert to UTC for storage — handles both tz-aware and naive inputs
@@ -572,6 +574,16 @@ async def reschedule_native_booking(
         old_time = appt.scheduled_at.isoformat() if appt.scheduled_at else "unknown"
         appt.scheduled_at = new_dt
         appt.status = AppointmentStatus.CONFIRMED  # reset from RESCHEDULED if needed
+
+        # Update provider if a new one was requested
+        if provider_id:
+            from uuid import UUID
+            try:
+                appt.provider_id = UUID(provider_id)
+                logger.info("[NativeSched] Provider changed to %s for %s", provider_id, booking_uid)
+            except (ValueError, AttributeError) as exc:
+                logger.warning("[NativeSched] Invalid provider_id=%s — %s", provider_id, exc)
+
         await session.commit()
 
     logger.info("[NativeSched] ✓ Rescheduled %s: %s → %s", booking_uid, old_time, new_start_time)
