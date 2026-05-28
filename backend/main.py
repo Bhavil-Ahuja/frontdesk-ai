@@ -44,6 +44,7 @@ from backend.routes.waitlist import router as waitlist_router
 from backend.routes.sms_webhook import router as sms_webhook_router
 from backend.routes.sms_messages import router as sms_messages_router
 from backend.routes.patients import router as patients_router
+from backend.routes.support_tickets import router as support_tickets_router
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -313,6 +314,7 @@ app.include_router(waitlist_router)
 app.include_router(sms_webhook_router)
 app.include_router(sms_messages_router)
 app.include_router(patients_router)
+app.include_router(support_tickets_router)
 
 
 @app.get("/health")

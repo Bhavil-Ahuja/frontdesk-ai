@@ -56,6 +56,8 @@ export default function SetupGuide() {
   const calendarConnected = config?.google_calendar_connected ?? false;
   const vapiConfigured = config?.vapi_configured ?? user?.vapi_configured ?? false;
   const twilioConfigured = config?.twilio_configured ?? user?.twilio_configured ?? false;
+  const vapiEnabled = config?.vapi_enabled ?? true;
+  const twilioEnabled = config?.twilio_enabled ?? true;
 
   // Steps the tenant actually needs to complete
   const steps = [
@@ -116,16 +118,17 @@ export default function SetupGuide() {
       iconColor: 'text-emerald-600 dark:text-emerald-400',
       iconBg: 'bg-emerald-100 dark:bg-emerald-900/30',
     },
-    {
+    // Only show integration step if at least one of Vapi/Twilio is enabled
+    ...(vapiEnabled || twilioEnabled ? [{
       key: 'integrations',
       icon: Zap,
-      title: 'Phone & SMS (Managed by FrontDesk AI)',
-      done: vapiConfigured && twilioConfigured,
-      shortDesc: 'Voice calls and SMS are handled by the platform — no setup needed from you.',
+      title: `${vapiEnabled && twilioEnabled ? 'Phone & SMS' : vapiEnabled ? 'Voice Calls' : 'SMS'} (Managed by FrontDesk AI)`,
+      done: (!vapiEnabled || vapiConfigured) && (!twilioEnabled || twilioConfigured),
+      shortDesc: `${vapiEnabled ? 'Voice calls' : ''}${vapiEnabled && twilioEnabled ? ' and ' : ''}${twilioEnabled ? 'SMS' : ''} ${vapiEnabled && twilioEnabled ? 'are' : 'is'} handled by the platform — no setup needed from you.`,
       details: [
-        'Vapi (voice AI) and Twilio (SMS) are managed centrally by FrontDesk AI',
+        ...(vapiEnabled ? ['Vapi (voice AI) is managed centrally by FrontDesk AI'] : []),
+        ...(twilioEnabled ? ['Twilio (SMS) is managed centrally by FrontDesk AI'] : []),
         'Your dedicated phone number is assigned by the platform admin after approval',
-        'All call recordings, transcripts, and SMS are billed under your plan',
         'No API keys, no third-party accounts to create — it just works',
       ],
       setupSteps: [
@@ -138,11 +141,11 @@ export default function SetupGuide() {
       borderColor: 'border-violet-200 dark:border-violet-800',
       iconColor: 'text-violet-600 dark:text-violet-400',
       iconBg: 'bg-violet-100 dark:bg-violet-900/30',
-    },
+    }] : []),
   ];
 
   const requiredDone = calendarConnected || true; // Calendar is optional; business config is always "done"
-  const allReady = vapiConfigured && twilioConfigured;
+  const allReady = (!vapiEnabled || vapiConfigured) && (!twilioEnabled || twilioConfigured);
 
   if (loading) {
     return (
@@ -224,20 +227,22 @@ export default function SetupGuide() {
         </div>
       </div>
 
-      {/* Platform-managed banner */}
-      <div className="rounded-2xl border border-violet-200 dark:border-violet-800 bg-violet-50 dark:bg-violet-900/20 p-4 flex items-start gap-3">
-        <ShieldCheck className="w-5 h-5 text-violet-600 dark:text-violet-400 mt-0.5 shrink-0" />
-        <div>
-          <p className="text-sm font-semibold text-violet-900 dark:text-violet-300">
-            Phone & SMS are managed for you
-          </p>
-          <p className="text-xs text-violet-700 dark:text-violet-400 mt-0.5">
-            FrontDesk AI handles all Vapi (voice) and Twilio (SMS) infrastructure. You don't need to create
-            accounts with these services or manage any API keys. Your dedicated phone number is assigned by
-            the admin after account approval.
-          </p>
+      {/* Platform-managed banner — only show when at least one integration is enabled */}
+      {(vapiEnabled || twilioEnabled) && (
+        <div className="rounded-2xl border border-violet-200 dark:border-violet-800 bg-violet-50 dark:bg-violet-900/20 p-4 flex items-start gap-3">
+          <ShieldCheck className="w-5 h-5 text-violet-600 dark:text-violet-400 mt-0.5 shrink-0" />
+          <div>
+            <p className="text-sm font-semibold text-violet-900 dark:text-violet-300">
+              {vapiEnabled && twilioEnabled ? 'Phone & SMS are managed for you' : vapiEnabled ? 'Voice calls are managed for you' : 'SMS is managed for you'}
+            </p>
+            <p className="text-xs text-violet-700 dark:text-violet-400 mt-0.5">
+              FrontDesk AI handles all {vapiEnabled ? 'Vapi (voice)' : ''}{vapiEnabled && twilioEnabled ? ' and ' : ''}{twilioEnabled ? 'Twilio (SMS)' : ''} infrastructure. You don't need to create
+              accounts with these services or manage any API keys. Your dedicated phone number is assigned by
+              the admin after account approval.
+            </p>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Step cards */}
       <div className="space-y-4">
@@ -352,38 +357,42 @@ export default function SetupGuide() {
                   {/* Integration status badges for the managed section */}
                   {step.key === 'integrations' && (
                     <div className="pt-2 space-y-2">
-                      <div className="flex items-center gap-3 p-3 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
-                        <Phone className="w-4 h-4 text-indigo-500" />
-                        <div className="flex-1">
-                          <p className="text-sm font-medium text-gray-900 dark:text-white">Vapi Voice Agent</p>
-                          <p className="text-xs text-gray-500 dark:text-gray-400">Handles incoming calls and AI conversation</p>
+                      {vapiEnabled && (
+                        <div className="flex items-center gap-3 p-3 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+                          <Phone className="w-4 h-4 text-indigo-500" />
+                          <div className="flex-1">
+                            <p className="text-sm font-medium text-gray-900 dark:text-white">Vapi Voice Agent</p>
+                            <p className="text-xs text-gray-500 dark:text-gray-400">Handles incoming calls and AI conversation</p>
+                          </div>
+                          {vapiConfigured ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-full text-xs font-medium">
+                              <CheckCircle2 className="w-3 h-3" /> Active
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2 py-1 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 rounded-full text-xs font-medium">
+                              <Circle className="w-3 h-3" /> Awaiting setup
+                            </span>
+                          )}
                         </div>
-                        {vapiConfigured ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-full text-xs font-medium">
-                            <CheckCircle2 className="w-3 h-3" /> Active
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 px-2 py-1 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 rounded-full text-xs font-medium">
-                            <Circle className="w-3 h-3" /> Awaiting setup
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-3 p-3 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
-                        <MessageSquare className="w-4 h-4 text-pink-500" />
-                        <div className="flex-1">
-                          <p className="text-sm font-medium text-gray-900 dark:text-white">Twilio SMS</p>
-                          <p className="text-xs text-gray-500 dark:text-gray-400">Appointment reminders and follow-up texts</p>
+                      )}
+                      {twilioEnabled && (
+                        <div className="flex items-center gap-3 p-3 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+                          <MessageSquare className="w-4 h-4 text-pink-500" />
+                          <div className="flex-1">
+                            <p className="text-sm font-medium text-gray-900 dark:text-white">Twilio SMS</p>
+                            <p className="text-xs text-gray-500 dark:text-gray-400">Appointment reminders and follow-up texts</p>
+                          </div>
+                          {twilioConfigured ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-full text-xs font-medium">
+                              <CheckCircle2 className="w-3 h-3" /> Active
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2 py-1 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 rounded-full text-xs font-medium">
+                              <Circle className="w-3 h-3" /> Awaiting setup
+                            </span>
+                          )}
                         </div>
-                        {twilioConfigured ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-full text-xs font-medium">
-                            <CheckCircle2 className="w-3 h-3" /> Active
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 px-2 py-1 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 rounded-full text-xs font-medium">
-                            <Circle className="w-3 h-3" /> Awaiting setup
-                          </span>
-                        )}
-                      </div>
+                      )}
                     </div>
                   )}
                 </div>

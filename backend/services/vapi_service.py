@@ -17,12 +17,33 @@ from typing import Any
 import httpx
 
 from backend.config import settings
+from backend.defaults import DEFAULT_AGENT_NAME
 from backend.services import llm_service
 from backend.services.http_client import http
 
 logger = logging.getLogger(__name__)
 
 VAPI_API_BASE = "https://api.vapi.ai"
+
+# ── Vapi platform defaults ──────────────────────────────────────────────────
+# These are Vapi assistant-level settings, managed on the Vapi platform.
+# Kept here (not in defaults.py) because they're Vapi-specific implementation
+# details, not general application config.
+
+_VOICE_PROVIDER = "11labs"
+_VOICE_ID = "21m00Tcm4TlvDq8ikWAM"  # ElevenLabs "Rachel"
+_VOICE_STABILITY = 0.5
+_VOICE_SIMILARITY_BOOST = 0.75
+_END_CALL_PHRASES = [
+    "goodbye",
+    "thank you bye",
+    "have a good day",
+    "have a great day",
+    "that's all I needed",
+    "nothing else thank you",
+    "no that's it",
+    "I'm good thanks",
+]
 
 
 def _vapi_headers(api_key: str | None = None) -> dict[str, str]:
@@ -48,26 +69,26 @@ async def register_assistant(tenant_ctx: Any | None = None) -> str | None:
     if tenant_ctx:
         api_key = tenant_ctx.vapi_api_key or settings.VAPI_API_KEY
         assistant_id = tenant_ctx.vapi_assistant_id
-        agent_name = tenant_ctx.agent_name or "Sarah"
+        agent_name = tenant_ctx.agent_name or DEFAULT_AGENT_NAME
         business_name = tenant_ctx.business_name or "Office"
         greeting = tenant_ctx.greeting_message or f"Thank you for calling {business_name}. How can I help you today?"
         # Resolve tenant's chosen voice. voice_config is a JSONB dict that may
         # be a plain mapping or, defensively, an attribute-style object.
         voice_cfg = getattr(tenant_ctx, "voice_config", None) or {}
         if isinstance(voice_cfg, dict):
-            voice_provider = voice_cfg.get("provider") or "11labs"
-            voice_id = voice_cfg.get("voiceId") or "21m00Tcm4TlvDq8ikWAM"
+            voice_provider = voice_cfg.get("provider") or _VOICE_PROVIDER
+            voice_id = voice_cfg.get("voiceId") or _VOICE_ID
         else:
-            voice_provider = "11labs"
-            voice_id = "21m00Tcm4TlvDq8ikWAM"
+            voice_provider = _VOICE_PROVIDER
+            voice_id = _VOICE_ID
     else:
         api_key = settings.VAPI_API_KEY
         assistant_id = settings.VAPI_ASSISTANT_ID
-        agent_name = "Sarah"
+        agent_name = DEFAULT_AGENT_NAME
         business_name = settings.OFFICE_NAME
         greeting = f"Thank you for calling {business_name}. This is {agent_name}. How can I help you today?"
-        voice_provider = "11labs"
-        voice_id = "21m00Tcm4TlvDq8ikWAM"
+        voice_provider = _VOICE_PROVIDER
+        voice_id = _VOICE_ID
 
     if not api_key:
         logger.warning("VAPI_API_KEY not set — skipping assistant registration.")
@@ -86,16 +107,11 @@ async def register_assistant(tenant_ctx: Any | None = None) -> str | None:
         "voice": {
             "provider": voice_provider,
             "voiceId": voice_id,
-            "stability": 0.5,
-            "similarityBoost": 0.75,
+            "stability": _VOICE_STABILITY,
+            "similarityBoost": _VOICE_SIMILARITY_BOOST,
         },
         "firstMessage": greeting,
-        "endCallPhrases": [
-            "goodbye",
-            "thank you bye",
-            "have a good day",
-            "that's all I needed",
-        ],
+        "endCallPhrases": list(_END_CALL_PHRASES),
         "serverUrl": webhook_url,
         "serverUrlSecret": webhook_secret,
     }
@@ -186,22 +202,22 @@ async def _handle_assistant_request(assistant_id: str = "") -> dict[str, Any]:
         tenant_ctx = await resolve_by_assistant_id(assistant_id)
 
     if tenant_ctx:
-        agent_name = tenant_ctx.agent_name or "Sarah"
+        agent_name = tenant_ctx.agent_name or DEFAULT_AGENT_NAME
         business_name = tenant_ctx.business_name
         greeting = tenant_ctx.greeting_message or f"Thank you for calling {business_name}. How can I help you today?"
         voice_cfg = getattr(tenant_ctx, "voice_config", None) or {}
         if isinstance(voice_cfg, dict):
-            voice_provider = voice_cfg.get("provider") or "11labs"
-            voice_id = voice_cfg.get("voiceId") or "21m00Tcm4TlvDq8ikWAM"
+            voice_provider = voice_cfg.get("provider") or _VOICE_PROVIDER
+            voice_id = voice_cfg.get("voiceId") or _VOICE_ID
         else:
-            voice_provider = "11labs"
-            voice_id = "21m00Tcm4TlvDq8ikWAM"
+            voice_provider = _VOICE_PROVIDER
+            voice_id = _VOICE_ID
     else:
-        agent_name = "Sarah"
+        agent_name = DEFAULT_AGENT_NAME
         business_name = settings.OFFICE_NAME
         greeting = f"Thank you for calling {business_name}. This is {agent_name}. How can I help you today?"
-        voice_provider = "11labs"
-        voice_id = "21m00Tcm4TlvDq8ikWAM"
+        voice_provider = _VOICE_PROVIDER
+        voice_id = _VOICE_ID
 
     return {
         "assistant": {
@@ -236,10 +252,36 @@ async def _handle_call_start(call_id: str, call_data: dict) -> dict[str, Any]:
         from backend.services.tenant_service import resolve_by_assistant_id
         tenant_ctx = await resolve_by_assistant_id(assistant_id)
 
+    # ── Per-tenant Vapi feature flag ─────────────────────────────────
+    # The global flag is already checked in the webhook route layer.
+    # Here we enforce the per-tenant toggle (mirrors sms_service pattern).
+    if tenant_ctx and hasattr(tenant_ctx, "feature_vapi_enabled") and not tenant_ctx.feature_vapi_enabled:
+        logger.warning(
+            "[CallStart] Vapi disabled for tenant %s — ignoring call %s",
+            tenant_ctx.slug, call_id,
+        )
+        return {"status": "ok"}
+
     # ── Caller recognition → patient context ──────────────────────────
+    # Skip recognition if the caller phone is the clinic's own Twilio number
+    # (happens when testing via Vapi web dialer — no real caller).
     patient_context = None
     tenant_id = tenant_ctx.tenant_id if tenant_ctx else None
-    if caller_number:
+    _is_own_number = False
+    if caller_number and tenant_ctx and tenant_ctx.twilio_phone_number:
+        from backend.services.patient_service import _phone_digits_tail
+        _is_own_number = (
+            _phone_digits_tail(caller_number) == _phone_digits_tail(tenant_ctx.twilio_phone_number)
+        )
+        if _is_own_number:
+            logger.info(
+                "[CallStart] Caller %s matches clinic Twilio number — skipping caller recognition",
+                caller_number,
+            )
+            # Clear so downstream doesn't treat clinic's number as the patient's
+            caller_number = ""
+
+    if caller_number and not _is_own_number:
         try:
             from backend.services import patient_service
             tz_name = tenant_ctx.timezone if tenant_ctx else None

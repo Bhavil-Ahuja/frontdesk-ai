@@ -34,6 +34,7 @@ import { getToken } from '../lib/api';
 import { useModal } from '../contexts/ModalContext';
 import { useAuth } from '../contexts/AuthContext';
 import ThemedDatePicker from './ui/ThemedDatePicker';
+import PhoneInput, { countryFromTimezone } from './ui/PhoneInput';
 
 const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 
@@ -310,12 +311,11 @@ export default function AgentConfig() {
             />
           </Field>
           <Field label="Business Phone">
-            <input
-              type="tel"
+            <PhoneInput
               value={config.business_phone || ''}
-              onChange={(e) => update('business_phone', e.target.value)}
-              placeholder="+1 (512) 555-0100"
-              className="input"
+              onChange={(v) => update('business_phone', v)}
+              defaultCountry={countryFromTimezone(config.timezone)}
+              placeholder="(512) 555-0100"
             />
           </Field>
           <Field label="Business Address" className="md:col-span-2">
@@ -368,78 +368,24 @@ export default function AgentConfig() {
               className="input resize-none"
             />
           </Field>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Agent Voice</label>
-            <p className="text-xs text-gray-400 mb-3">Select a voice for your AI agent. Click the play button to preview each voice.</p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {VOICE_OPTIONS.map((v) => {
-                const isSelected = (config.voice_id || VOICE_OPTIONS[0].id) === v.id;
-                const isPlaying = playingVoiceId === v.id;
-                const isLoading = loadingVoiceId === v.id;
-                return (
-                  <div
-                    key={v.id}
-                    onClick={() => update('voice_id', v.id)}
-                    className={`relative flex items-start gap-3 p-3.5 rounded-xl border-2 cursor-pointer transition-all ${
-                      isSelected
-                        ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20 shadow-sm'
-                        : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 hover:border-gray-300 dark:hover:border-gray-600 hover:shadow-sm'
-                    }`}
-                  >
-                    {/* Radio indicator */}
-                    <div className="mt-0.5 shrink-0">
-                      <div
-                        className={`w-4 h-4 rounded-full border-2 flex items-center justify-center transition-colors ${
-                          isSelected ? 'border-primary-500' : 'border-gray-300 dark:border-gray-500'
-                        }`}
-                      >
-                        {isSelected && (
-                          <div className="w-2 h-2 rounded-full bg-primary-500" />
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Voice info */}
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className={`text-sm font-semibold ${isSelected ? 'text-primary-700 dark:text-primary-300' : 'text-gray-900 dark:text-white'}`}>
-                          {v.name}
-                        </span>
-                        {isPlaying && (
-                          <Volume2 className="w-3.5 h-3.5 text-primary-500 animate-pulse" />
-                        )}
-                      </div>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 leading-snug">{v.description}</p>
-                    </div>
-
-                    {/* Play/Stop button */}
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        playVoicePreview(v.id);
-                      }}
-                      className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center transition-all ${
-                        isPlaying
-                          ? 'bg-primary-500 text-white hover:bg-primary-600 shadow-md'
-                          : isLoading
-                          ? 'bg-gray-100 dark:bg-gray-700 text-gray-400'
-                          : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-primary-100 dark:hover:bg-primary-900/30 hover:text-primary-600'
-                      }`}
-                      title={isPlaying ? 'Stop preview' : 'Play voice preview'}
-                      disabled={isLoading}
-                    >
-                      {isLoading ? (
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      ) : isPlaying ? (
-                        <Square className="w-3 h-3" />
-                      ) : (
-                        <Play className="w-3.5 h-3.5 ml-0.5" />
-                      )}
-                    </button>
-                  </div>
-                );
-              })}
+          {/* Voice is managed by the platform — show help card instead */}
+          <div className="bg-violet-50 dark:bg-violet-900/20 border border-violet-200 dark:border-violet-800 rounded-xl p-4">
+            <div className="flex items-start gap-3">
+              <Mic className="w-5 h-5 text-violet-500 mt-0.5 shrink-0" />
+              <div>
+                <p className="text-sm font-semibold text-violet-900 dark:text-violet-300">Voice Configuration</p>
+                <p className="text-xs text-violet-700 dark:text-violet-400 mt-1">
+                  Voice settings are managed by the FrontDesk AI platform. Your agent's voice is automatically configured when your account is provisioned.
+                  Need help or want to change your voice? Submit a support ticket.
+                </p>
+                <a
+                  href="/support"
+                  className="inline-flex items-center gap-1.5 mt-2 text-xs font-medium text-violet-600 dark:text-violet-400 hover:text-violet-800 dark:hover:text-violet-300 transition-colors"
+                >
+                  <MessageSquare className="w-3.5 h-3.5" />
+                  Go to Support
+                </a>
+              </div>
             </div>
           </div>
         </div>
@@ -479,12 +425,11 @@ export default function AgentConfig() {
             }
             help="When the AI escalates a call, it transfers to this number. Set during signup; update here if it changes."
           >
-            <input
-              type="tel"
+            <PhoneInput
               value={config.escalation_phone || ''}
-              onChange={(e) => update('escalation_phone', e.target.value)}
-              placeholder="+1 (512) 555-0100"
-              className="input"
+              onChange={(v) => update('escalation_phone', v)}
+              defaultCountry={countryFromTimezone(config.timezone)}
+              placeholder="(512) 555-0100"
             />
           </Field>
           <Field

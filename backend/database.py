@@ -106,6 +106,65 @@ _MIGRATIONS: list[str] = [
     "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS call_minutes_used DOUBLE PRECISION NOT NULL DEFAULT 0",
     "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS sms_sent INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS current_period_start TIMESTAMPTZ",
+
+    # ── tenants table — per-tenant feature flags for Vapi & Twilio ──────
+    "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS feature_vapi_enabled BOOLEAN NOT NULL DEFAULT true",
+    "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS feature_twilio_enabled BOOLEAN NOT NULL DEFAULT true",
+
+    # ── support_tickets table — generic help / ticket system ────────────
+    """CREATE TABLE IF NOT EXISTS support_tickets (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        subject VARCHAR(200) NOT NULL,
+        body TEXT NOT NULL,
+        category VARCHAR(20) NOT NULL DEFAULT 'GENERAL',
+        status VARCHAR(20) NOT NULL DEFAULT 'OPEN',
+        priority VARCHAR(10) NOT NULL DEFAULT 'MEDIUM',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        resolved_at TIMESTAMPTZ,
+        admin_notes TEXT,
+        resolved_by VARCHAR(255)
+    )""",
+    "CREATE INDEX IF NOT EXISTS ix_support_tickets_tenant_status ON support_tickets (tenant_id, status)",
+
+    # ── support_ticket_messages table — conversation thread per ticket ───
+    """CREATE TABLE IF NOT EXISTS support_ticket_messages (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        ticket_id UUID NOT NULL REFERENCES support_tickets(id) ON DELETE CASCADE,
+        sender_type VARCHAR(10) NOT NULL,
+        sender_name VARCHAR(255) NOT NULL,
+        body TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )""",
+    "CREATE INDEX IF NOT EXISTS ix_ticket_messages_ticket_created ON support_ticket_messages (ticket_id, created_at)",
+
+    # ── appointments table — make provider_id NOT NULL for new rows ──────
+    # Backfill existing NULL provider_ids with tenant's first active provider
+    """DO $$ BEGIN
+        UPDATE appointments a
+        SET provider_id = (
+            SELECT p.id FROM providers p
+            WHERE p.tenant_id = a.tenant_id AND p.is_active = true
+            ORDER BY p.created_at ASC LIMIT 1
+        )
+        WHERE a.provider_id IS NULL
+          AND EXISTS (
+            SELECT 1 FROM providers p
+            WHERE p.tenant_id = a.tenant_id AND p.is_active = true
+          );
+    EXCEPTION WHEN OTHERS THEN
+        RAISE NOTICE 'Provider backfill skipped: %', SQLERRM;
+    END $$;""",
+
+    # ── phone normalisation — strip dashes, spaces, parentheses ────────
+    #    Historic data may contain "635-241-8405" or "(512) 555-1234" which
+    #    breaks suffix-match queries.  Strip all non-digit / non-plus chars
+    #    so stored phones look like "+16352418405" or "6352418405".
+    "UPDATE appointments SET patient_phone = regexp_replace(patient_phone, '[^0-9+]', '', 'g') WHERE patient_phone ~ '[^0-9+]'",
+    "UPDATE patients SET phone = regexp_replace(phone, '[^0-9+]', '', 'g') WHERE phone ~ '[^0-9+]'",
+    "UPDATE waitlist_entries SET patient_phone = regexp_replace(patient_phone, '[^0-9+]', '', 'g') WHERE patient_phone IS NOT NULL AND patient_phone ~ '[^0-9+]'",
+    "UPDATE sms_messages SET to_number = regexp_replace(to_number, '[^0-9+]', '', 'g') WHERE to_number IS NOT NULL AND to_number ~ '[^0-9+]'",
 ]
 
 
@@ -116,7 +175,7 @@ async def init_db() -> None:
     logger.info("Connecting to database: %s", settings.DATABASE_URL.split("@")[-1])  # Log host only, not creds
     async with engine.begin() as conn:
         # Import models so they register with Base.metadata
-        from backend.models import tenant, call, appointment, patient, provider, waitlist, sms_message, profile_change_log  # noqa: F401
+        from backend.models import tenant, call, appointment, patient, provider, waitlist, sms_message, profile_change_log, support_ticket  # noqa: F401
         await conn.run_sync(Base.metadata.create_all)
 
     # Apply column-level migrations (idempotent — safe to re-run)

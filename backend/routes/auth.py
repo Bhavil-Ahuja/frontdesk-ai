@@ -29,7 +29,9 @@ def _validate_email(value: str) -> str:
         raise ValueError("invalid email address")
     return value.lower().strip()
 
+from backend.config import settings
 from backend.database import async_session
+from backend.defaults import DEFAULT_TIMEZONE
 from backend.models.tenant import Tenant, TenantStatus
 from backend.services import auth_service, tenant_service
 
@@ -129,10 +131,13 @@ def _user_to_dict(t: Tenant) -> dict:
         "is_admin": bool(t.is_admin),
         "status": t.status.value if t.status else "PENDING",
         "business_type": t.business_type.value if t.business_type else None,
-        "timezone": t.timezone or "America/Chicago",
+        "timezone": t.timezone or DEFAULT_TIMEZONE,
         "plan": t.plan.value if t.plan else None,
         "vapi_configured": bool(t.vapi_api_key and t.vapi_assistant_id),
         "twilio_configured": bool(t.twilio_account_sid and t.twilio_auth_token),
+        # Feature flags — effective state (global AND per-tenant)
+        "vapi_enabled": settings.FEATURE_VAPI_ENABLED and (t.feature_vapi_enabled if t.feature_vapi_enabled is not None else True),
+        "twilio_enabled": settings.FEATURE_TWILIO_ENABLED and (t.feature_twilio_enabled if t.feature_twilio_enabled is not None else True),
     }
 
 

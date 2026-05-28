@@ -23,6 +23,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import settings
 from backend.database import async_session
+from backend.defaults import (
+    DEFAULT_AGENT_NAME,
+    DEFAULT_BUSINESS_HOURS,
+    DEFAULT_GREETING,
+    DEFAULT_TEST_PATIENT_NAME,
+    DEFAULT_TIMEZONE,
+)
 from backend.models.tenant import Tenant, TenantStatus
 
 logger = logging.getLogger(__name__)
@@ -128,6 +135,10 @@ class TenantContext:
     test_patient_name: str
     test_patient_names: list[str]
 
+    # Feature flags — effective state (global AND per-tenant)
+    feature_vapi_enabled: bool = True
+    feature_twilio_enabled: bool = True
+
     @property
     def tz_abbreviation(self) -> str:
         """Human-readable timezone abbreviation for SMS templates."""
@@ -149,10 +160,10 @@ def _tenant_to_context(t: Tenant) -> TenantContext:
         business_type=t.business_type.value if t.business_type else "custom",
         business_phone=t.business_phone or "",
         business_address=t.business_address or "",
-        timezone=t.timezone or "America/Chicago",
+        timezone=t.timezone or DEFAULT_TIMEZONE,
         demo_mode=t.demo_mode if t.demo_mode is not None else True,
-        agent_name=t.agent_name or "Sarah",
-        greeting_message=t.greeting_message or "Thank you for calling. How can I help you today?",
+        agent_name=t.agent_name or DEFAULT_AGENT_NAME,
+        greeting_message=t.greeting_message or DEFAULT_GREETING,
         system_prompt_override=t.system_prompt_override,
         voice_config=t.voice_config or {"provider": "11labs", "voiceId": "21m00Tcm4TlvDq8ikWAM"},
         # Option A: fall back to global .env credentials when tenant fields are empty.
@@ -181,8 +192,11 @@ def _tenant_to_context(t: Tenant) -> TenantContext:
         # Legacy fields (kept for backwards compat)
         test_caller_phone=t.test_caller_phone or "",
         test_caller_phones=t.test_caller_phones or [],
-        test_patient_name=t.test_patient_name or "Alex Johnson",
-        test_patient_names=t.test_patient_names or ["Alex Johnson"],
+        test_patient_name=t.test_patient_name or DEFAULT_TEST_PATIENT_NAME,
+        test_patient_names=t.test_patient_names or [DEFAULT_TEST_PATIENT_NAME],
+        # Feature flags — effective = global AND per-tenant
+        feature_vapi_enabled=settings.FEATURE_VAPI_ENABLED and (t.feature_vapi_enabled if t.feature_vapi_enabled is not None else True),
+        feature_twilio_enabled=settings.FEATURE_TWILIO_ENABLED and (t.feature_twilio_enabled if t.feature_twilio_enabled is not None else True),
     )
 
 
@@ -389,9 +403,10 @@ async def resolve_default_tenant() -> TenantContext | None:
         business_address="",
         timezone=settings.OFFICE_TIMEZONE,
         demo_mode=settings.DEMO_MODE,
-        agent_name="Alex",
-        greeting_message="Thank you for calling. How can I help you today?",
+        agent_name=DEFAULT_AGENT_NAME,
+        greeting_message=DEFAULT_GREETING,
         system_prompt_override=None,
+        voice_config={"provider": "11labs", "voiceId": "21m00Tcm4TlvDq8ikWAM"},
         vapi_api_key=settings.VAPI_API_KEY,
         vapi_assistant_id=settings.VAPI_ASSISTANT_ID,
         vapi_phone_number_id=settings.VAPI_PHONE_NUMBER_ID,
@@ -410,7 +425,7 @@ async def resolve_default_tenant() -> TenantContext | None:
             {"code": "emergency", "name": "Emergency / Urgent", "duration_minutes": 30, "max_concurrent": 1},
             {"code": "consultation", "name": "Consultation", "duration_minutes": 45, "max_concurrent": 1},
         ],
-        business_hours=None,
+        business_hours=DEFAULT_BUSINESS_HOURS,
         holidays=[],
         knowledge_base={},
         emergency_guidance="",
@@ -419,8 +434,10 @@ async def resolve_default_tenant() -> TenantContext | None:
         test_callers=[],
         test_caller_phone="",
         test_caller_phones=[],
-        test_patient_name="Alex Johnson",
-        test_patient_names=["Alex Johnson"],
+        test_patient_name=DEFAULT_TEST_PATIENT_NAME,
+        test_patient_names=[DEFAULT_TEST_PATIENT_NAME],
+        feature_vapi_enabled=settings.FEATURE_VAPI_ENABLED,
+        feature_twilio_enabled=settings.FEATURE_TWILIO_ENABLED,
     )
     _cache_set(cache_key, ctx)
     return ctx
@@ -440,15 +457,7 @@ def _generate_test_phone() -> str:
     return f"+1555{suffix}"
 
 
-_DEFAULT_BUSINESS_HOURS = {
-    "monday": {"open": "08:00", "close": "18:00"},
-    "tuesday": {"open": "08:00", "close": "18:00"},
-    "wednesday": {"open": "08:00", "close": "18:00"},
-    "thursday": {"open": "08:00", "close": "18:00"},
-    "friday": {"open": "08:00", "close": "18:00"},
-    "saturday": None,
-    "sunday": None,
-}
+_DEFAULT_BUSINESS_HOURS = DEFAULT_BUSINESS_HOURS
 
 
 def _slugify(name: str) -> str:
@@ -527,12 +536,12 @@ async def create_tenant(data: dict[str, Any]) -> Tenant:
             owner_email=data["owner_email"],
             owner_phone=data.get("owner_phone"),
             escalation_phone=data.get("escalation_phone"),
-            timezone=data.get("timezone", "America/Chicago"),
+            timezone=data.get("timezone", DEFAULT_TIMEZONE),
             plan=data.get("plan", "starter"),
             status=TenantStatus.PENDING,
             test_caller_phone=_generate_test_phone(),
-            test_patient_names=["Alex Johnson"],
-            test_patient_name="Alex Johnson",
+            test_patient_names=[DEFAULT_TEST_PATIENT_NAME],
+            test_patient_name=DEFAULT_TEST_PATIENT_NAME,
             business_hours=_DEFAULT_BUSINESS_HOURS,
         )
         session.add(tenant)
@@ -585,6 +594,7 @@ async def update_tenant(tenant_id: uuid.UUID, data: dict[str, Any]) -> Tenant | 
             "appointment_types", "business_hours", "holidays", "knowledge_base",
             "emergency_guidance", "demo_mode", "plan",
             "reminder_settings", "review_settings",
+            "feature_vapi_enabled", "feature_twilio_enabled",
         }
         # Normalize holidays — strip duplicates by date, drop blanks, sort ASC
         if "holidays" in data and isinstance(data["holidays"], list):
@@ -674,11 +684,11 @@ def upcoming_holidays(tenant_ctx: Any | None, limit: int = 8) -> list[dict[str, 
     holidays = getattr(tenant_ctx, "holidays", None) or []
     from datetime import datetime as _dt
     from zoneinfo import ZoneInfo as _ZI
-    tz_name = getattr(tenant_ctx, "timezone", None) or "America/Chicago"
+    tz_name = getattr(tenant_ctx, "timezone", None) or DEFAULT_TIMEZONE
     try:
         tz = _ZI(tz_name)
     except Exception:
-        tz = _ZI("America/Chicago")
+        tz = _ZI(DEFAULT_TIMEZONE)
     today_local = _dt.now(tz).date()
     upcoming: list[dict[str, str]] = []
     for h in holidays:

@@ -1,13 +1,19 @@
 """
 Calendar service — slot availability, booking, rescheduling, cancellation.
 
-Dual-mode routing (checked in priority order):
-  1. Google Calendar — if tenant has google_calendar_connected + refresh_token
-  2. Native scheduler — Postgres-backed, uses business_hours + appointment_types
-  3. Demo mode       — fake slots/bookings for testing (when demo_mode=True)
+Architecture: the Postgres-backed native scheduler is the **source of truth**
+for availability and bookings. Google Calendar is an optional sync layer —
+when connected, we create/update/delete calendar events as reminders for the
+patient and staff, but the DB always drives slot availability.
 
-This means tenants can go live with Google Calendar (free) or
-zero external dependencies (native scheduler only needs business hours).
+Routing (checked in priority order):
+  1. Native scheduler — Postgres-backed, uses business_hours + appointment_types
+  2. Demo mode        — fake slots/bookings for testing (when demo_mode=True)
+
+Google Calendar sync (fire-and-forget, best-effort):
+  - After booking  → create a GCal event as a reminder
+  - After reschedule → update the GCal event
+  - After cancel   → delete the GCal event
 
 Multi-tenant: every function accepts a TenantContext so it uses the correct
 credentials, timezone, and event type mappings for the calling tenant.
@@ -19,6 +25,7 @@ from datetime import datetime
 from typing import Any
 
 from backend.config import settings
+from backend.defaults import DEFAULT_APPOINTMENT_DURATION_MINUTES, DEFAULT_TIMEZONE
 from backend.services import native_scheduling
 from backend.services import google_calendar as gcal
 
@@ -72,7 +79,7 @@ def _resolve_appointment_config(
 
     Falls back to (60, 1) if no match or no tenant context.
     """
-    duration = 60
+    duration = DEFAULT_APPOINTMENT_DURATION_MINUTES
     max_conc = 1
     if not tenant_ctx or not tenant_ctx.appointment_types:
         return duration, max_conc
@@ -81,13 +88,13 @@ def _resolve_appointment_config(
     key = (appointment_type_key or "").lower().replace(" ", "_")
     for at in tenant_ctx.appointment_types:
         if at.get("code", "").lower() == key:
-            duration = at.get("duration_minutes", 60)
+            duration = at.get("duration_minutes", DEFAULT_APPOINTMENT_DURATION_MINUTES)
             max_conc = at.get("max_concurrent", 1)
             return duration, max_conc
 
     # No key match — fall back to the first configured type
     first = tenant_ctx.appointment_types[0]
-    duration = first.get("duration_minutes", 60)
+    duration = first.get("duration_minutes", DEFAULT_APPOINTMENT_DURATION_MINUTES)
     max_conc = first.get("max_concurrent", 1)
     return duration, max_conc
 
@@ -144,7 +151,7 @@ async def get_available_slots(
     """
     # ── Check slot cache first ─────────────────────────────────────────
     slug = tenant_ctx.slug if tenant_ctx else "default"
-    tz = tenant_ctx.timezone if tenant_ctx else settings.OFFICE_TIMEZONE
+    tz = tenant_ctx.timezone if tenant_ctx else DEFAULT_TIMEZONE
     cache_key = _slot_cache_key(date_from, date_to, slug, appointment_type_key, provider_id)
     cached = _slot_cache.get(cache_key)
     if cached:
@@ -164,24 +171,7 @@ async def get_available_slots(
         _slot_cache[cache_key] = (time.time(), result)
         return result
 
-    # ── Priority 1: Google Calendar (if connected) ──────────────────────
-    if tenant_ctx and tenant_ctx.google_calendar_connected and tenant_ctx.google_calendar_refresh_token:
-        duration, max_conc = _resolve_appointment_config(appointment_type_key, tenant_ctx)
-        cal_id = prov_calendar_id or "primary"
-        logger.info("[Calendar][%s] Using Google Calendar for availability (type=%s, duration=%d, max_concurrent=%d, calendar=%s)",
-                    tenant_ctx.slug, appointment_type_key, duration, max_conc, cal_id)
-        return _cache_and_return(await gcal.get_available_slots(
-            refresh_token=tenant_ctx.google_calendar_refresh_token,
-            date_from=date_from,
-            date_to=date_to,
-            timezone=tz,
-            duration_minutes=duration,
-            business_hours=effective_hours,
-            max_concurrent=max_conc,
-            calendar_id=cal_id,
-        ))
-
-    # ── Priority 2: Native scheduling (uses business_hours + Postgres) ──
+    # ── Priority 1: Native scheduling (DB is source of truth) ───────────
     if tenant_ctx:
         duration, max_conc = _resolve_appointment_config(appointment_type_key, tenant_ctx)
         logger.info("[Calendar][%s] Using native scheduler (type=%s, duration=%d, max_concurrent=%d)",
@@ -253,7 +243,7 @@ async def book_appointment(
         unique-index race (slot was just taken by someone else).
     """
     slug = tenant_ctx.slug if tenant_ctx else "default"
-    tz = tenant_ctx.timezone if tenant_ctx else settings.OFFICE_TIMEZONE
+    tz = tenant_ctx.timezone if tenant_ctx else DEFAULT_TIMEZONE
 
     # Invalidate slot cache — the booking changes availability
     invalidate_slot_cache(slug)
@@ -270,35 +260,7 @@ async def book_appointment(
             logger.warning("[Calendar][%s] Ignoring invalid provider_id: %r", slug, provider_id)
             provider_uuid = None
 
-    # ── Priority 1: Google Calendar (if connected) ──────────────────────
-    if tenant_ctx and tenant_ctx.google_calendar_connected and tenant_ctx.google_calendar_refresh_token:
-        duration, _ = _resolve_appointment_config(appointment_type_key, tenant_ctx)
-
-        # Resolve provider name for the event title/description
-        provider_name: str | None = None
-        if provider_uuid:
-            try:
-                from backend.services import provider_service
-                prov = await provider_service.get_provider(provider_uuid)
-                if prov:
-                    provider_name = prov.get("name")
-            except Exception as prov_exc:
-                logger.warning("[Calendar][%s] Provider lookup failed: %s", slug, prov_exc)
-
-        logger.info(
-            "[Calendar][%s] Using Google Calendar for booking (type=%s, duration=%d, provider=%s)",
-            slug, appointment_type_key, duration, provider_name or provider_uuid,
-        )
-        return await gcal.book_appointment(
-            refresh_token=tenant_ctx.google_calendar_refresh_token,
-            patient_info=patient_info,
-            start_time=start_time,
-            duration_minutes=duration,
-            timezone=tz,
-            provider_name=provider_name,
-        )
-
-    # ── Priority 2: Native scheduling (uses business_hours + Postgres) ──
+    # ── Priority 1: Native scheduling (DB is source of truth) ───────────
     if tenant_ctx:
         duration, _ = _resolve_appointment_config(appointment_type_key, tenant_ctx)
         appt_type_key = appointment_type_key or "consultation"
@@ -307,7 +269,7 @@ async def book_appointment(
             slug, appt_type_key, duration, provider_uuid,
         )
 
-        return await native_scheduling.create_native_booking(
+        result = await native_scheduling.create_native_booking(
             tenant_id=tenant_ctx.tenant_id,
             patient_info=patient_info,
             appointment_type=appt_type_key,
@@ -315,6 +277,35 @@ async def book_appointment(
             duration_minutes=duration,
             provider_id=provider_uuid,
         )
+
+        # ── Google Calendar sync (best-effort reminder) ───────────────
+        if result and tenant_ctx.google_calendar_connected and tenant_ctx.google_calendar_refresh_token:
+            try:
+                provider_name: str | None = None
+                if provider_uuid:
+                    try:
+                        from backend.services import provider_service
+                        prov = await provider_service.get_provider(provider_uuid)
+                        if prov:
+                            provider_name = prov.get("name")
+                    except Exception:
+                        pass
+                gcal_event = await gcal.book_appointment(
+                    refresh_token=tenant_ctx.google_calendar_refresh_token,
+                    patient_info=patient_info,
+                    start_time=start_time,
+                    duration_minutes=duration,
+                    timezone=tz,
+                    provider_name=provider_name,
+                )
+                if gcal_event:
+                    gcal_id = gcal_event.get("id", "")
+                    result["gcal_event_id"] = gcal_id
+                    logger.info("[Calendar][%s] ✓ Google Calendar reminder created (event=%s)", slug, gcal_id)
+            except Exception as gcal_exc:
+                logger.warning("[Calendar][%s] Google Calendar sync failed (booking still saved): %s", slug, gcal_exc)
+
+        return result
 
     # ── Priority 3: Demo mode fallback (no real calendar configured) ────
     if _is_demo(tenant_ctx):
@@ -337,28 +328,34 @@ async def reschedule_appointment(
 ) -> dict[str, Any] | None:
     """Reschedule an existing booking."""
     slug = tenant_ctx.slug if tenant_ctx else "default"
-    tz = tenant_ctx.timezone if tenant_ctx else settings.OFFICE_TIMEZONE
+    tz = tenant_ctx.timezone if tenant_ctx else DEFAULT_TIMEZONE
 
     # Invalidate slot cache — reschedule changes availability
     invalidate_slot_cache(slug)
 
-    # ── Priority 1: Google Calendar (if the booking is a gcal event) ────
-    if tenant_ctx and tenant_ctx.google_calendar_connected and tenant_ctx.google_calendar_refresh_token:
-        if booking_uid.startswith("gcal-"):
-            duration, _ = _resolve_appointment_config("", tenant_ctx)
-            logger.info("[Calendar][%s] Using Google Calendar for reschedule (duration=%d)", slug, duration)
-            return await gcal.reschedule_appointment(
-                refresh_token=tenant_ctx.google_calendar_refresh_token,
-                event_id=booking_uid,
-                new_start_time=new_start_time,
-                duration_minutes=duration,
-                timezone=tz,
-            )
-
-    # ── Native scheduling fallback ───────────────────────────────────────
+    # ── Priority 1: Native scheduling (DB is source of truth) ───────────
     if tenant_ctx:
         logger.info("[Calendar][%s] Using native reschedule", slug)
-        return await native_scheduling.reschedule_native_booking(booking_uid, new_start_time)
+        result = await native_scheduling.reschedule_native_booking(booking_uid, new_start_time)
+
+        # ── Google Calendar sync (best-effort) ────────────────────────
+        if result and tenant_ctx.google_calendar_connected and tenant_ctx.google_calendar_refresh_token:
+            gcal_event_id = booking_uid if booking_uid.startswith("gcal-") else None
+            if gcal_event_id:
+                try:
+                    duration, _ = _resolve_appointment_config("", tenant_ctx)
+                    await gcal.reschedule_appointment(
+                        refresh_token=tenant_ctx.google_calendar_refresh_token,
+                        event_id=gcal_event_id,
+                        new_start_time=new_start_time,
+                        duration_minutes=duration,
+                        timezone=tz,
+                    )
+                    logger.info("[Calendar][%s] ✓ Google Calendar event rescheduled", slug)
+                except Exception as gcal_exc:
+                    logger.warning("[Calendar][%s] Google Calendar reschedule sync failed: %s", slug, gcal_exc)
+
+        return result
 
     # ── Demo mode fallback ──────────────────────────────────────────────
     if _is_demo(tenant_ctx):
@@ -384,19 +381,25 @@ async def cancel_appointment(
     # Invalidate slot cache — cancellation frees up availability
     invalidate_slot_cache(slug)
 
-    # ── Priority 1: Google Calendar (if the booking is a gcal event) ────
-    if tenant_ctx and tenant_ctx.google_calendar_connected and tenant_ctx.google_calendar_refresh_token:
-        if booking_uid.startswith("gcal-"):
-            logger.info("[Calendar][%s] Using Google Calendar for cancel", slug)
-            return await gcal.cancel_appointment(
-                refresh_token=tenant_ctx.google_calendar_refresh_token,
-                event_id=booking_uid,
-            )
-
-    # ── Native scheduling fallback ───────────────────────────────────────
+    # ── Priority 1: Native scheduling (DB is source of truth) ───────────
     if tenant_ctx:
         logger.info("[Calendar][%s] Using native cancel", slug)
-        return await native_scheduling.cancel_native_booking(booking_uid, reason)
+        success = await native_scheduling.cancel_native_booking(booking_uid, reason)
+
+        # ── Google Calendar sync (best-effort) ────────────────────────
+        if success and tenant_ctx.google_calendar_connected and tenant_ctx.google_calendar_refresh_token:
+            gcal_event_id = booking_uid if booking_uid.startswith("gcal-") else None
+            if gcal_event_id:
+                try:
+                    await gcal.cancel_appointment(
+                        refresh_token=tenant_ctx.google_calendar_refresh_token,
+                        event_id=gcal_event_id,
+                    )
+                    logger.info("[Calendar][%s] ✓ Google Calendar event cancelled", slug)
+                except Exception as gcal_exc:
+                    logger.warning("[Calendar][%s] Google Calendar cancel sync failed: %s", slug, gcal_exc)
+
+        return success
 
     # ── Demo mode fallback ──────────────────────────────────────────────
     if _is_demo(tenant_ctx):

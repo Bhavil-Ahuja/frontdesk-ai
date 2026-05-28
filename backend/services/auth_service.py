@@ -26,6 +26,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 
 from backend.database import async_session
+from backend.defaults import DEFAULT_TIMEZONE
 from backend.models.tenant import Tenant, TenantStatus
 
 logger = logging.getLogger(__name__)
@@ -214,7 +215,7 @@ async def ensure_admin_exists() -> None:
             password_hash=hash_password(admin_password),
             is_admin=True,
             status=TenantStatus.ACTIVE,
-            timezone="America/Chicago",
+            timezone=DEFAULT_TIMEZONE,
         )
         session.add(admin)
         await session.commit()

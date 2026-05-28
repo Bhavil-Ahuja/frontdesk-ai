@@ -6,6 +6,10 @@ from backend.models.provider import Provider
 from backend.models.waitlist import WaitlistEntry, WaitlistStatus
 from backend.models.sms_message import SMSMessage, SMSDirection
 from backend.models.profile_change_log import ProfileChangeLog
+from backend.models.support_ticket import (
+    SupportTicket, SupportTicketMessage,
+    TicketCategory, TicketStatus, TicketPriority, MessageSender,
+)
 
 __all__ = [
     "Tenant",
@@ -24,4 +28,10 @@ __all__ = [
     "SMSMessage",
     "SMSDirection",
     "ProfileChangeLog",
+    "SupportTicket",
+    "SupportTicketMessage",
+    "TicketCategory",
+    "TicketStatus",
+    "TicketPriority",
+    "MessageSender",
 ]

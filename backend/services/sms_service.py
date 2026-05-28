@@ -20,6 +20,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from backend.config import settings
+from backend.defaults import DEFAULT_TIMEZONE
 
 logger = logging.getLogger(__name__)
 
@@ -62,10 +63,16 @@ def _business_name(tenant_ctx: Any | None) -> str:
 
 
 def _business_phone_display(tenant_ctx: Any | None) -> str:
-    """Human-readable phone for templates. Prefer tenant's business_phone, else from-number."""
+    """Human-readable phone for patient-facing templates.
+
+    Returns the clinic's real phone number — never the Twilio provisioned
+    number (which is an internal routing number patients shouldn't see).
+
+    Fallback chain: business_phone → escalation_phone → "" (omit).
+    """
     if tenant_ctx:
-        return tenant_ctx.business_phone or tenant_ctx.twilio_phone_number or ""
-    return settings.TWILIO_PHONE_NUMBER
+        return tenant_ctx.business_phone or tenant_ctx.escalation_phone or ""
+    return ""
 
 
 def _tz_abbrev(tenant_ctx: Any | None) -> str:
@@ -83,11 +90,11 @@ def _to_local_time(dt: datetime, tenant_ctx: Any | None) -> datetime:
     convert to the tenant's timezone so patients see the correct local
     time — e.g. "9:00 AM CST" not "3:00 PM UTC".
     """
-    tz_name = tenant_ctx.timezone if tenant_ctx else "America/Chicago"
+    tz_name = tenant_ctx.timezone if tenant_ctx else DEFAULT_TIMEZONE
     try:
         local_tz = ZoneInfo(tz_name)
     except Exception:
-        local_tz = ZoneInfo("America/Chicago")
+        local_tz = ZoneInfo(DEFAULT_TIMEZONE)
     # Ensure the datetime is tz-aware (DB values should be, but guard)
     if dt.tzinfo is None:
         from datetime import timezone as _tz
@@ -111,7 +118,16 @@ def _send_sms(to: str, body: str, tenant_ctx: Any | None = None) -> bool:
     """
     Send an SMS via Twilio REST API. Returns True on success.
     In LOCAL_CHAT_MODE or demo mode, messages are logged but not actually sent.
+    When Twilio is disabled (feature flag), messages are silently skipped.
     """
+    # Feature flag: skip when Twilio is globally or per-tenant disabled
+    if not settings.FEATURE_TWILIO_ENABLED:
+        logger.info("[SMS DISABLED — global flag] Skipping SMS to %s", to)
+        return False
+    if tenant_ctx and hasattr(tenant_ctx, "feature_twilio_enabled") and not tenant_ctx.feature_twilio_enabled:
+        logger.info("[SMS DISABLED — tenant flag] Skipping SMS to %s", to)
+        return False
+
     if settings.LOCAL_CHAT_MODE:
         logger.info("[LOCAL_CHAT SMS — skipped → %s] %s", to, body)
         return True
@@ -289,10 +305,10 @@ def send_confirmation(
     local_dt = _to_local_time(scheduled_at, tenant_ctx)
     date_str = local_dt.strftime("%A, %B %d, %Y")
     time_str = local_dt.strftime("%I:%M %p").lstrip("0")
+    contact = f" Questions? Call {biz_phone}." if biz_phone else ""
     body = (
         f"Hi {patient_name}! Your {appointment_type} at {biz} is confirmed "
-        f"for {date_str} at {time_str} {tz}. "
-        f"Questions? Call {biz_phone}. See you soon!"
+        f"for {date_str} at {time_str} {tz}.{contact} See you soon!"
     )
     ok = _send_sms(phone, body, tenant_ctx)
     if ok:
@@ -311,9 +327,10 @@ def send_cancellation(
     biz_phone = _business_phone_display(tenant_ctx)
     local_dt = _to_local_time(scheduled_at, tenant_ctx)
     date_str = local_dt.strftime("%A, %B %d, %Y")
+    contact = f" Call us anytime to reschedule: {biz_phone}" if biz_phone else " Reply to this message to reschedule."
     body = (
         f"Hi {patient_name}, your {biz} appointment on {date_str} "
-        f"has been cancelled. Call us anytime to reschedule: {biz_phone}"
+        f"has been cancelled.{contact}"
     )
     ok = _send_sms(phone, body, tenant_ctx)
     if ok:
@@ -335,10 +352,10 @@ def send_reschedule(
     local_dt = _to_local_time(new_scheduled_at, tenant_ctx)
     date_str = local_dt.strftime("%A, %B %d, %Y")
     time_str = local_dt.strftime("%I:%M %p").lstrip("0")
+    contact = f" Questions? Call {biz_phone}." if biz_phone else ""
     body = (
         f"Hi {patient_name}! Your {appointment_type} at {biz} has been "
-        f"rescheduled to {date_str} at {time_str} {tz}. "
-        f"Questions? Call {biz_phone}."
+        f"rescheduled to {date_str} at {time_str} {tz}.{contact}"
     )
     ok = _send_sms(phone, body, tenant_ctx)
     if ok:
@@ -373,10 +390,11 @@ def send_waitlist_added(
     elif preferred_time_end:
         window = f" before {preferred_time_end}"
 
+    contact = f" Questions? Call {biz_phone}." if biz_phone else ""
     body = (
         f"Hi {patient_name}! You're on the {biz} waitlist for a "
         f"{appointment_type} on {date_str}{window}. We'll text you the moment "
-        f"a matching slot opens up. Questions? Call {biz_phone}."
+        f"a matching slot opens up.{contact}"
     )
     ok = _send_sms(phone, body, tenant_ctx)
     if ok:
@@ -398,10 +416,11 @@ def send_waitlist_promoted(
     local_dt = _to_local_time(scheduled_at, tenant_ctx)
     date_str = local_dt.strftime("%A, %B %d, %Y")
     time_str = local_dt.strftime("%I:%M %p").lstrip("0")
+    contact = f" Need to change it? Call {biz_phone}." if biz_phone else ""
     body = (
         f"Hi {patient_name}! Great news — a {appointment_type} slot opened at "
-        f"{biz} and we've booked it for you on {date_str} at {time_str} {tz}. "
-        f"Need to change it? Call {biz_phone}. See you then!"
+        f"{biz} and we've booked it for you on {date_str} at {time_str} {tz}.{contact} "
+        f"See you then!"
     )
     ok = _send_sms(phone, body, tenant_ctx)
     if ok:
@@ -425,10 +444,10 @@ def send_waitlist_cancelled(
     except (ValueError, TypeError):
         date_str = preferred_date
 
+    contact = f" Want back on the list? Call {biz_phone}." if biz_phone else ""
     body = (
         f"Hi {patient_name}, your {biz} waitlist request for a "
-        f"{appointment_type} on {date_str} has been cancelled. "
-        f"Want back on the list? Call {biz_phone}."
+        f"{appointment_type} on {date_str} has been cancelled.{contact}"
     )
     ok = _send_sms(phone, body, tenant_ctx)
     if ok:
@@ -491,10 +510,10 @@ def send_reminder(
     tz = _tz_abbrev(tenant_ctx)
     local_dt = _to_local_time(scheduled_at, tenant_ctx)
     time_str = local_dt.strftime("%I:%M %p").lstrip("0")
+    contact = f" Need to reschedule? Call {biz_phone}." if biz_phone else ""
     body = (
         f"Hi {patient_name}! Friendly reminder: your {appointment_type} at "
-        f"{biz} is coming up today at {time_str} {tz}. "
-        f"Need to reschedule? Call {biz_phone}. See you soon!"
+        f"{biz} is coming up today at {time_str} {tz}.{contact} See you soon!"
     )
     ok = _send_sms(phone, body, tenant_ctx)
     if ok:
@@ -515,10 +534,10 @@ def send_no_show(
     local_dt = _to_local_time(scheduled_at, tenant_ctx)
     date_str = local_dt.strftime("%A, %B %d")
     time_str = local_dt.strftime("%I:%M %p").lstrip("0")
+    contact = f" Call {biz} at {biz_phone} to reschedule whenever you're ready." if biz_phone else f" Reply to this message to reschedule with {biz}."
     body = (
         f"Hi {patient_name}, we missed you at your {appointment_type} on "
-        f"{date_str} at {time_str}. We hope everything is okay. "
-        f"Call {biz} at {biz_phone} to reschedule whenever you're ready."
+        f"{date_str} at {time_str}. We hope everything is okay.{contact}"
     )
     ok = _send_sms(phone, body, tenant_ctx)
     if ok:
@@ -534,10 +553,10 @@ def send_followup(
     """Send a post-visit satisfaction follow-up SMS."""
     biz = _business_name(tenant_ctx)
     biz_phone = _business_phone_display(tenant_ctx)
+    contact = f" If you have any questions or concerns, please call us at {biz_phone}." if biz_phone else ""
     body = (
         f"Hi {patient_name}! Thank you for visiting {biz}. "
-        f"We hope everything went well! If you have any questions or concerns, "
-        f"please call us at {biz_phone}. Have a great day!"
+        f"We hope everything went well!{contact} Have a great day!"
     )
     ok = _send_sms(phone, body, tenant_ctx)
     if ok:

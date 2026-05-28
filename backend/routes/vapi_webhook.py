@@ -21,6 +21,7 @@ from backend.models.call import Call, CallOutcome
 from backend.models.appointment import Appointment, AppointmentStatus, BookedVia
 from backend.models.patient import Patient
 from backend.services import vapi_service, llm_service
+from backend.config import settings
 from backend.services.tenant_service import resolve_by_assistant_id, resolve_by_phone_number_id
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,10 @@ async def vapi_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     Main Vapi webhook endpoint. Handles all event types.
     Resolves tenant from call.assistantId for scoped DB writes.
     """
+    # Feature flag: when Vapi is globally disabled, return 200 no-op
+    if not settings.FEATURE_VAPI_ENABLED:
+        return Response(status_code=200, content="Vapi disabled")
+
     try:
         payload = await request.json()
     except Exception:

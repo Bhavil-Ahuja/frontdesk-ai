@@ -21,7 +21,9 @@ from backend.models.patient import Patient
 from backend.models.appointment import Appointment, AppointmentStatus
 from backend.models.call import Call
 from backend.models.sms_message import SMSMessage, SMSDirection
+from backend.models.provider import Provider
 from backend.services import auth_service
+from backend.services.patient_service import _phone_digits_tail, _phone_col_clean
 
 logger = logging.getLogger(__name__)
 
@@ -82,11 +84,13 @@ async def list_patients(
         # For each patient, count upcoming appointments
         patient_list = []
         for p in patients:
-            # Count upcoming confirmed appointments
+            # Count upcoming confirmed appointments (suffix match handles
+            # phone format differences like +6352418405 vs +16352418405)
+            phone_tail = _phone_digits_tail(p.phone)
             upcoming_count_stmt = select(func.count()).where(
                 and_(
                     Appointment.tenant_id == current_user.id,
-                    Appointment.patient_phone == p.phone,
+                    _phone_col_clean(Appointment.patient_phone).endswith(phone_tail),
                     Appointment.status == AppointmentStatus.CONFIRMED,
                     Appointment.scheduled_at > func.now(),
                 )
@@ -134,18 +138,30 @@ async def get_patient_profile(
             raise HTTPException(status_code=404, detail="Patient not found.")
 
         # ── Appointments (all, most recent first) ────────────────────────
+        # Use suffix matching to handle phone format differences
+        phone_tail = _phone_digits_tail(patient.phone)
         appts_result = await session.execute(
             select(Appointment)
             .where(
                 and_(
                     Appointment.tenant_id == current_user.id,
-                    Appointment.patient_phone == patient.phone,
+                    _phone_col_clean(Appointment.patient_phone).endswith(phone_tail),
                 )
             )
             .order_by(desc(Appointment.scheduled_at))
             .limit(50)
         )
         appointments = appts_result.scalars().all()
+
+        # ── Provider name map ───────────────────────────────────────────
+        provider_ids = {a.provider_id for a in appointments if a.provider_id}
+        provider_map: dict = {}
+        if provider_ids:
+            prov_result = await session.execute(
+                select(Provider).where(Provider.id.in_(provider_ids))
+            )
+            for prov in prov_result.scalars().all():
+                provider_map[prov.id] = prov.name
 
         # ── Call logs (matched by caller_number) ─────────────────────────
         # Match on last 10 digits to handle +1 prefix differences
@@ -205,6 +221,7 @@ async def get_patient_profile(
                 "status": a.status.value if a.status else None,
                 "booked_via": a.booked_via.value if a.booked_via else None,
                 "provider_id": str(a.provider_id) if a.provider_id else None,
+                "provider_name": provider_map.get(a.provider_id) if a.provider_id else None,
                 "confirmed_by_patient": a.confirmed_by_patient,
                 "reminder_sent_at": a.reminder_sent_at.isoformat() if a.reminder_sent_at else None,
                 "notes": a.notes,

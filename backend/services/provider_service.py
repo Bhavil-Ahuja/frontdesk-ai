@@ -17,11 +17,13 @@ right practitioner based on type, availability, and calendar.
 
 import logging
 import uuid
+from datetime import datetime, timedelta
 
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, func
 
 from backend.database import async_session
 from backend.models.provider import Provider
+from backend.models.appointment import Appointment, AppointmentStatus
 
 logger = logging.getLogger(__name__)
 
@@ -321,3 +323,118 @@ async def get_providers_for_appointment_type(
         tenant_id,
     )
     return matched
+
+
+# ── Auto-assign (load-balanced provider selection) ───────────────────────────
+
+async def auto_assign_provider(
+    tenant_id: uuid.UUID,
+    appointment_type: str,
+    requested_datetime: datetime,
+    duration_minutes: int = 30,
+) -> dict | None:
+    """
+    Find the best available provider for the given slot.
+
+    Strategy:
+      1. Get all active providers matching the appointment_type.
+      2. For each provider, check if they have capacity at the requested time
+         (respect max_concurrent and existing bookings).
+      3. Pick the provider with the fewest bookings that day (load balancing).
+
+    Returns:
+        Provider dict {id, name, title} of the selected provider, or None if
+        nobody is available.
+    """
+    async with async_session() as session:
+        # Get all active providers for this tenant
+        result = await session.execute(
+            select(Provider).where(
+                and_(
+                    Provider.tenant_id == tenant_id,
+                    Provider.is_active == True,  # noqa: E712
+                )
+            )
+        )
+        all_active = result.scalars().all()
+
+    # Filter to those matching the appointment type
+    candidates = []
+    for p in all_active:
+        types_list = p.appointment_types or []
+        if not types_list or appointment_type in types_list:
+            candidates.append(p)
+
+    if not candidates:
+        logger.info("[Provider] No active providers for type=%r in tenant=%s", appointment_type, tenant_id)
+        return None
+
+    # Check existing bookings at the requested time for each candidate
+    slot_start = requested_datetime
+    slot_end = requested_datetime + timedelta(minutes=duration_minutes)
+    day_start = requested_datetime.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_end = day_start + timedelta(days=1)
+
+    async with async_session() as session:
+        # Get all active bookings for these providers on the requested day
+        provider_ids = [p.id for p in candidates]
+        result = await session.execute(
+            select(Appointment).where(
+                and_(
+                    Appointment.tenant_id == tenant_id,
+                    Appointment.provider_id.in_(provider_ids),
+                    Appointment.scheduled_at >= day_start,
+                    Appointment.scheduled_at < day_end,
+                    Appointment.status.in_([
+                        AppointmentStatus.CONFIRMED.value,
+                        AppointmentStatus.RESCHEDULED.value,
+                    ]),
+                )
+            )
+        )
+        day_bookings = result.scalars().all()
+
+    # Build per-provider booking counts and concurrent check
+    provider_day_counts: dict[uuid.UUID, int] = {p.id: 0 for p in candidates}
+    provider_concurrent: dict[uuid.UUID, int] = {p.id: 0 for p in candidates}
+
+    for appt in day_bookings:
+        if appt.provider_id in provider_day_counts:
+            provider_day_counts[appt.provider_id] += 1
+            # Check if this booking overlaps with the requested slot
+            appt_start = appt.scheduled_at
+            appt_end = appt_start + timedelta(minutes=appt.duration_minutes or 30)
+            if appt_start < slot_end and appt_end > slot_start:
+                provider_concurrent[appt.provider_id] += 1
+
+    # Filter to providers with available capacity at the requested time
+    available = []
+    for p in candidates:
+        max_conc = p.max_concurrent or 1
+        if provider_concurrent[p.id] < max_conc:
+            available.append(p)
+
+    if not available:
+        logger.info(
+            "[Provider] No available providers at %s for type=%r (all %d at capacity)",
+            requested_datetime.isoformat(), appointment_type, len(candidates),
+        )
+        return None
+
+    # Load balance: pick the provider with the fewest bookings that day
+    available.sort(key=lambda p: provider_day_counts[p.id])
+    selected = available[0]
+
+    logger.info(
+        "[Provider] Auto-assigned %s (%s) for %s at %s (day_bookings=%d, concurrent=%d/%d)",
+        selected.name, selected.id, appointment_type,
+        requested_datetime.isoformat(),
+        provider_day_counts[selected.id],
+        provider_concurrent[selected.id],
+        selected.max_concurrent or 1,
+    )
+    return {
+        "id": str(selected.id),
+        "name": selected.name,
+        "title": selected.title,
+    }

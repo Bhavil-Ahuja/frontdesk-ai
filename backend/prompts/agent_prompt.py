@@ -9,15 +9,23 @@ backwards compatibility.
 
 from typing import Any
 
+from backend.defaults import (
+    DEFAULT_AGENT_NAME,
+    DEFAULT_APPOINTMENT_DURATION_MINUTES,
+    DEFAULT_BUSINESS_NAME,
+    DEFAULT_GREETING,
+    DEFAULT_TIMEZONE,
+)
+
 # KB content is now served via get_office_info tool — not injected into prompt
 
 
-# ── Fallback defaults (legacy single-tenant mode) ───────────────────────────
+# ── Fallback defaults (from centralized defaults module) ───────────────────
 
-_DEFAULT_AGENT_NAME = "Alex"
-_DEFAULT_BUSINESS_NAME = "Our Office"
+_DEFAULT_AGENT_NAME = DEFAULT_AGENT_NAME
+_DEFAULT_BUSINESS_NAME = DEFAULT_BUSINESS_NAME
 _DEFAULT_BUSINESS_TYPE = "general"
-_DEFAULT_GREETING = "Thank you for calling. How can I help you today?"
+_DEFAULT_GREETING = DEFAULT_GREETING
 
 
 # ── Static prompt template (parameterised with tenant config) ────────────────
@@ -43,7 +51,7 @@ def _build_static_prompt(
     appt_lines = []
     for at in appointment_types:
         label = at.get("name", at.get("code", "Appointment"))
-        duration = at.get("duration_minutes", 60)
+        duration = at.get("duration_minutes", DEFAULT_APPOINTMENT_DURATION_MINUTES)
         appt_lines.append(f"- {label}: {duration} minutes")
     appt_text = "\n".join(appt_lines) if appt_lines else "- Consultation: 45 minutes"
 
@@ -120,6 +128,14 @@ PERSONALITY:
 - Show genuine empathy for patient anxiety — it is very common
 - Never rush the patient. Let them finish speaking.
 - Keep responses concise for voice — no long paragraphs
+
+ENDING THE CALL:
+- When the patient says they're done ("that's all", "nothing else", "I'm good", "thank you bye", "no that's it"), wrap up warmly:
+  "Great! Is there anything else I can help you with?"
+- If they confirm they're done, end with a warm goodbye:
+  "Wonderful! Thank you for calling {business_name}. Have a great day!"
+- Do NOT keep asking questions or offering services after the patient has clearly indicated they're finished.
+- After your goodbye, the call will end automatically — you do not need to do anything special.
 
 WHAT YOU CAN DO:
 1. Answer questions about the office — ALWAYS call get_office_info for hours, location, services, or pricing. NEVER answer these from memory.
@@ -289,13 +305,13 @@ def build_system_prompt(
     appt_keys = [at.get("code", "consultation") for at in appointment_types]
 
     # ── Resolve tenant timezone ──────────────────────────────────────────
-    tz_name = "America/Chicago"  # default
+    tz_name = DEFAULT_TIMEZONE
     if tenant_ctx and getattr(tenant_ctx, "timezone", None):
         tz_name = tenant_ctx.timezone
     try:
         tz = ZoneInfo(tz_name)
     except Exception:
-        tz = ZoneInfo("America/Chicago")
+        tz = ZoneInfo(DEFAULT_TIMEZONE)
 
     # ── Twilio availability (for conditional SMS promise) ────────────────
     has_twilio = bool(
@@ -391,11 +407,11 @@ def build_system_prompt(
         f"1. NEVER call any tool on greetings ('Hi', 'Hello'), generic small talk ('How are you?'), or expressions of confusion. Answer those conversationally.\n"
         f"2. When the patient asks about hours, location, phone number, services, or pricing → ALWAYS call get_office_info. NEVER answer these from memory or guess.\n"
         f"3. ONLY call get_available_slots when the patient EXPLICITLY asks 'Do you have slots on <day>?', 'Can I book on <date>?', or 'What times are available?' — and the patient has actually mentioned a day or time.\n"
-        f"4. ONLY call book_appointment after the patient has chosen a specific time AND given you their name, DOB, phone, and reason for visit.\n"
+        f"4. ONLY call book_appointment after the patient has chosen a specific time AND given you their name, DOB, phone, and reason for visit. Even if you have their phone from caller-ID, you MUST confirm it with the patient before booking or looking up appointments.\n"
         f"5. ONLY call escalate_to_human for the explicit escalation triggers in your prompt. For non-emergency escalations, you MUST first ask 'Would you like me to connect you with a team member?' and only escalate if the patient confirms. NEVER escalate on a greeting or a general knowledge question.\n"
         f"6. NEVER guess or make up ANY data — times, providers, services, prices, procedures. Only use what tools return.\n"
         f"7. Use ONLY dates from the year {today.strftime('%Y')}. NEVER use past years.\n"
-        f"8. When calling book_appointment, use the EXACT exact_slot_time string from the get_available_slots result. Do NOT modify timezone or format.\n"
+        f"8. ALL TIMES ARE IN THE OFFICE TIMEZONE ({tz_name}). When the patient says a time (e.g. '4 PM'), that means 4 PM in {tz_name} — the office's timezone. When calling book_appointment or reschedule_appointment, you MUST use the EXACT exact_slot_time string from get_available_slots. Do NOT construct, modify, or convert times yourself. ALWAYS call get_available_slots first to get valid slots.\n"
         f"9. Email is handled automatically by the system — do NOT ask the patient for email. Just collect: name, DOB, phone, appointment type.\n"
         f"10. Keep responses SHORT (1-2 sentences max). This is a phone call — do not list more than 3 slot options.\n"
         f"11. NEVER read JSON, raw data, field names, or technical content to the patient. Always speak in natural conversational sentences.\n"
@@ -439,15 +455,25 @@ def build_system_prompt(
         patient_section = _build_patient_section(patient_context, business_name)
     elif caller_phone:
         # We have caller-ID but no patient record yet (first-time caller).
-        # Tell the agent the phone number so it doesn't ask for it again.
+        # Show the detected number but instruct the agent to CONFIRM it.
         patient_section = (
             f"\n=== CALLER INFORMATION ===\n"
             f"The caller is calling from phone number: {caller_phone}\n"
             f"This is a NEW caller — no previous patient record found.\n"
-            f"You already have their phone number from caller-ID. "
-            f"Do NOT ask for their phone number — you already have it.\n"
-            f"When booking, use {caller_phone} as the patient phone.\n"
+            f"You have their phone number from caller-ID, but you MUST confirm it before "
+            f"using it for any booking or lookup. Ask: 'I have your number as "
+            f"{caller_phone} — is that the best number to reach you?'\n"
+            f"Only use the number they confirm. If they give a different one, use that instead.\n"
             f"You still need to collect: full name, date of birth, and reason for visit.\n"
+        )
+    else:
+        # No caller-ID at all (Vapi dashboard, web widget, etc.)
+        patient_section = (
+            f"\n=== CALLER INFORMATION ===\n"
+            f"No caller-ID available for this call.\n"
+            f"You MUST ask the caller for their phone number before any booking, "
+            f"appointment lookup, or patient search. This is required.\n"
+            f"You also need to collect: full name, date of birth, and reason for visit.\n"
         )
 
     parts = [static_prompt, date_context]
@@ -486,13 +512,14 @@ def _build_patient_section(ctx: dict, business_name: str = "") -> str:
         lines = [
             f"\n=== CALLER INFORMATION — NEW PATIENT ===",
             f"Name: {p.get('name', 'Unknown')}",
-            f"Phone: {p.get('phone', '')}",
+            f"Phone (from caller-ID): {p.get('phone', '')}",
             f"\nBEHAVIOUR FOR THIS CALLER:",
             f"- Greet them warmly: 'Hi {first_name}! Welcome to {biz}.'",
-            f"- You already have their name and phone from caller-ID. Do NOT ask for these.",
+            f"- You have their name and phone from caller-ID, but BEFORE any booking or lookup,",
+            f"  confirm the phone number: 'I have your number as {p.get('phone', '')} — is that correct?'",
+            f"- Only use the number they confirm. If they provide a different one, use that instead.",
             f"- You still MUST collect: date of birth and reason for visit.",
             f"- Do NOT assume or make up their DOB, allergies, or any other data you don't have.",
-            f"- When booking, use the phone number above. Ask for DOB before confirming the booking.",
         ]
         return "\n".join(lines)
 
@@ -544,7 +571,10 @@ def _build_patient_section(ctx: dict, business_name: str = "") -> str:
     pref = p.get("preferred_type")
     lines.append("\nBEHAVIOUR FOR THIS CALLER:")
     lines.append(f"- Greet them warmly by name: 'Hi {first_name}! Welcome back to {biz}.'")
-    lines.append("- Do NOT ask for their name, DOB, or phone again — you already have it.")
+    lines.append("- Do NOT ask for their name or DOB again — you already have it.")
+    lines.append(f"- PHONE CONFIRMATION: Before any booking, rescheduling, or lookup that uses their phone,")
+    lines.append(f"  quickly confirm: 'Just to confirm, is {p.get('phone', '')} still the best number for you?'")
+    lines.append("  If they say yes, proceed. If they give a different number, use that instead.")
     lines.append("- If they want to book, pre-fill their info from above. Only confirm it's correct.")
 
     if pref:

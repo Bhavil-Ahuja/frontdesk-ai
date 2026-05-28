@@ -28,6 +28,7 @@ from google import genai
 from google.genai import types as gtypes
 
 from backend.config import settings
+from backend.defaults import DEFAULT_APPOINTMENT_DURATION_MINUTES, DEFAULT_TIMEZONE
 from backend.services import calendar_service, sms_service, knowledge_service
 from backend.prompts.agent_prompt import build_system_prompt
 
@@ -121,11 +122,11 @@ def _refresh_system_time(session: dict[str, Any]) -> None:
     if not msgs or msgs[0].get("role") != "system":
         return
     tenant_ctx = session.get("tenant_ctx")
-    tz_name = getattr(tenant_ctx, "timezone", None) or "America/Chicago"
+    tz_name = getattr(tenant_ctx, "timezone", None) or DEFAULT_TIMEZONE
     try:
         tz = ZoneInfo(tz_name)
     except Exception:
-        tz = ZoneInfo("America/Chicago")
+        tz = ZoneInfo(DEFAULT_TIMEZONE)
     now = datetime.now(tz)
     time_str = now.strftime("%I:%M %p").lstrip("0")
     if now.hour < 12:
@@ -369,25 +370,25 @@ ALL_TOOLS = [
         "type": "function",
         "function": {
             "name": "book_appointment",
-            "description": "Book an appointment for the patient. Include provider_id if the patient chose a specific provider.",
+            "description": "Book an appointment for the patient. Always include provider_id — use a specific UUID from get_providers, or '__auto__' if the patient has no preference (system will auto-assign the best available provider). IMPORTANT: You MUST confirm the patient's phone number verbally before calling this tool.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "patient_name": {"type": "string"},
-                    "phone": {"type": "string"},
+                    "phone": {"type": "string", "description": "Patient's phone number — must be verbally confirmed with the patient first."},
                     "email": {"type": "string", "description": "Patient email (optional — system provides default if not given)."},
                     "dob": {"type": "string", "description": "Date of birth (MM/DD/YYYY)."},
                     "appointment_type": {
                         "type": "string",
                         "description": "Type of appointment.",
                     },
-                    "slot_time": {"type": "string", "description": "ISO datetime of the chosen slot."},
+                    "slot_time": {"type": "string", "description": "EXACT exact_slot_time string from get_available_slots. Do NOT construct this yourself — always use a value returned by get_available_slots."},
                     "provider_id": {
                         "type": "string",
-                        "description": "Optional. ID of the provider to book with (from get_providers).",
+                        "description": "Required. UUID of the provider from get_providers, or '__auto__' if the patient has no preference — the system will auto-assign the best available provider.",
                     },
                 },
-                "required": ["patient_name", "phone", "appointment_type", "slot_time"],
+                "required": ["patient_name", "phone", "appointment_type", "slot_time", "provider_id"],
             },
         },
     },
@@ -395,12 +396,12 @@ ALL_TOOLS = [
         "type": "function",
         "function": {
             "name": "reschedule_appointment",
-            "description": "Reschedule an existing appointment.",
+            "description": "Reschedule an existing appointment. IMPORTANT: Before calling this, ALWAYS call get_available_slots first to get valid time slots. Use the exact_slot_time from that result as the new_slot_time — do NOT construct times yourself.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "booking_uid": {"type": "string", "description": "Booking reference ID from the original booking."},
-                    "new_slot_time": {"type": "string", "description": "New ISO datetime."},
+                    "new_slot_time": {"type": "string", "description": "EXACT exact_slot_time string from get_available_slots. Do NOT construct this yourself — always use a value returned by get_available_slots."},
                 },
                 "required": ["booking_uid", "new_slot_time"],
             },
@@ -494,14 +495,17 @@ ALL_TOOLS = [
                 "Look up a patient's upcoming appointments by their phone number. "
                 "Use when a returning patient wants to reschedule, cancel, or check "
                 "on an existing appointment. Returns appointment details including "
-                "booking_uid needed for reschedule/cancel."
+                "booking_uid needed for reschedule/cancel. "
+                "IMPORTANT: You MUST verbally confirm the phone number with the patient "
+                "BEFORE calling this tool. Even if you have their number from caller-ID, "
+                "ask 'Just to confirm, is [number] the best number for you?' first."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "phone": {
                         "type": "string",
-                        "description": "Patient's phone number.",
+                        "description": "Patient's confirmed phone number. Must be confirmed with the patient before calling this tool.",
                     },
                 },
                 "required": ["phone"],
@@ -655,10 +659,9 @@ def get_tools(tenant_ctx: Any | None = None) -> list[dict]:
     if tenant_ctx is None:
         return ALL_TOOLS
 
-    has_twilio = bool(tenant_ctx.twilio_account_sid and tenant_ctx.twilio_auth_token)
-    has_google_cal = bool(tenant_ctx.google_calendar_connected and tenant_ctx.google_calendar_refresh_token)
+    has_twilio = bool(tenant_ctx.twilio_account_sid and tenant_ctx.twilio_auth_token and tenant_ctx.feature_twilio_enabled)
     has_native_scheduling = bool(tenant_ctx.business_hours)
-    has_scheduling = has_google_cal or has_native_scheduling
+    has_scheduling = has_native_scheduling  # DB is source of truth for availability
     has_escalation = bool(tenant_ctx.emergency_guidance)
 
     # Build dynamic appointment type enum from tenant config
@@ -685,8 +688,8 @@ def get_tools(tenant_ctx: Any | None = None) -> list[dict]:
                 props["appointment_type"]["enum"] = appt_keys
         filtered.append(tool)
 
-    logger.info("[LLM] Tool filter: twilio=%s gcal=%s native_sched=%s escalation=%s → %d/%d tools available",
-                has_twilio, has_google_cal, has_native_scheduling, has_escalation, len(filtered), len(ALL_TOOLS))
+    logger.info("[LLM] Tool filter: twilio=%s scheduling=%s escalation=%s → %d/%d tools available",
+                has_twilio, has_scheduling, has_escalation, len(filtered), len(ALL_TOOLS))
     return filtered
 
 
@@ -1601,11 +1604,11 @@ async def _execute_tool(
             try:
                 from datetime import date as _date_cls
                 from zoneinfo import ZoneInfo as _ZI
-                _tz_name = (tenant_ctx.timezone if tenant_ctx and getattr(tenant_ctx, "timezone", None) else "America/Chicago")
+                _tz_name = (tenant_ctx.timezone if tenant_ctx and getattr(tenant_ctx, "timezone", None) else DEFAULT_TIMEZONE)
                 try:
                     _tz = _ZI(_tz_name)
                 except Exception:
-                    _tz = _ZI("America/Chicago")
+                    _tz = _ZI(DEFAULT_TIMEZONE)
                 _today_local = datetime.now(_tz).date()
                 _req_date = datetime.strptime(date, "%Y-%m-%d").date()
                 if _req_date < _today_local:
@@ -1642,20 +1645,21 @@ async def _execute_tool(
                     pass
 
             # Get duration from appointment config
-            duration = 60
+            duration = DEFAULT_APPOINTMENT_DURATION_MINUTES
             if tenant_ctx and tenant_ctx.appointment_types:
                 for at in tenant_ctx.appointment_types:
                     if at.get("code") == appt_type:
-                        duration = at.get("duration_minutes", 60)
+                        duration = at.get("duration_minutes", DEFAULT_APPOINTMENT_DURATION_MINUTES)
                         break
 
             # Use provider-aware scheduling to check per-provider concurrency
+            office_tz_name = tenant_ctx.timezone if tenant_ctx else DEFAULT_TIMEZONE
             provider_slots_result = await native_scheduling.get_provider_aware_slots(
                 date_str=date,
                 duration_minutes=duration,
                 tenant_id=tenant_ctx.tenant_id if tenant_ctx else None,
                 business_hours=tenant_ctx.business_hours if tenant_ctx else None,
-                tz_name=tenant_ctx.timezone if tenant_ctx else "America/Chicago",
+                tz_name=office_tz_name,
                 provider_id=provider_uuid,
                 holidays=(tenant_ctx.holidays if tenant_ctx and getattr(tenant_ctx, "holidays", None) else None),
             )
@@ -1692,7 +1696,17 @@ async def _execute_tool(
 
             provider_slots = provider_slots_result.get("slots", [])
 
-            # Format slots with human-readable time labels and provider info
+            # Format slots with human-readable time labels and provider info.
+            # Include a short timezone abbreviation so the LLM knows these
+            # are in the OFFICE's timezone — prevents misinterpretation when
+            # the caller is in a different timezone.
+            try:
+                from zoneinfo import ZoneInfo as _SlotZI
+                _slot_tz = _SlotZI(office_tz_name)
+                _tz_abbr = datetime.now(_slot_tz).strftime("%Z")  # e.g. "BST", "EST"
+            except Exception:
+                _tz_abbr = ""
+
             formatted_slots = []
             for slot_data in provider_slots:
                 slot_time = slot_data.get("time", "")
@@ -1700,8 +1714,11 @@ async def _execute_tool(
                 try:
                     from dateutil import parser as dt_parser
                     dt = dt_parser.parse(slot_time)
+                    time_label = dt.strftime("%I:%M %p").lstrip("0")
+                    if _tz_abbr:
+                        time_label += f" {_tz_abbr}"
                     formatted_slots.append({
-                        "time_label": dt.strftime("%I:%M %p").lstrip("0"),
+                        "time_label": time_label,
                         "exact_slot_time": slot_time,
                         "available_providers": available_provs,
                     })
@@ -1745,24 +1762,28 @@ async def _execute_tool(
                             for p in s.get("available_providers", []):
                                 other_providers.add(p["name"])
                         other_names = ", ".join(list(other_providers)[:2])
+                        tz_note = f" (all times are in {office_tz_name} timezone)" if office_tz_name else ""
                         summary = (
                             f"The requested provider is fully booked on {friendly_date}, "
                             f"but {other_names} {'has' if len(other_providers) == 1 else 'have'} availability. "
                             f"Ask the patient if they'd like to see another provider instead. "
-                            f"Available times: {time_list}."
+                            f"Available times{tz_note}: {time_list}."
                         )
                     else:
+                        tz_note = f" All times are in {office_tz_name} timezone." if office_tz_name else ""
                         summary = (
-                            f"Available times on {friendly_date}: {time_list}. "
+                            f"Available times on {friendly_date}: {time_list}.{tz_note} "
                             f"Offer these to the patient in natural conversation (1-2 sentences). "
-                            f"When they pick one, call book_appointment with the matching exact_slot_time and provider_id. "
-                            f"Do NOT read JSON or field names aloud."
+                            f"When they pick one, call book_appointment with the EXACT exact_slot_time string and provider_id. "
+                            f"Do NOT construct or modify the time string yourself. Do NOT read JSON or field names aloud."
                         )
                 else:
+                    tz_note = f" All times are in {office_tz_name} timezone." if office_tz_name else ""
                     summary = (
-                        f"Available times on {friendly_date}: {time_list}. "
+                        f"Available times on {friendly_date}: {time_list}.{tz_note} "
                         f"Offer these to the patient in natural conversation (1-2 sentences). "
-                        f"When they pick one, call book_appointment with the matching exact_slot_time. "
+                        f"When they pick one, call book_appointment with the EXACT exact_slot_time string. "
+                        f"Do NOT construct or modify the time string yourself. "
                         f"Include provider_id if the patient chose a specific provider. "
                         f"Do NOT read JSON or field names aloud."
                     )
@@ -1774,6 +1795,7 @@ async def _execute_tool(
                 "summary_for_assistant": summary,
                 "available_slots": formatted_slots,
                 "date": date,
+                "timezone": office_tz_name,
                 "count": len(formatted_slots),
                 "provider_filter": provider_id_str or None,
             }
@@ -2605,13 +2627,13 @@ def _resolve_dow_to_date(user_text: str, tenant_ctx: Any | None = None) -> str |
     from datetime import timedelta
     from zoneinfo import ZoneInfo
 
-    tz_name = "America/Chicago"
+    tz_name = DEFAULT_TIMEZONE
     if tenant_ctx and getattr(tenant_ctx, "timezone", None):
         tz_name = tenant_ctx.timezone
     try:
         tz = ZoneInfo(tz_name)
     except Exception:
-        tz = ZoneInfo("America/Chicago")
+        tz = ZoneInfo(DEFAULT_TIMEZONE)
 
     today = datetime.now(tz)
     text = user_text.lower()

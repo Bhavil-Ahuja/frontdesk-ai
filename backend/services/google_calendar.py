@@ -23,6 +23,11 @@ from urllib.parse import urlencode
 import httpx
 
 from backend.config import settings
+from backend.defaults import (
+    DEFAULT_APPOINTMENT_DURATION_MINUTES,
+    DEFAULT_BUSINESS_HOURS,
+    DEFAULT_TIMEZONE,
+)
 from backend.services.http_client import http
 
 logger = logging.getLogger(__name__)
@@ -169,16 +174,8 @@ async def _get_access_token(refresh_token: str) -> str:
 
 _DOW_KEYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 
-# Default business hours if tenant hasn't configured any
-_DEFAULT_BUSINESS_HOURS: dict[str, Any] = {
-    "monday":    {"open": "09:00", "close": "17:00"},
-    "tuesday":   {"open": "09:00", "close": "17:00"},
-    "wednesday": {"open": "09:00", "close": "17:00"},
-    "thursday":  {"open": "09:00", "close": "17:00"},
-    "friday":    {"open": "09:00", "close": "17:00"},
-    "saturday":  None,  # Closed
-    "sunday":    None,  # Closed
-}
+# Default business hours — use centralized defaults
+_DEFAULT_BUSINESS_HOURS: dict[str, Any] = DEFAULT_BUSINESS_HOURS
 
 
 def _parse_hour_minute(time_str: str) -> tuple[int, int]:
@@ -205,8 +202,8 @@ async def get_available_slots(
     refresh_token: str,
     date_from: str,
     date_to: str,
-    timezone: str = "America/Chicago",
-    duration_minutes: int = 60,
+    timezone: str = DEFAULT_TIMEZONE,
+    duration_minutes: int = DEFAULT_APPOINTMENT_DURATION_MINUTES,
     business_hours: dict[str, Any] | None = None,
     calendar_id: str = "primary",
     max_concurrent: int = 1,
@@ -367,8 +364,8 @@ async def book_appointment(
     refresh_token: str,
     patient_info: dict[str, Any],
     start_time: str,
-    duration_minutes: int = 60,
-    timezone: str = "America/Chicago",
+    duration_minutes: int = DEFAULT_APPOINTMENT_DURATION_MINUTES,
+    timezone: str = DEFAULT_TIMEZONE,
     calendar_id: str = "primary",
     provider_name: str | None = None,
 ) -> dict[str, Any] | None:
@@ -574,8 +571,8 @@ async def reschedule_appointment(
     refresh_token: str,
     event_id: str,
     new_start_time: str,
-    duration_minutes: int = 60,
-    timezone: str = "America/Chicago",
+    duration_minutes: int = DEFAULT_APPOINTMENT_DURATION_MINUTES,
+    timezone: str = DEFAULT_TIMEZONE,
     calendar_id: str = "primary",
 ) -> dict[str, Any] | None:
     """

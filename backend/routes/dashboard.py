@@ -20,6 +20,11 @@ from sqlalchemy import func, select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import settings
+from backend.defaults import (
+    DEFAULT_AGENT_NAME,
+    DEFAULT_TEST_PATIENT_NAME,
+    DEFAULT_TIMEZONE,
+)
 from backend.database import async_session, get_db
 from backend.models.call import Call, CallOutcome
 from backend.models.appointment import Appointment, BookedVia
@@ -232,8 +237,8 @@ async def get_config(current_user: Tenant = Depends(auth_service.get_current_use
             t.business_hours = _DEFAULT_BUSINESS_HOURS
             needs_commit = True
         if not t.test_patient_names:
-            t.test_patient_names = ["Alex Johnson"]
-            t.test_patient_name = "Alex Johnson"
+            t.test_patient_names = [DEFAULT_TEST_PATIENT_NAME]
+            t.test_patient_name = DEFAULT_TEST_PATIENT_NAME
             needs_commit = True
         if needs_commit:
             await session.commit()
@@ -242,7 +247,7 @@ async def get_config(current_user: Tenant = Depends(auth_service.get_current_use
     voice_cfg = t.voice_config or {}
     return {
         "agent_active": t.status.value == "ACTIVE" if t.status else False,
-        "agent_name": t.agent_name or "Sarah",
+        "agent_name": t.agent_name or DEFAULT_AGENT_NAME,
         "escalation_phone": t.escalation_phone or "",
         "escalation_transfer_number": t.escalation_transfer_number or "",
         "business_hours": t.business_hours or _DEFAULT_BUSINESS_HOURS,
@@ -252,7 +257,7 @@ async def get_config(current_user: Tenant = Depends(auth_service.get_current_use
         "business_name": t.business_name,
         "business_phone": t.business_phone or "",
         "business_address": t.business_address or "",
-        "timezone": t.timezone or "America/Chicago",
+        "timezone": t.timezone or DEFAULT_TIMEZONE,
         "demo_mode": bool(t.demo_mode),
         "appointment_types": t.appointment_types or [],
         "emergency_guidance": t.emergency_guidance or "",
@@ -272,13 +277,16 @@ async def get_config(current_user: Tenant = Depends(auth_service.get_current_use
         # Google Calendar
         "google_calendar_connected": bool(t.google_calendar_connected),
         "google_calendar_email": t.google_calendar_email or "",
+        # Feature flags — effective state (global AND per-tenant)
+        "vapi_enabled": settings.FEATURE_VAPI_ENABLED and (t.feature_vapi_enabled if t.feature_vapi_enabled is not None else True),
+        "twilio_enabled": settings.FEATURE_TWILIO_ENABLED and (t.feature_twilio_enabled if t.feature_twilio_enabled is not None else True),
         # Test Agent — unified callers (phone + name pairs)
         "test_callers": tenant_service._merge_test_callers(t),
         # Legacy fields (kept for backwards compat)
         "test_caller_phone": t.test_caller_phone or "",
         "test_caller_phones": t.test_caller_phones or [],
-        "test_patient_name": t.test_patient_name or "Alex Johnson",
-        "test_patient_names": t.test_patient_names or ["Alex Johnson"],
+        "test_patient_name": t.test_patient_name or DEFAULT_TEST_PATIENT_NAME,
+        "test_patient_names": t.test_patient_names or [DEFAULT_TEST_PATIENT_NAME],
         # Reminder & review settings
         "reminder_settings": t.reminder_settings or {
             "2h_enabled": True,
@@ -577,7 +585,7 @@ async def add_test_patient_name(
         if not t:
             raise HTTPException(status_code=404, detail="Tenant not found.")
 
-        names = list(t.test_patient_names or ["Alex Johnson"])
+        names = list(t.test_patient_names or [DEFAULT_TEST_PATIENT_NAME])
         if len(names) >= 10:
             raise HTTPException(status_code=400, detail="Maximum 10 test patient names allowed.")
         if name in names:

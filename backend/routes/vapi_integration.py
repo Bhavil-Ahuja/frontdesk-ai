@@ -47,6 +47,8 @@ class VapiAssignRequest(BaseModel):
     vapi_assistant_id: Optional[str] = Field(None, max_length=255)
     vapi_phone_number_id: Optional[str] = Field(None, max_length=255)
     twilio_phone_number: Optional[str] = Field(None, max_length=20)
+    feature_vapi_enabled: Optional[bool] = Field(None, description="Per-tenant Vapi feature toggle")
+    feature_twilio_enabled: Optional[bool] = Field(None, description="Per-tenant Twilio feature toggle")
 
 
 class VapiProvisionRequest(BaseModel):
@@ -69,6 +71,8 @@ async def vapi_assign(
     phone number to a tenant. This is the primary provisioning action under
     the platform-managed (Option A) model.
     """
+    if not settings.FEATURE_VAPI_ENABLED:
+        raise HTTPException(status_code=403, detail="Voice AI (Vapi) is not enabled on this platform.")
     try:
         uid = uuid.UUID(req.tenant_id)
     except ValueError:
@@ -81,6 +85,10 @@ async def vapi_assign(
         update_fields["vapi_phone_number_id"] = req.vapi_phone_number_id.strip() or ""
     if req.twilio_phone_number is not None:
         update_fields["twilio_phone_number"] = req.twilio_phone_number.strip() or ""
+    if req.feature_vapi_enabled is not None:
+        update_fields["feature_vapi_enabled"] = req.feature_vapi_enabled
+    if req.feature_twilio_enabled is not None:
+        update_fields["feature_twilio_enabled"] = req.feature_twilio_enabled
 
     if not update_fields:
         raise HTTPException(status_code=400, detail="No fields to update.")
@@ -98,6 +106,8 @@ async def vapi_assign(
         "vapi_assistant_id": tenant.vapi_assistant_id or None,
         "vapi_phone_number_id": tenant.vapi_phone_number_id or None,
         "twilio_phone_number": tenant.twilio_phone_number or None,
+        "feature_vapi_enabled": tenant.feature_vapi_enabled,
+        "feature_twilio_enabled": tenant.feature_twilio_enabled,
     }
 
 
@@ -156,6 +166,8 @@ async def vapi_provision(
     global API key. Creates the assistant on Vapi with the tenant's greeting,
     voice config, and LLM webhook, then saves the assistant_id back.
     """
+    if not settings.FEATURE_VAPI_ENABLED:
+        raise HTTPException(status_code=403, detail="Voice AI (Vapi) is not enabled on this platform.")
     try:
         uid = uuid.UUID(req.tenant_id)
     except ValueError:
@@ -219,6 +231,8 @@ async def vapi_sync(
     current_user: Tenant = Depends(auth_service.get_current_user),
 ):
     """Re-sync the existing Vapi assistant with the tenant's current config."""
+    if not settings.FEATURE_VAPI_ENABLED:
+        raise HTTPException(status_code=403, detail="Voice AI (Vapi) is not enabled on this platform.")
     tenant_ctx = await tenant_service.resolve_by_id(current_user.id)
     if not tenant_ctx or not tenant_ctx.vapi_assistant_id:
         raise HTTPException(status_code=400, detail="No Vapi assistant configured for this tenant.")

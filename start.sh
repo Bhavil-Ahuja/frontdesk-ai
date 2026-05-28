@@ -34,69 +34,41 @@ if [ "$LOCAL_CHAT_MODE" = "true" ]; then
     fi
     echo "✓ SERVER_BASE_URL=$TUNNEL_URL"
 else
-    # ── 1. Start SSH tunnel in background and capture the URL ──
+    # ── 1. Start localtunnel in background and capture the URL ──
     echo ""
-    echo "→ Starting localhost.run tunnel..."
+    echo "→ Starting localtunnel..."
 
     TUNNEL_LOG=$(mktemp)
-    MAX_ATTEMPTS=5
 
-    for ATTEMPT in $(seq 1 $MAX_ATTEMPTS); do
-        echo "  Tunnel attempt $ATTEMPT/$MAX_ATTEMPTS..."
+    npx localtunnel --port 8000 > "$TUNNEL_LOG" 2>&1 &
+    TUNNEL_PID=$!
 
-        # Kill any leftover SSH from a previous attempt
-        [ -n "$TUNNEL_PID" ] && kill $TUNNEL_PID 2>/dev/null || true
-        > "$TUNNEL_LOG"  # clear log
-
-        ssh -i ~/.ssh/id_ed25519 \
-            -o ServerAliveInterval=60 \
-            -o ServerAliveCountMax=3 \
-            -o StrictHostKeyChecking=accept-new \
-            -o ConnectTimeout=10 \
-            -T \
-            -R 80:localhost:8000 \
-            nokey@localhost.run > "$TUNNEL_LOG" 2>&1 &
-        TUNNEL_PID=$!
-
-        # Wait up to 20s per attempt for the URL to appear
-        for i in $(seq 1 40); do
-            if ! kill -0 $TUNNEL_PID 2>/dev/null; then
-                # SSH died — break inner loop, try next attempt
-                break
-            fi
-            if grep -qE "https://[a-z0-9]+\.lhr\.life" "$TUNNEL_LOG" 2>/dev/null; then
-                TUNNEL_URL=$(grep -oE "https://[a-z0-9]+\.lhr\.life" "$TUNNEL_LOG" | head -1)
-                break 2  # break both loops — success
-            fi
-            if [ $((i % 20)) -eq 0 ]; then
-                echo "    ...waiting ($(( i / 2 ))s)"
-            fi
-            sleep 0.5
-        done
-
-        # If we're here, this attempt failed
-        FAIL_REASON=$(cat "$TUNNEL_LOG" 2>/dev/null | head -3)
-        echo "  ✗ Attempt $ATTEMPT failed: ${FAIL_REASON:-timeout}"
-        kill $TUNNEL_PID 2>/dev/null || true
-
-        if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
-            WAIT=$((ATTEMPT * 2))
-            echo "    Retrying in ${WAIT}s..."
-            sleep $WAIT
+    # Wait up to 15s for localtunnel to print the URL
+    for i in $(seq 1 30); do
+        if ! kill -0 $TUNNEL_PID 2>/dev/null; then
+            echo "  ✗ localtunnel exited unexpectedly."
+            echo "  Output: $(cat "$TUNNEL_LOG" 2>/dev/null)"
+            rm -f "$TUNNEL_LOG"
+            exit 1
         fi
+        if grep -q "your url is:" "$TUNNEL_LOG" 2>/dev/null; then
+            TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9._-]+\.loca\.lt" "$TUNNEL_LOG" | head -1)
+            break
+        fi
+        sleep 0.5
     done
 
     if [ -z "$TUNNEL_URL" ]; then
         echo ""
-        echo "✗ Failed to establish tunnel after $MAX_ATTEMPTS attempts."
-        echo "  Last output: $(cat "$TUNNEL_LOG" 2>/dev/null)"
+        echo "✗ Failed to get localtunnel URL (timeout after 15s)."
+        echo "  Output: $(cat "$TUNNEL_LOG" 2>/dev/null)"
         echo ""
         echo "Common causes:"
-        echo "  • VPN is blocking localhost.run — turn off VPN and retry"
-        echo "  • localhost.run is having an outage — try again in a minute"
-        echo "  • Check https://admin.localhost.run/ for service status"
+        echo "  • npx/node not installed or not in PATH"
+        echo "  • Network issue reaching localtunnel server"
         echo ""
         echo "Tip: Set LOCAL_CHAT_MODE=true in .env to skip the tunnel entirely."
+        kill $TUNNEL_PID 2>/dev/null || true
         rm -f "$TUNNEL_LOG"
         exit 1
     fi

@@ -759,6 +759,9 @@ function AppointmentRow({
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
             {appt.scheduled_at ? formatDateTime(appt.scheduled_at, tz) : ''}{' '}
             · {appt.duration_minutes} min
+            {appt.provider_name && (
+              <span className="ml-1">· <Stethoscope className="w-3 h-3 inline -mt-0.5" /> {appt.provider_name}</span>
+            )}
           </p>
         </div>
         {hasAnyActions && (

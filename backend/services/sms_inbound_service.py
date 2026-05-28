@@ -27,7 +27,16 @@ from backend.models.sms_message import SMSMessage, SMSDirection
 from backend.models.appointment import Appointment, AppointmentStatus
 from backend.models.waitlist import WaitlistEntry, WaitlistStatus
 from backend.services import sms_service, llm_service, waitlist_service
+from backend.services.patient_service import _phone_digits_tail, _phone_col_clean
 from backend.services.tenant_service import _tenant_to_context, TenantContext
+
+
+def _contact_line(tenant_ctx: TenantContext) -> str:
+    """Return 'Please call us at +1234' or 'Please reply to this message' when no phone."""
+    phone = tenant_ctx.business_phone or tenant_ctx.escalation_phone
+    if phone:
+        return f"Please call us at {phone}"
+    return "Please reply to this message"
 
 logger = logging.getLogger(__name__)
 
@@ -165,7 +174,9 @@ async def _handle_confirmation(
     Returns:
         A human-readable reply message.
     """
-    normalized_phone = _normalize_phone(from_number)
+    # Use suffix matching (last 10 digits) so "+6352418405" and "+16352418405"
+    # both resolve to the same appointment — no more two-pass lookup needed.
+    phone_tail = _phone_digits_tail(from_number)
     now = datetime.now(timezone.utc)
 
     async with async_session() as session:
@@ -173,27 +184,13 @@ async def _handle_confirmation(
             select(Appointment).where(
                 and_(
                     Appointment.tenant_id == tenant_id,
-                    Appointment.patient_phone == normalized_phone,
+                    _phone_col_clean(Appointment.patient_phone).endswith(phone_tail),
                     Appointment.status == AppointmentStatus.CONFIRMED,
                     Appointment.scheduled_at >= now,
                 )
             ).order_by(Appointment.scheduled_at.asc()).limit(1)
         )
         appt = result.scalar_one_or_none()
-
-        if not appt:
-            # Try without normalised phone in case DB stores a different format
-            result = await session.execute(
-                select(Appointment).where(
-                    and_(
-                        Appointment.tenant_id == tenant_id,
-                        Appointment.patient_phone == from_number,
-                        Appointment.status == AppointmentStatus.CONFIRMED,
-                        Appointment.scheduled_at >= now,
-                    )
-                ).order_by(Appointment.scheduled_at.asc()).limit(1)
-            )
-            appt = result.scalar_one_or_none()
 
         if not appt:
             logger.info(
@@ -203,8 +200,7 @@ async def _handle_confirmation(
             )
             return (
                 f"Thanks for your reply! We don't see an upcoming appointment for this number. "
-                f"Please call us at {tenant_ctx.business_phone or tenant_ctx.twilio_phone_number} "
-                f"if you need assistance."
+                f"{_contact_line(tenant_ctx)} if you need assistance."
             )
 
         appt.confirmed_by_patient = True
@@ -271,8 +267,7 @@ async def _handle_cancel_request(
             )
             return (
                 f"We don't see an upcoming appointment for this number. "
-                f"Please call us at {tenant_ctx.business_phone or tenant_ctx.twilio_phone_number} "
-                f"if you need help."
+                f"{_contact_line(tenant_ctx)} if you need help."
             )
 
         # Save details before cancelling (for SMS and waitlist)
@@ -318,11 +313,12 @@ async def _handle_cancel_request(
 
     display_date = scheduled_at.strftime("%A, %B %d")
     display_time = scheduled_at.strftime("%I:%M %p").lstrip("0")
-    biz_phone = tenant_ctx.business_phone or tenant_ctx.twilio_phone_number
+    biz_phone = tenant_ctx.business_phone or tenant_ctx.escalation_phone
+    call_part = f"call us at {biz_phone} or j" if biz_phone else "J"
 
     return (
         f"Your appointment on {display_date} at {display_time} has been cancelled. "
-        f"If you'd like to reschedule, call us at {biz_phone} or just text us the date that works for you."
+        f"If you'd like to reschedule, {call_part}ust text us the date that works for you."
     )
 
 
@@ -451,11 +447,9 @@ async def handle_inbound_sms(
             reply = await _handle_confirmation(from_number, tenant_id, tenant_ctx)
 
     elif keyword in ("R", "RESCHEDULE"):
-        biz_phone = tenant_ctx.business_phone or tenant_ctx.twilio_phone_number
-        reply = (
-            f"Please call us at {biz_phone} to reschedule, "
-            f"or tell me what date works better."
-        )
+        biz_phone = tenant_ctx.business_phone or tenant_ctx.escalation_phone
+        call_part = f"Call us at {biz_phone} to reschedule, or t" if biz_phone else "T"
+        reply = f"{call_part}ell me what date works better and I'll find you a slot."
         logger.info("[SMS Inbound] Reschedule keyword from %s (tenant=%s)", from_number, tenant_id)
 
     elif keyword in ("X", "CANCEL"):
@@ -493,10 +487,9 @@ async def handle_inbound_sms(
                 "[SMS Inbound] LLM processing failed (session=%s): %s",
                 session_key, exc, exc_info=True,
             )
-            biz_phone = tenant_ctx.business_phone or tenant_ctx.twilio_phone_number
             reply = (
                 f"Sorry, I had trouble understanding your message. "
-                f"Please call us at {biz_phone} for assistance."
+                f"{_contact_line(tenant_ctx)} for assistance."
             )
 
     if not reply:
@@ -565,8 +558,7 @@ async def _handle_waitlist_confirmation(
             )
             return (
                 f"We couldn't find a pending waitlist offer for your number. "
-                f"Please call us at {tenant_ctx.business_phone or tenant_ctx.twilio_phone_number} "
-                f"for assistance."
+                f"{_contact_line(tenant_ctx)} for assistance."
             )
 
         appt_type = booking.get("appointment_type", "appointment").replace("_", " ").title()
@@ -600,5 +592,5 @@ async def _handle_waitlist_confirmation(
         )
         return (
             f"Sorry, something went wrong confirming your slot. "
-            f"Please call us at {tenant_ctx.business_phone or tenant_ctx.twilio_phone_number}."
+            f"{_contact_line(tenant_ctx)} for assistance."
         )

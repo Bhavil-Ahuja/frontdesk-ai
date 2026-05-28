@@ -18,7 +18,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 from datetime import timedelta
 
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import async_session
@@ -29,18 +29,121 @@ logger = logging.getLogger(__name__)
 
 
 # ── Phone normalisation ─────────────────────────────────────────────────────
-# Vapi sends E.164 (+15125551234), patients might give "512-555-1234".
-# We strip to digits-only for comparison, keeping leading country code.
+# Uses Google's libphonenumber (via `phonenumbers` package) when available
+# for robust E.164 normalisation across all countries. Falls back to a
+# regex-based heuristic when the library isn't installed.
 
-def _normalise_phone(raw: str) -> str:
-    """Strip everything except digits and leading +."""
+try:
+    import phonenumbers as _pn  # type: ignore[import-untyped]
+    _HAS_PHONENUMBERS = True
+except ImportError:
+    _pn = None  # type: ignore[assignment]
+    _HAS_PHONENUMBERS = False
+
+# Map common timezone prefixes → ISO 3166 region codes for phonenumbers.
+# Used as the default_region when parsing ambiguous numbers (e.g. "6352418405"
+# with no country code).  Only the most common healthcare markets are listed;
+# phonenumbers handles the rest once a valid E.164 is stored.
+_TZ_TO_REGION: dict[str, str] = {
+    "America/": "US",
+    "US/": "US",
+    "Canada/": "CA",
+    "Asia/Kolkata": "IN",
+    "Asia/Calcutta": "IN",
+    "Asia/Mumbai": "IN",
+    "Europe/London": "GB",
+    "Europe/": "GB",
+    "Australia/": "AU",
+    "Asia/Singapore": "SG",
+    "Asia/Shanghai": "CN",
+    "Asia/Tokyo": "JP",
+}
+
+
+def _region_from_timezone(tz_name: str | None) -> str:
+    """Derive a best-guess ISO region from a timezone string."""
+    if not tz_name:
+        return "US"
+    for prefix, region in _TZ_TO_REGION.items():
+        if tz_name.startswith(prefix):
+            return region
+    return "US"  # safe default — most users are US-based
+
+
+def _normalise_phone(raw: str, default_region: str = "US") -> str:
+    """Normalise a phone string to E.164 format.
+
+    Uses libphonenumber when available for correct international handling.
+    Falls back to a regex heuristic (strip non-digits, prepend +).
+
+    Args:
+        raw: Any phone input — "512-555-1234", "+16352418405", "6352418405" etc.
+        default_region: ISO 3166 region code for parsing numbers without a
+                        country code (e.g. "US", "IN", "GB"). Default "US".
+    """
     if not raw:
         return ""
+
+    # ── Try libphonenumber first ──────────────────────────────────────
+    if _HAS_PHONENUMBERS:
+        try:
+            parsed = _pn.parse(raw.strip(), default_region)
+            if _pn.is_valid_number(parsed):
+                return _pn.format_number(parsed, _pn.PhoneNumberFormat.E164)
+        except _pn.NumberParseException:
+            pass
+        # If invalid / unparseable, fall through to regex approach
+
+    # ── Regex fallback ────────────────────────────────────────────────
     digits = re.sub(r"[^\d+]", "", raw.strip())
-    # Ensure we always store with + prefix if it looks like E.164
     if digits and not digits.startswith("+") and len(digits) >= 10:
         digits = "+" + digits
     return digits
+
+
+def _phone_digits_tail(phone: str) -> str:
+    """Extract the **national number** portion of a phone string.
+
+    Uses libphonenumber when available — this gives the exact national number
+    (e.g. "+61412345678" → "412345678" for Australia, "+16352418405" →
+    "6352418405" for the US).
+
+    Falls back to last-10 digits when the library isn't installed, which is
+    correct for US/Canada/India/UK (the most common markets).
+
+    The national number is always a suffix of the full E.164 digit string,
+    so ``Appointment.patient_phone.endswith(tail)`` works in SQL.
+    """
+    if not phone:
+        return ""
+
+    if _HAS_PHONENUMBERS:
+        try:
+            parsed = _pn.parse(phone.strip(), None)
+            if _pn.is_valid_number(parsed):
+                return str(parsed.national_number)
+        except _pn.NumberParseException:
+            pass
+
+    # Fallback: last 10 digits (covers US / Canada / India / UK)
+    digits = re.sub(r"\D", "", phone or "")
+    return digits[-10:] if len(digits) >= 10 else digits
+
+
+def _phone_col_clean(col):
+    """Wrap a SQLAlchemy phone column with regexp_replace to strip non-digits.
+
+    Returns a SQL expression equivalent to:
+        regexp_replace(col, '[^0-9]', '', 'g')
+
+    Use this instead of raw ``col.endswith(tail)`` so that legacy rows
+    containing dashes / spaces / parentheses still match correctly.
+
+    Example usage::
+
+        _phone_col_clean(Appointment.patient_phone).endswith(phone_tail)
+    """
+    return func.regexp_replace(col, '[^0-9]', '', 'g')
 
 
 # ── Lookup ──────────────────────────────────────────────────────────────────
@@ -68,11 +171,11 @@ async def get_patient_by_phone(
         if patient:
             return patient
 
-        # Fallback: try matching last 10 digits (handles +1 prefix differences)
-        digits_only = re.sub(r"\D", "", norm)
-        if len(digits_only) >= 10:
-            tail = digits_only[-10:]
-            fallback_filters = [Patient.phone.endswith(tail)]
+        # Fallback: try matching national-number suffix (handles +1 prefix
+        # differences and any residual non-digit chars in stored phones).
+        tail = _phone_digits_tail(norm)
+        if tail:
+            fallback_filters = [_phone_col_clean(Patient.phone).endswith(tail)]
             if tenant_id:
                 fallback_filters.append(Patient.tenant_id == tenant_id)
             result = await session.execute(
@@ -177,10 +280,18 @@ async def get_patient_history(
             return ""
 
     now = datetime.now(timezone.utc)
+
+    # Use last-10-digit suffix matching so "+6352418405" and "+16352418405"
+    # both resolve to the same appointments.  This mirrors the fallback
+    # logic already used in get_patient_by_phone().
+    phone_tail = _phone_digits_tail(patient.phone)
+
     async with async_session() as session:
         # Upcoming appointments (CONFIRMED, in the future) — tenant-scoped
+        # Use _phone_col_clean to strip dashes/spaces from stored phones
+        # before suffix matching, so "635-241-8405" matches tail "6352418405".
         upcoming_filters = [
-            Appointment.patient_phone == patient.phone,
+            _phone_col_clean(Appointment.patient_phone).endswith(phone_tail),
             Appointment.status == AppointmentStatus.CONFIRMED,
             Appointment.scheduled_at > now,
         ]
@@ -197,7 +308,7 @@ async def get_patient_history(
 
         # Past appointments (any status, in the past) — most recent first
         past_filters = [
-            Appointment.patient_phone == patient.phone,
+            _phone_col_clean(Appointment.patient_phone).endswith(phone_tail),
             Appointment.scheduled_at <= now,
         ]
         if tenant_id:
@@ -279,6 +390,7 @@ async def upsert_patient(
         raise ValueError("Cannot upsert patient without a phone number")
 
     async with async_session() as session:
+        # Exact match first
         filters = [Patient.phone == norm_phone]
         if tenant_id:
             filters.append(Patient.tenant_id == tenant_id)
@@ -287,6 +399,20 @@ async def upsert_patient(
             select(Patient).where(and_(*filters))
         )
         patient = result.scalar_one_or_none()
+
+        # Fallback: match national-number suffix so "+6352418405" and
+        # "+16352418405" resolve to the same patient. Uses _phone_col_clean
+        # to handle any residual non-digit chars in stored phones.
+        if not patient:
+            tail = _phone_digits_tail(norm_phone)
+            if tail:
+                fallback_filters = [_phone_col_clean(Patient.phone).endswith(tail)]
+                if tenant_id:
+                    fallback_filters.append(Patient.tenant_id == tenant_id)
+                result = await session.execute(
+                    select(Patient).where(and_(*fallback_filters))
+                )
+                patient = result.scalar_one_or_none()
 
         if patient:
             # Update existing — only overwrite non-empty fields
@@ -298,6 +424,12 @@ async def upsert_patient(
                 patient.email = email.strip()
             if appointment_type:
                 patient.preferred_appointment_type = appointment_type
+            # If the incoming phone is longer (has country code), adopt it as
+            # the canonical format so future exact matches work directly.
+            if len(norm_phone) > len(patient.phone):
+                logger.info("[PatientSvc] Upgrading phone %s → %s for %s",
+                            patient.phone, norm_phone, patient.name)
+                patient.phone = norm_phone
             patient.is_new_patient = False
             patient.visit_count = (patient.visit_count or 0) + 1
             patient.last_appointment_at = datetime.now(timezone.utc)

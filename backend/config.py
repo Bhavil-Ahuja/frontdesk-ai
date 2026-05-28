@@ -77,6 +77,13 @@ class Settings:
         "GOOGLE_REDIRECT_URI", "http://localhost:8000/api/integrations/google/callback"
     )
 
+    # ── Feature flags (global kill switches) ────────────────────────────
+    # When False, the feature is unavailable for ALL tenants regardless of
+    # their own per-tenant setting. Useful for running the platform in
+    # text-only mode when voice/SMS aren't licensed.
+    FEATURE_VAPI_ENABLED: bool = os.getenv("FEATURE_VAPI_ENABLED", "true").lower() == "true"
+    FEATURE_TWILIO_ENABLED: bool = os.getenv("FEATURE_TWILIO_ENABLED", "true").lower() == "true"
+
     # ── Local chat mode ───────────────────────────────────────────────────
     # When True, the frontend exposes a /chat page that talks to the same
     # LLM + tool pipeline Vapi uses, but via text instead of voice. Useful

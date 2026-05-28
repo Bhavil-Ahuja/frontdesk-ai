@@ -19,6 +19,7 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import async_session, get_db
+from backend.defaults import DEFAULT_TIMEZONE
 from backend.models.appointment import Appointment, AppointmentStatus, BookedVia
 from backend.models.provider import Provider
 from backend.models.tenant import Tenant
@@ -367,7 +368,7 @@ async def sync_google_calendar(
         )
 
     refresh_token = current_user.google_calendar_refresh_token
-    tenant_tz = current_user.timezone or "America/Chicago"
+    tenant_tz = current_user.timezone or DEFAULT_TIMEZONE
     now = datetime.now(timezone.utc)
     # Sync window: from now to 90 days in the future
     time_min = now.isoformat()

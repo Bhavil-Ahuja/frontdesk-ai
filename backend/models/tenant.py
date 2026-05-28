@@ -108,6 +108,10 @@ class Tenant(Base):
     twilio_auth_token = Column(String(255), nullable=True)
     twilio_phone_number = Column(String(20), nullable=True)
 
+    # ── Feature flags (per-tenant — effective only when global flag is also True)
+    feature_vapi_enabled = Column(Boolean, nullable=False, default=True)
+    feature_twilio_enabled = Column(Boolean, nullable=False, default=True)
+
     # ── Usage metering (Option A — platform manages billing) ─────────────
     # Tracks consumption in the current billing period. Reset by a monthly
     # cron or when current_period_start rolls over.

@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import settings
 from backend.database import get_db
+from backend.defaults import DEFAULT_TIMEZONE
 from backend.services import tenant_service, auth_service
 from backend.services.usage_service import get_usage_summary, get_plan_limits
 from backend.models.tenant import Tenant, TenantStatus, BusinessType, PlanTier
@@ -79,6 +80,9 @@ class TenantUpdateRequest(BaseModel):
     emergency_guidance: Optional[str] = None
     demo_mode: Optional[bool] = None
     plan: Optional[str] = None
+    # Feature flags (per-tenant toggles — admin only)
+    feature_vapi_enabled: Optional[bool] = None
+    feature_twilio_enabled: Optional[bool] = None
 
 
 class TenantOut(BaseModel):
@@ -105,6 +109,12 @@ class TenantOut(BaseModel):
     twilio_phone_number: Optional[str]
     google_calendar_connected: bool
     google_calendar_email: Optional[str]
+    # Feature flags — raw per-tenant toggles (admin-editable)
+    feature_vapi_enabled: Optional[bool]
+    feature_twilio_enabled: Optional[bool]
+    # Feature flags — effective state (global AND per-tenant)
+    vapi_enabled: bool
+    twilio_enabled: bool
     created_at: Optional[datetime]
     updated_at: Optional[datetime]
 
@@ -124,7 +134,7 @@ def _tenant_to_out(t: Tenant) -> TenantOut:
         owner_name=t.owner_name,
         owner_email=t.owner_email,
         owner_phone=t.owner_phone,
-        timezone=t.timezone or "America/Chicago",
+        timezone=t.timezone or DEFAULT_TIMEZONE,
         plan=t.plan.value if t.plan else None,
         status=t.status.value if t.status else "PENDING",
         demo_mode=t.demo_mode if t.demo_mode is not None else True,
@@ -143,6 +153,12 @@ def _tenant_to_out(t: Tenant) -> TenantOut:
         twilio_phone_number=t.twilio_phone_number or "",
         google_calendar_connected=bool(t.google_calendar_connected),
         google_calendar_email=t.google_calendar_email or "",
+        # Feature flags — raw per-tenant toggles
+        feature_vapi_enabled=t.feature_vapi_enabled,
+        feature_twilio_enabled=t.feature_twilio_enabled,
+        # Feature flags — effective = global AND per-tenant
+        vapi_enabled=settings.FEATURE_VAPI_ENABLED and (t.feature_vapi_enabled if t.feature_vapi_enabled is not None else True),
+        twilio_enabled=settings.FEATURE_TWILIO_ENABLED and (t.feature_twilio_enabled if t.feature_twilio_enabled is not None else True),
         created_at=t.created_at,
         updated_at=t.updated_at,
     )
@@ -186,6 +202,36 @@ async def list_tenants(
 
     tenants = await tenant_service.list_tenants(status=status_filter)
     return [_tenant_to_out(t) for t in tenants]
+
+
+# ── Usage / billing endpoints ───────────────────────────────────────────────
+# NOTE: These MUST be defined before /{tenant_id} routes, otherwise FastAPI
+# matches "usage" and "plans" as a tenant_id path parameter.
+
+
+@router.get("/usage")
+async def get_my_usage(user=Depends(auth_service.get_current_user)):
+    """Return current billing-period usage for the authenticated tenant."""
+    tenant_id = getattr(user, "id", None)
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="No tenant associated with this account.")
+    summary = await get_usage_summary(tenant_id)
+    if not summary:
+        raise HTTPException(status_code=404, detail="Tenant not found.")
+    return summary
+
+
+@router.get("/plans")
+async def list_plans():
+    """Return all available plans and their limits (public endpoint)."""
+    from backend.services.usage_service import PLAN_LIMITS
+    return {
+        plan: {
+            "call_minutes": limits["call_minutes"],
+            "sms": limits["sms"],
+        }
+        for plan, limits in PLAN_LIMITS.items()
+    }
 
 
 @router.get("/{tenant_id}", response_model=TenantOut)
@@ -385,6 +431,7 @@ async def purge_tenant(
 
     from backend.models import (
         Appointment, Call, Patient, Provider, WaitlistEntry, SMSMessage, ProfileChangeLog,
+        SupportTicket,
     )
     from backend.database import async_session
 
@@ -407,6 +454,7 @@ async def purge_tenant(
         await session.execute(delete(WaitlistEntry).where(WaitlistEntry.tenant_id == uid))
         await session.execute(delete(SMSMessage).where(SMSMessage.tenant_id == uid))
         await session.execute(delete(ProfileChangeLog).where(ProfileChangeLog.tenant_id == uid))
+        await session.execute(delete(SupportTicket).where(SupportTicket.tenant_id == uid))
 
         # Delete the tenant itself
         await session.execute(delete(Tenant).where(Tenant.id == uid))
@@ -423,29 +471,3 @@ async def purge_tenant(
     }
 
 
-# ── Usage / billing endpoints ───────────────────────────────────────────────
-
-
-@router.get("/usage")
-async def get_my_usage(user=Depends(auth_service.get_current_user)):
-    """Return current billing-period usage for the authenticated tenant."""
-    tenant_id = user.get("tenant_id") if isinstance(user, dict) else getattr(user, "tenant_id", None)
-    if not tenant_id:
-        raise HTTPException(status_code=400, detail="No tenant associated with this account.")
-    summary = await get_usage_summary(tenant_id)
-    if not summary:
-        raise HTTPException(status_code=404, detail="Tenant not found.")
-    return summary
-
-
-@router.get("/plans")
-async def list_plans():
-    """Return all available plans and their limits (public endpoint)."""
-    from backend.services.usage_service import PLAN_LIMITS
-    return {
-        plan: {
-            "call_minutes": limits["call_minutes"],
-            "sms": limits["sms"],
-        }
-        for plan, limits in PLAN_LIMITS.items()
-    }

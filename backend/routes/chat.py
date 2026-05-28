@@ -75,8 +75,8 @@ class ChatEnabledResponse(BaseModel):
 
 @router.get("/enabled", response_model=ChatEnabledResponse)
 async def chat_enabled():
-    """Public — lets the frontend decide whether to show the chat page."""
-    return ChatEnabledResponse(enabled=settings.LOCAL_CHAT_MODE)
+    """Public — always enabled. The Test Agent chat is available regardless of LOCAL_CHAT_MODE."""
+    return ChatEnabledResponse(enabled=True)
 
 
 @router.post("/reset")
@@ -85,8 +85,6 @@ async def reset_chat(
     current_user: Tenant = Depends(auth_service.get_current_user),
 ):
     """End the LLM session for this conversation_id (clears history)."""
-    if not settings.LOCAL_CHAT_MODE:
-        raise HTTPException(status_code=404, detail="Local chat mode is disabled.")
     session_key = _session_key(current_user, body.conversation_id, body.test_phone)
     llm_service.end_session(session_key)
     return {"status": "reset", "conversation_id": body.conversation_id}
@@ -102,12 +100,6 @@ async def chat_stream(
     then stream the assistant's reply back as SSE in OpenAI
     `chat.completion.chunk` format — identical to the Vapi wire format.
     """
-    if not settings.LOCAL_CHAT_MODE:
-        raise HTTPException(
-            status_code=404,
-            detail="Local chat mode is disabled. Set LOCAL_CHAT_MODE=true in .env.",
-        )
-
     # Include test_phone in session key so switching callers creates fresh sessions
     session_key = _session_key(current_user, body.conversation_id, body.test_phone)
     model = settings.OLLAMA_MODEL

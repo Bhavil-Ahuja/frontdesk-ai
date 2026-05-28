@@ -19,8 +19,10 @@ from typing import Any
 from sqlalchemy import select, and_, update
 
 from backend.database import async_session
+from backend.defaults import DEFAULT_TIMEZONE
 from backend.models.waitlist import WaitlistEntry, WaitlistStatus
 from backend.services import sms_service
+from backend.services.patient_service import _phone_digits_tail, _phone_col_clean, _normalise_phone
 
 logger = logging.getLogger(__name__)
 
@@ -76,11 +78,11 @@ async def add_to_waitlist(
         from zoneinfo import ZoneInfo
         tz_name = (
             getattr(tenant_ctx, "timezone", None) if tenant_ctx else None
-        ) or "America/Chicago"
+        ) or DEFAULT_TIMEZONE
         try:
             tz = ZoneInfo(tz_name)
         except Exception:
-            tz = ZoneInfo("America/Chicago")
+            tz = ZoneInfo(DEFAULT_TIMEZONE)
         today_local = datetime.now(tz).date()
     except Exception:
         today_local = datetime.utcnow().date()
@@ -148,11 +150,14 @@ async def add_to_waitlist(
         target_date, datetime.max.time(), tzinfo=timezone.utc
     )
 
+    # Normalise the phone before storing — prevents dirty data (dashes, spaces)
+    norm_phone = _normalise_phone(patient_phone)
+
     entry = WaitlistEntry(
         id=uuid.uuid4(),
         tenant_id=tenant_id,
         patient_name=patient_name,
-        patient_phone=patient_phone,
+        patient_phone=norm_phone or patient_phone,
         patient_email=patient_email,
         appointment_type=appointment_type,
         preferred_date=preferred_date,
@@ -459,11 +464,13 @@ async def confirm_waitlist_booking(
         actual appointment), or None if no matching NOTIFIED entry was found.
     """
     async with async_session() as session:
+        # Suffix match on last 10 digits to handle phone format variations
+        phone_tail = _phone_digits_tail(patient_phone)
         result = await session.execute(
             select(WaitlistEntry)
             .where(
                 and_(
-                    WaitlistEntry.patient_phone == patient_phone,
+                    _phone_col_clean(WaitlistEntry.patient_phone).endswith(phone_tail),
                     WaitlistEntry.tenant_id == tenant_id,
                     WaitlistEntry.status == WaitlistStatus.NOTIFIED,
                 )

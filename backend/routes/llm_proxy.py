@@ -7,8 +7,8 @@ tenant uses their own Twilio creds, timezone, KB, and prompts.
 
 Architecture:
   1. Vapi sends conversation → we resolve tenant + inject tenant-specific system prompt
-  2. We call Ollama (non-streaming) with tool definitions
-  3. If Ollama requests a tool call → execute it → feed result back → call again
+  2. We call the configured LLM (Ollama or Gemini) with tool definitions
+  3. If the LLM requests a tool call → execute it → feed result back → call again
   4. Wrap the final text response as SSE stream for Vapi
      (Vapi REQUIRES streaming SSE from custom-llm providers)
 """
@@ -24,9 +24,21 @@ from fastapi.responses import StreamingResponse
 
 from openai import AsyncOpenAI, OpenAI
 
+# Gemini SDK (google-genai) — used when LLM_PROVIDER=gemini
+from google.genai import types as gtypes
+
 from backend.config import settings
+from backend.defaults import DEFAULT_TIMEZONE
 from backend.prompts.agent_prompt import build_system_prompt
-from backend.services.llm_service import get_tools
+from backend.services.llm_service import (
+    get_tools,
+    _get_gemini_client,
+    _build_gemini_config,
+    _openai_tools_to_gemini,
+    _extract_gemini_text,
+    _gemini_send_with_retry,
+    _is_rate_limit_error,
+)
 from backend.services import calendar_service, sms_service, patient_service
 from backend.services.tenant_service import (
     resolve_by_assistant_id,
@@ -81,7 +93,8 @@ async def chat_completions(request: Request):
         return _error_response("Invalid request")
 
     messages = body.get("messages", [])
-    model = body.get("model", settings.OLLAMA_MODEL)
+    is_gemini = settings.LLM_PROVIDER == "gemini"
+    model = body.get("model", settings.GEMINI_MODEL if is_gemini else settings.OLLAMA_MODEL)
 
     # ── Resolve tenant ────────────────────────────────────────────────
     # Priority: phoneNumberId (platform-managed model, 1 assistant + N numbers)
@@ -132,9 +145,26 @@ async def chat_completions(request: Request):
                 tenant_ctx.slug if tenant_ctx else "none")
 
     # ── Caller recognition → patient context ────────────────────────────
+    # Skip recognition if the caller phone is the clinic's own Twilio number
+    # (happens when testing via Vapi web dialer — no real caller).
     patient_context = None
     tenant_id = tenant_ctx.tenant_id if tenant_ctx else None
-    if caller_phone:
+    _is_own_number = False
+    if caller_phone and tenant_ctx and tenant_ctx.twilio_phone_number:
+        from backend.services.patient_service import _phone_digits_tail
+        _is_own_number = (
+            _phone_digits_tail(caller_phone) == _phone_digits_tail(tenant_ctx.twilio_phone_number)
+        )
+        if _is_own_number:
+            logger.info(
+                "[LLM Proxy] Caller %s matches clinic Twilio number — skipping caller recognition",
+                caller_phone,
+            )
+            # Clear caller_phone so the system prompt doesn't tell the agent
+            # to use the clinic's own number as the patient's phone.
+            caller_phone = ""
+
+    if caller_phone and not _is_own_number:
         try:
             tz_name = tenant_ctx.timezone if tenant_ctx else None
             patient_context = await patient_service.get_patient_history(
@@ -169,7 +199,8 @@ async def chat_completions(request: Request):
         logger.info("[LLM Proxy] Injected system prompt (%d chars)", len(system_prompt))
 
     # Log conversation context
-    logger.info("[LLM Proxy] ── Messages being sent to Ollama ──")
+    provider_label = "Gemini" if is_gemini else "Ollama"
+    logger.info("[LLM Proxy] ── Messages being sent to %s ──", provider_label)
     for idx, msg in enumerate(messages):
         role = msg.get("role", "?")
         content = msg.get("content", "")
@@ -180,7 +211,6 @@ async def chat_completions(request: Request):
             logger.info("[LLM Proxy]   [%d] %s: %s", idx, role, preview)
     logger.info("[LLM Proxy] ── End messages ──")
 
-    client = _get_client()
     t0 = time.time()
 
     try:
@@ -226,10 +256,18 @@ async def chat_completions(request: Request):
         elif _is_explicit_human_request(messages) and not has_escalation:
             logger.info("[LLM Proxy] Explicit human request detected but escalation not configured — skipping short-circuit")
 
-        # ── True streaming: tokens flow to Vapi as Ollama generates them ──
-        async_client = _get_async_client()
+        # ── True streaming: tokens flow to Vapi as the LLM generates them ──
+        if is_gemini:
+            generator = _stream_with_tools_sse_gemini(
+                model, messages, t0, tenant_ctx=tenant_ctx,
+            )
+        else:
+            async_client = _get_async_client()
+            generator = _stream_with_tools_sse(
+                async_client, model, messages, t0, tenant_ctx=tenant_ctx,
+            )
         return StreamingResponse(
-            _stream_with_tools_sse(async_client, model, messages, t0, tenant_ctx=tenant_ctx),
+            generator,
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -606,7 +644,7 @@ async def _stream_with_tools_sse(
                 # Date correction for get_available_slots
                 if fn_name == "get_available_slots":
                     user_text = _last_user_message(messages)
-                    tenant_tz = tenant_ctx.timezone if tenant_ctx else "America/Chicago"
+                    tenant_tz = tenant_ctx.timezone if tenant_ctx else DEFAULT_TIMEZONE
                     resolved = _resolve_dow_to_date(user_text, tz_name=tenant_tz)
                     model_date = fn_args.get("date", "")
                     if resolved and resolved != model_date:
@@ -696,6 +734,316 @@ async def _stream_with_tools_sse(
     elapsed = (time.time() - t0) * 1000
     logger.info("=" * 70)
     logger.info("[LLM Proxy] STREAMED RESPONSE TO VAPI")
+    logger.info("[LLM Proxy]   Total time:   %.0fms", elapsed)
+    logger.info("[LLM Proxy]   Content len:  %d chars", len(full_content))
+    logger.info("[LLM Proxy]   Content:      %s", full_content[:500])
+    logger.info("=" * 70)
+
+    yield _sse({}, finish_reason="stop")
+    yield "data: [DONE]\n\n"
+
+
+def _convert_messages_to_gemini(
+    messages: list[dict],
+) -> tuple[str, list[gtypes.Content], str]:
+    """
+    Convert OpenAI-format messages to Gemini Content objects.
+
+    Returns:
+        (system_prompt, history, last_user_text)
+    """
+    system_prompt = ""
+    history: list[gtypes.Content] = []
+    last_user_text = ""
+
+    for i, msg in enumerate(messages):
+        role = msg.get("role", "")
+        content = msg.get("content", "") or ""
+
+        if role == "system":
+            system_prompt = content
+
+        elif role == "user":
+            last_user_text = content
+            history.append(gtypes.Content(
+                role="user",
+                parts=[gtypes.Part(text=content)],
+            ))
+
+        elif role == "assistant":
+            if msg.get("tool_calls"):
+                parts = []
+                for tc in msg["tool_calls"]:
+                    fn = tc.get("function", tc)
+                    fn_name = fn.get("name", "")
+                    fn_args_raw = fn.get("arguments", "{}")
+                    try:
+                        fn_args = json.loads(fn_args_raw) if isinstance(fn_args_raw, str) else fn_args_raw
+                    except (json.JSONDecodeError, TypeError):
+                        fn_args = {}
+                    parts.append(gtypes.Part(
+                        function_call=gtypes.FunctionCall(name=fn_name, args=fn_args),
+                    ))
+                if content:
+                    parts.insert(0, gtypes.Part(text=content))
+                history.append(gtypes.Content(role="model", parts=parts))
+            elif content:
+                history.append(gtypes.Content(
+                    role="model",
+                    parts=[gtypes.Part(text=content)],
+                ))
+
+        elif role == "tool":
+            tool_call_id = msg.get("tool_call_id", "")
+            try:
+                result = json.loads(content) if isinstance(content, str) else content
+            except (json.JSONDecodeError, TypeError):
+                result = {"result": content}
+            if not isinstance(result, dict):
+                result = {"result": result}
+
+            # Find the tool name from the preceding assistant message
+            tool_name = "unknown"
+            if i > 0:
+                prev = messages[i - 1]
+                if prev.get("role") == "assistant" and prev.get("tool_calls"):
+                    for tc in prev["tool_calls"]:
+                        tc_id = tc.get("id", "")
+                        fn = tc.get("function", tc)
+                        if tc_id == tool_call_id or not tool_call_id:
+                            tool_name = fn.get("name", "unknown")
+                            break
+
+            history.append(gtypes.Content(
+                role="user",
+                parts=[gtypes.Part(
+                    function_response=gtypes.FunctionResponse(
+                        name=tool_name, response=result,
+                    ),
+                )],
+            ))
+
+    return system_prompt, history, last_user_text
+
+
+async def _stream_with_tools_sse_gemini(
+    model: str,
+    messages: list,
+    t0: float,
+    tenant_ctx: TenantContext | None = None,
+):
+    """
+    Gemini version of the SSE streaming generator.
+
+    Calls Gemini via google-genai SDK, handles tool calls internally,
+    and wraps the final text response as OpenAI-format SSE chunks that
+    Vapi can consume.
+
+    Unlike Ollama, Gemini doesn't stream through an OpenAI-compatible API —
+    we get the full response, then emit it as word-chunked SSE to Vapi.
+    """
+    response_id = f"chatcmpl-{int(time.time())}"
+    created = int(time.time())
+
+    def _sse(delta, finish_reason=None):
+        return "data: " + json.dumps({
+            "id": response_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+            "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+        }) + "\n\n"
+
+    # Role chunk
+    yield _sse({"role": "assistant"})
+
+    suppress_tools_round1 = _looks_like_simple_chat(messages)
+    if suppress_tools_round1:
+        logger.info("[LLM Proxy] Simple chat — suppressing tools for round 1 (Gemini stream)")
+
+    full_content = ""
+
+    try:
+        # Convert messages to Gemini format
+        system_prompt, gemini_history, last_user_text = _convert_messages_to_gemini(messages)
+
+        # Pop the last user message from history — it will be sent via chat.send_message()
+        if gemini_history and gemini_history[-1].role == "user":
+            last_entry = gemini_history[-1]
+            is_fn_response = any(
+                getattr(p, "function_response", None) for p in last_entry.parts
+            )
+            if not is_fn_response:
+                gemini_history = gemini_history[:-1]
+
+        # Build tool definitions (used for all rounds unless suppressed)
+        openai_tools = get_tools(tenant_ctx)
+        gemini_tools = _openai_tools_to_gemini(openai_tools)
+
+        # For round 1 with simple chat, suppress tools
+        initial_tools = None if suppress_tools_round1 else gemini_tools
+
+        # Build config and create chat session ONCE
+        config = _build_gemini_config(
+            system_instruction=system_prompt,
+            tools=initial_tools,
+        )
+        client = _get_gemini_client()
+        chat = client.aio.chats.create(
+            model=settings.GEMINI_MODEL,
+            config=config,
+            history=gemini_history,
+        )
+
+        # Send the first user message
+        t_round = time.time()
+        response = await _gemini_send_with_retry(chat, last_user_text)
+        round_ms = (time.time() - t_round) * 1000
+        logger.info("[LLM Proxy] ── Gemini round 1: %.0fms ──", round_ms)
+
+        for round_num in range(1, MAX_TOOL_ROUNDS + 1):
+            if not response.candidates or not response.candidates[0].content:
+                logger.warning("[LLM Proxy] Gemini returned empty response (round %d)", round_num)
+                yield _sse({"content": "I'm sorry, I wasn't able to process that. Could you rephrase?"})
+                full_content += "I'm sorry, I wasn't able to process that. Could you rephrase?"
+                break
+
+            parts = response.candidates[0].content.parts or []
+
+            # Check for function calls (skip thought parts)
+            fc_part = None
+            for part in parts:
+                if getattr(part, "thought", False):
+                    continue
+                if part.function_call and part.function_call.name:
+                    fc_part = part
+                    break
+
+            # Extract text content (skip thought parts)
+            round_text = _extract_gemini_text(response)
+
+            logger.info("[LLM Proxy]   Gemini round %d: text=%d chars, function_call=%s",
+                        round_num, len(round_text), fc_part.function_call.name if fc_part else None)
+
+            if not fc_part:
+                # No tool call — stream the text response to Vapi
+                if round_text:
+                    words = round_text.split(" ")
+                    chunk_size = 3
+                    for i in range(0, len(words), chunk_size):
+                        chunk_text = " ".join(words[i:i + chunk_size])
+                        if i > 0:
+                            chunk_text = " " + chunk_text
+                        yield _sse({"content": chunk_text})
+                        full_content += chunk_text
+                break
+
+            # ── Execute the function call ──────────────────────────────
+            fn_name = fc_part.function_call.name
+            fn_args = dict(fc_part.function_call.args) if fc_part.function_call.args else {}
+
+            logger.info("[LLM Proxy]   🔧 TOOL (Gemini): %s(%s)", fn_name, json.dumps(fn_args)[:300])
+
+            # Date correction for get_available_slots
+            if fn_name == "get_available_slots":
+                user_text = _last_user_message(messages)
+                tenant_tz = tenant_ctx.timezone if tenant_ctx else DEFAULT_TIMEZONE
+                resolved = _resolve_dow_to_date(user_text, tz_name=tenant_tz)
+                model_date = fn_args.get("date", "")
+                if resolved and resolved != model_date:
+                    logger.warning("[LLM Proxy]   📅 Date correction: %r → %r", model_date, resolved)
+                    fn_args["date"] = resolved
+
+            tool_result = await _execute_tool(fn_name, fn_args, tenant_ctx=tenant_ctx)
+            logger.info("[LLM Proxy]   🔧 RESULT (Gemini): %s",
+                        json.dumps(tool_result, default=str)[:500])
+
+            # ── Vapi live-transfer (same logic as Ollama path) ─────────
+            if (
+                fn_name == "escalate_to_human"
+                and isinstance(tool_result, dict)
+                and tool_result.get("action") == "transfer"
+            ):
+                transfer_dest = (tool_result.get("destination") or "").strip()
+                if not transfer_dest and tenant_ctx:
+                    transfer_dest = (
+                        tenant_ctx.escalation_transfer_number
+                        or tenant_ctx.escalation_phone
+                        or ""
+                    ).strip()
+                if transfer_dest:
+                    logger.info("[LLM Proxy] 📞 escalate_to_human → Vapi transferCall to %s", transfer_dest)
+                    handoff = "Let me transfer you to one of our team members now. Please hold."
+                    words = handoff.split(" ")
+                    for i in range(0, len(words), 3):
+                        chunk_text = " ".join(words[i:i + 3])
+                        if i > 0:
+                            chunk_text = " " + chunk_text
+                        yield _sse({"content": chunk_text})
+                        full_content += chunk_text
+                    yield _sse({
+                        "tool_calls": [{
+                            "index": 0,
+                            "id": f"call_transfer_{int(time.time())}",
+                            "type": "function",
+                            "function": {
+                                "name": "transferCall",
+                                "arguments": json.dumps({"destination": transfer_dest}),
+                            },
+                        }]
+                    })
+                    yield _sse({}, finish_reason="tool_calls")
+                    yield "data: [DONE]\n\n"
+                    return
+                else:
+                    logger.info("[LLM Proxy] escalate_to_human ran but no transfer number — SMS only")
+
+            if not isinstance(tool_result, dict):
+                tool_result = {"result": tool_result}
+
+            # Feed the tool result back to Gemini via the same chat session.
+            # The chat object tracks history internally, so we just send the
+            # function response and it appends the prior model function_call +
+            # this function_response automatically.
+            t_round = time.time()
+            response = await _gemini_send_with_retry(
+                chat,
+                gtypes.Part(
+                    function_response=gtypes.FunctionResponse(
+                        name=fn_name, response=tool_result,
+                    ),
+                ),
+            )
+            round_ms = (time.time() - t_round) * 1000
+            logger.info("[LLM Proxy] ── Gemini round %d: %.0fms ──", round_num + 1, round_ms)
+        else:
+            # Loop exhausted MAX_TOOL_ROUNDS — the last `response` from Gemini
+            # (after the final function_response) was never checked. Extract
+            # whatever text Gemini returned so the caller doesn't get silence.
+            logger.warning("[LLM Proxy] Exceeded %d Gemini tool rounds", MAX_TOOL_ROUNDS)
+            if response and response.candidates:
+                final_text = _extract_gemini_text(response)
+                if final_text:
+                    words = final_text.split(" ")
+                    for i in range(0, len(words), 3):
+                        chunk_text = " ".join(words[i:i + 3])
+                        if i > 0:
+                            chunk_text = " " + chunk_text
+                        yield _sse({"content": chunk_text})
+                        full_content += chunk_text
+            if not full_content:
+                fallback = "I'm sorry, I'm having trouble accessing our scheduling system right now. Could you try again in a moment?"
+                yield _sse({"content": fallback})
+                full_content += fallback
+
+    except Exception as exc:
+        elapsed = (time.time() - t0) * 1000
+        logger.error("[LLM Proxy] Gemini streaming failed after %.0fms: %s", elapsed, exc, exc_info=True)
+        yield _sse({"content": "I apologize, I'm having a brief technical difficulty. Could you repeat that?"})
+
+    elapsed = (time.time() - t0) * 1000
+    logger.info("=" * 70)
+    logger.info("[LLM Proxy] STREAMED RESPONSE TO VAPI (Gemini)")
     logger.info("[LLM Proxy]   Total time:   %.0fms", elapsed)
     logger.info("[LLM Proxy]   Content len:  %d chars", len(full_content))
     logger.info("[LLM Proxy]   Content:      %s", full_content[:500])
@@ -799,7 +1147,7 @@ def _is_explicit_human_request(messages: list) -> bool:
     return any(p in user_text for p in _HUMAN_REQUEST_PHRASES)
 
 
-def _resolve_dow_to_date(user_text: str, tz_name: str = "America/Chicago") -> str | None:
+def _resolve_dow_to_date(user_text: str, tz_name: str = DEFAULT_TIMEZONE) -> str | None:
     """
     If the user's message mentions a day-of-week or 'tomorrow'/'today',
     return the corresponding YYYY-MM-DD in the tenant's timezone.
@@ -809,7 +1157,7 @@ def _resolve_dow_to_date(user_text: str, tz_name: str = "America/Chicago") -> st
     try:
         tz = ZoneInfo(tz_name)
     except Exception:
-        tz = ZoneInfo("America/Chicago")
+        tz = ZoneInfo(DEFAULT_TIMEZONE)
     today = datetime.now(tz)
     text = user_text.lower()
 
@@ -963,7 +1311,7 @@ async def _call_with_tools(
             # ── Correct date if user said a day-of-week ──
             if fn_name == "get_available_slots":
                 user_text = _last_user_message(messages)
-                tenant_tz = tenant_ctx.timezone if tenant_ctx else "America/Chicago"
+                tenant_tz = tenant_ctx.timezone if tenant_ctx else DEFAULT_TIMEZONE
                 resolved = _resolve_dow_to_date(user_text, tz_name=tenant_tz)
                 model_date = fn_args.get("date", "")
                 if resolved and resolved != model_date:
@@ -1012,6 +1360,20 @@ async def _execute_tool(
     t0 = time.time()
     logger.info("[Tool Exec] Executing: %s (tenant=%s)", name,
                 tenant_ctx.slug if tenant_ctx else "default")
+
+    # ── Normalise any phone number in the args to E.164 ──────────────
+    # The AI agent receives bare digits from the patient ("6352418405")
+    # or sometimes with partial formatting. We normalise using the
+    # tenant's region so "6352418405" → "+16352418405" for a US clinic
+    # and "9876543210" → "+919876543210" for an Indian clinic.
+    if "phone" in args and args["phone"]:
+        from backend.services.patient_service import _normalise_phone, _region_from_timezone
+        region = _region_from_timezone(tenant_ctx.timezone if tenant_ctx else None)
+        raw_phone = args["phone"]
+        args["phone"] = _normalise_phone(raw_phone, default_region=region)
+        if args["phone"] != raw_phone:
+            logger.info("[Tool Exec] Normalised phone: %s → %s (region=%s)",
+                        raw_phone, args["phone"], region)
 
     try:
         if name == "get_available_slots":
@@ -1076,15 +1438,16 @@ async def _execute_tool(
             }
 
         elif name == "book_appointment":
-            # ── Validate provider_id is present ──────────────────────
-            if not args.get("provider_id", "").strip():
+            # ── Validate provider_id is present (or auto-assign) ─────
+            provider_id_raw = (args.get("provider_id") or "").strip()
+            if not provider_id_raw:
                 logger.warning("[Tool Exec] book_appointment rejected — no provider_id")
                 return {
                     "ok": False,
                     "error": "missing_provider",
                     "summary_for_assistant": (
                         "Provider is required — please ask the patient for their provider "
-                        "preference first, or assign any available provider."
+                        "preference first, or use provider_id='__auto__' for automatic assignment."
                     ),
                 }
 
@@ -1121,11 +1484,68 @@ async def _execute_tool(
             # Email: leave blank if patient didn't provide one
             email = args.get("email", "") or ""
 
-            # Provider: look up name for confirmation message
-            provider_id_str = args.get("provider_id", "")
+            # Provider: look up name or auto-assign
+            provider_id_str = (args.get("provider_id") or "").strip()
             provider_id = None
             provider_name = None
-            if provider_id_str:
+            auto_assigned = False
+
+            if provider_id_str == "__auto__":
+                # Auto-assign: find the best available provider
+                try:
+                    from backend.services import provider_service
+                    from dateutil import parser as dt_parser_prov
+                    slot_for_auto = args.get("slot_time", "")
+                    auto_dt = dt_parser_prov.parse(slot_for_auto) if slot_for_auto else None
+                    appt_type_for_auto = args.get("appointment_type", "consultation")
+                    # Get duration from tenant appointment types
+                    auto_duration = 30
+                    if tenant_ctx and tenant_ctx.appointment_types:
+                        for at in tenant_ctx.appointment_types:
+                            if at.get("code") == appt_type_for_auto:
+                                auto_duration = at.get("duration_minutes", 30)
+                                break
+
+                    if auto_dt and tenant_ctx:
+                        auto_provider = await provider_service.auto_assign_provider(
+                            tenant_id=tenant_ctx.tenant_id,
+                            appointment_type=appt_type_for_auto,
+                            requested_datetime=auto_dt,
+                            duration_minutes=auto_duration,
+                        )
+                        if auto_provider:
+                            import uuid as uuid_mod
+                            provider_id = uuid_mod.UUID(auto_provider["id"])
+                            provider_name = auto_provider["name"]
+                            provider_id_str = auto_provider["id"]
+                            args["provider_id"] = provider_id_str
+                            auto_assigned = True
+                            logger.info("[Tool Exec] Auto-assigned provider: %s (%s)", provider_name, provider_id)
+                        else:
+                            logger.info("[Tool Exec] Auto-assign failed — no providers available")
+                            return {
+                                "ok": False,
+                                "no_provider_available": True,
+                                "summary_for_assistant": (
+                                    "No providers are available at the requested time. "
+                                    "Offer to add the patient to the waitlist — they'll be "
+                                    "notified as soon as a slot opens up."
+                                ),
+                            }
+                    else:
+                        return {
+                            "ok": False,
+                            "error": "missing_slot_time",
+                            "summary_for_assistant": "Cannot auto-assign without a slot time. Please confirm the time first.",
+                        }
+                except Exception as auto_exc:
+                    logger.warning("[Tool Exec] Auto-assign error: %s", auto_exc)
+                    return {
+                        "ok": False,
+                        "error": "auto_assign_failed",
+                        "summary_for_assistant": "Could not auto-assign a provider. Please ask the patient for a provider preference.",
+                    }
+            elif provider_id_str:
                 try:
                     from backend.services import provider_service
                     import uuid as uuid_mod
@@ -1187,6 +1607,7 @@ async def _execute_tool(
                 start_time=slot_time,
                 tenant_ctx=tenant_ctx,
                 appointment_type_key=appt_type,
+                provider_id=provider_id,
             )
 
             if result:
@@ -1203,31 +1624,20 @@ async def _execute_tool(
                 except Exception as sms_exc:
                     logger.warning("[Tool Exec] SMS failed: %s", sms_exc)
 
-                # Upsert patient + record appointment in DB
-                try:
-                    tenant_id = tenant_ctx.tenant_id if tenant_ctx else None
-                    booking_uid = result.get("uid", "") if isinstance(result, dict) else ""
-                    booking_id = result.get("id", "") if isinstance(result, dict) else ""
-                    await patient_service.record_appointment(
-                        patient_phone=args.get("phone", ""),
-                        appointment_type=args.get("appointment_type", ""),
-                        scheduled_at=datetime.fromisoformat(slot_time),
-                        cal_booking_uid=str(booking_uid),
-                        cal_booking_id=str(booking_id),
-                        patient_name=args.get("patient_name", ""),
-                        patient_email=email,
-                        dob=args.get("dob", ""),
-                        tenant_id=tenant_id,
-                        provider_id=provider_id,
-                    )
-                    logger.info("[Tool Exec] Appointment recorded in DB (uid=%s, provider=%s)",
-                                booking_uid, provider_id)
-                except Exception as db_exc:
-                    logger.warning("[Tool Exec] Patient/appointment DB upsert failed: %s", db_exc)
+                # Note: patient upsert + appointment creation are handled inside
+                # native_scheduling.create_native_booking() — no need to call
+                # record_appointment() separately (that would create duplicates).
 
                 elapsed = (time.time() - t0) * 1000
                 logger.info("[Tool Exec] book_appointment → SUCCESS in %.0fms: %s", elapsed, result)
-                return {"success": True, "booking": result}
+                response = {"success": True, "booking": result}
+                if auto_assigned and provider_name:
+                    response["auto_assigned_provider"] = provider_name
+                    response["summary_for_assistant"] = (
+                        f"Appointment booked successfully! The patient has been assigned to {provider_name}. "
+                        "Let them know who their doctor will be."
+                    )
+                return response
 
             elapsed = (time.time() - t0) * 1000
             logger.error("[Tool Exec] book_appointment → FAILED in %.0fms", elapsed)

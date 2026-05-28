@@ -16,6 +16,7 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import ThemeToggle from './ThemeToggle';
 import ThemedSelect from './ui/ThemedSelect';
+import PhoneInput, { countryFromTimezone } from './ui/PhoneInput';
 import { timezoneOptions } from '../lib/timezones';
 
 const BUSINESS_TYPES = [
@@ -315,18 +316,14 @@ export default function TenantRegister() {
                 <label className={labelClass}>
                   Phone <span className="text-red-400">*</span>
                 </label>
-                <div className="relative">
-                  <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                  <input
-                    type="tel"
-                    value={form.owner_phone}
-                    onChange={(e) => updateField('owner_phone', e.target.value)}
-                    placeholder="+1 (512) 555-0100"
-                    required
-                    minLength={5}
-                    className={inputWithIconClass}
-                  />
-                </div>
+                <PhoneInput
+                  value={form.owner_phone}
+                  onChange={(v) => updateField('owner_phone', v)}
+                  defaultCountry={countryFromTimezone(form.timezone)}
+                  placeholder="(512) 555-0100"
+                  required
+                  icon={Phone}
+                />
               </div>
             </div>
           </div>
@@ -360,22 +357,18 @@ export default function TenantRegister() {
               <label className={labelClass}>
                 Escalation Phone Number <span className="text-red-400">*</span>
               </label>
-              <div className="relative">
-                <PhoneCall className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                <input
-                  type="tel"
-                  value={form.escalation_phone}
-                  onChange={(e) => {
-                    setEscalationSameAsPhone(false);
-                    updateField('escalation_phone', e.target.value);
-                  }}
-                  placeholder="+1 (512) 555-0200"
-                  required
-                  minLength={5}
-                  disabled={escalationSameAsPhone}
-                  className={`${inputWithIconClass} ${escalationSameAsPhone ? 'opacity-60 cursor-not-allowed' : ''}`}
-                />
-              </div>
+              <PhoneInput
+                value={form.escalation_phone}
+                onChange={(v) => {
+                  setEscalationSameAsPhone(false);
+                  updateField('escalation_phone', v);
+                }}
+                defaultCountry={countryFromTimezone(form.timezone)}
+                placeholder="(512) 555-0200"
+                required
+                disabled={escalationSameAsPhone}
+                icon={PhoneCall}
+              />
               <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
                 Usually your front desk or on-call provider. You can add custom
                 emergency guidance text later from the Agent Config page.

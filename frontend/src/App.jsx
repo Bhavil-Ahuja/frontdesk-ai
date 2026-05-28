@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { Routes, Route, NavLink, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard,
@@ -17,6 +17,7 @@ import {
   Moon,
   Sun,
   UserCircle,
+  HelpCircle,
 } from 'lucide-react';
 
 import Dashboard from './components/Dashboard';
@@ -36,50 +37,26 @@ import WaitlistView from './components/WaitlistView';
 import SMSConversations from './components/SMSConversations';
 import PatientCRM from './components/PatientCRM';
 import Profile from './components/Profile';
+import SupportTickets from './components/SupportTickets';
 import { useAuth } from './contexts/AuthContext';
 import { useTheme } from './contexts/ThemeContext';
 
 // ── Tenant nav (always visible to logged-in tenants) ─────────────────────────
-// `chatOnly` items are only included when LOCAL_CHAT_MODE is on (server flag).
+// Items with `requireFeature` are hidden when the corresponding feature flag is off.
 const TENANT_NAV = [
   { to: '/dashboard', icon: LayoutDashboard, label: 'Overview' },
   { to: '/setup', icon: Rocket, label: 'Setup Guide' },
-  { to: '/chat', icon: MessageSquare, label: 'Test Agent', chatOnly: true },
+  { to: '/chat', icon: MessageSquare, label: 'Test Agent' },
   { to: '/patients', icon: Contact, label: 'Patients' },
   { to: '/appointments', icon: CalendarDays, label: 'Appointments' },
   { to: '/providers', icon: Users, label: 'Doctors' },
   { to: '/waitlist', icon: ClipboardList, label: 'Waitlist' },
-  { to: '/sms', icon: MessagesSquare, label: 'SMS Messages' },
+  { to: '/sms', icon: MessagesSquare, label: 'SMS Messages', requireFeature: 'twilio' },
   { to: '/knowledge', icon: BookOpen, label: 'Practice Info' },
   { to: '/settings', icon: Settings, label: 'Agent Config' },
+  { to: '/support', icon: HelpCircle, label: 'Support' },
 ];
 
-// ── Hook: ask the backend whether local chat mode is enabled ─────────────────
-function useLocalChatEnabled() {
-  const [enabled, setEnabled] = useState(false);
-  const [checked, setChecked] = useState(false); // true once we've fetched
-  useEffect(() => {
-    let cancelled = false;
-    fetch('/api/chat/enabled')
-      .then((r) => (r.ok ? r.json() : { enabled: false }))
-      .then((data) => {
-        if (!cancelled) {
-          setEnabled(!!data?.enabled);
-          setChecked(true);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setEnabled(false);
-          setChecked(true);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-  return { enabled, checked };
-}
 
 export default function App() {
   const { user, loading, isAuthenticated } = useAuth();
@@ -135,7 +112,6 @@ function AppShell() {
   const { dark, toggle: toggleTheme } = useTheme();
   const navigate = useNavigate();
   const location = useLocation();
-  const { enabled: localChatEnabled, checked: chatChecked } = useLocalChatEnabled();
 
   function handleLogout() {
     logout();
@@ -169,7 +145,12 @@ function AppShell() {
         {/* Tenant Navigation (hidden for admin-only users) */}
         {!isAdmin && (
           <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
-            {TENANT_NAV.filter((item) => !item.chatOnly || localChatEnabled).map(({ to, icon: Icon, label }) => (
+            {TENANT_NAV.filter(({ requireFeature }) => {
+              if (!requireFeature) return true;
+              if (requireFeature === 'twilio') return user?.twilio_enabled !== false;
+              if (requireFeature === 'vapi') return user?.vapi_enabled !== false;
+              return true;
+            }).map(({ to, icon: Icon, label }) => (
               <NavLink
                 key={to}
                 to={to}
@@ -291,21 +272,12 @@ function AppShell() {
               </ProtectedRoute>
             }
           />
-          {/* Local chat — always mounted to prevent redirect race on reload.
-              Shows loading until we've checked the flag, then either LocalChat or redirect. */}
+          {/* Test Agent chat — always available for testing the LLM + tools pipeline */}
           <Route
             path="/chat"
             element={
               <ProtectedRoute>
-                {!chatChecked ? (
-                  <div className="flex items-center justify-center h-full">
-                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
-                  </div>
-                ) : localChatEnabled ? (
-                  <LocalChat />
-                ) : (
-                  <Navigate to="/dashboard" replace />
-                )}
+                <LocalChat />
               </ProtectedRoute>
             }
           />
@@ -362,6 +334,14 @@ function AppShell() {
             element={
               <ProtectedRoute>
                 <AgentConfig />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/support"
+            element={
+              <ProtectedRoute>
+                <SupportTickets />
               </ProtectedRoute>
             }
           />

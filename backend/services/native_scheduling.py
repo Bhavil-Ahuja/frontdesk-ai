@@ -28,6 +28,12 @@ from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import async_session
+from backend.defaults import (
+    DEFAULT_APPOINTMENT_DURATION_MINUTES,
+    DEFAULT_BUSINESS_HOURS,
+    DEFAULT_SLOT_INTERVAL_MINUTES,
+    DEFAULT_TIMEZONE,
+)
 from backend.models.appointment import Appointment, AppointmentStatus, BookedVia
 
 logger = logging.getLogger(__name__)
@@ -36,8 +42,8 @@ logger = logging.getLogger(__name__)
 
 _DOW_KEYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 
-# Default slot interval in minutes (granularity of the scheduling grid)
-_SLOT_INTERVAL = 30
+# Slot interval from centralized defaults
+_SLOT_INTERVAL = DEFAULT_SLOT_INTERVAL_MINUTES
 
 
 # ── Availability ─────────────────────────────────────────────────────────────
@@ -45,10 +51,10 @@ _SLOT_INTERVAL = 30
 
 async def get_native_slots(
     date_str: str,
-    duration_minutes: int = 60,
+    duration_minutes: int = DEFAULT_APPOINTMENT_DURATION_MINUTES,
     tenant_id: uuid.UUID | None = None,
     business_hours: dict[str, Any] | None = None,
-    tz_name: str = "America/Chicago",
+    tz_name: str = DEFAULT_TIMEZONE,
     max_concurrent: int = 1,
 ) -> list[str]:
     """
@@ -97,20 +103,13 @@ async def get_native_slots(
     try:
         local_tz = ZoneInfo(tz_name)
     except Exception:
-        local_tz = ZoneInfo("America/Chicago")
+        local_tz = ZoneInfo(DEFAULT_TIMEZONE)
 
     dow_key = _DOW_KEYS[target_date.weekday()]
 
     # ── Get business hours for this day ──────────────────────────────────
     if not business_hours:
-        # Default: Mon-Fri 8am-5pm, Sat-Sun closed
-        business_hours = {
-            "monday": {"open": "08:00", "close": "17:00"},
-            "tuesday": {"open": "08:00", "close": "17:00"},
-            "wednesday": {"open": "08:00", "close": "17:00"},
-            "thursday": {"open": "08:00", "close": "17:00"},
-            "friday": {"open": "08:00", "close": "17:00"},
-        }
+        business_hours = DEFAULT_BUSINESS_HOURS
 
     day_hours = business_hours.get(dow_key)
     if not day_hours:
@@ -173,7 +172,7 @@ async def get_native_slots(
         # Ensure UTC-aware for comparison
         if appt_start.tzinfo is None:
             appt_start = appt_start.replace(tzinfo=timezone.utc)
-        appt_end = appt_start + timedelta(minutes=appt.duration_minutes or 60)
+        appt_end = appt_start + timedelta(minutes=appt.duration_minutes or DEFAULT_APPOINTMENT_DURATION_MINUTES)
         booked_ranges.append((appt_start, appt_end))
 
     available: list[str] = []
@@ -205,10 +204,10 @@ async def get_native_slots(
 
 async def get_provider_aware_slots(
     date_str: str,
-    duration_minutes: int = 60,
+    duration_minutes: int = DEFAULT_APPOINTMENT_DURATION_MINUTES,
     tenant_id: uuid.UUID | None = None,
     business_hours: dict[str, Any] | None = None,
-    tz_name: str = "America/Chicago",
+    tz_name: str = DEFAULT_TIMEZONE,
     provider_id: uuid.UUID | None = None,
     holidays: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
@@ -270,19 +269,13 @@ async def get_provider_aware_slots(
     try:
         local_tz = ZoneInfo(tz_name)
     except Exception:
-        local_tz = ZoneInfo("America/Chicago")
+        local_tz = ZoneInfo(DEFAULT_TIMEZONE)
 
     dow_key = _DOW_KEYS[target_date.weekday()]
 
     # Default business hours
     if not business_hours:
-        business_hours = {
-            "monday": {"open": "08:00", "close": "17:00"},
-            "tuesday": {"open": "08:00", "close": "17:00"},
-            "wednesday": {"open": "08:00", "close": "17:00"},
-            "thursday": {"open": "08:00", "close": "17:00"},
-            "friday": {"open": "08:00", "close": "17:00"},
-        }
+        business_hours = DEFAULT_BUSINESS_HOURS
 
     day_hours = business_hours.get(dow_key)
     if not day_hours:
@@ -362,7 +355,7 @@ async def get_provider_aware_slots(
             appt_start = appt.scheduled_at
             if appt_start.tzinfo is None:
                 appt_start = appt_start.replace(tzinfo=timezone.utc)
-            appt_end = appt_start + timedelta(minutes=appt.duration_minutes or 60)
+            appt_end = appt_start + timedelta(minutes=appt.duration_minutes or DEFAULT_APPOINTMENT_DURATION_MINUTES)
             provider_bookings[appt.provider_id].append((appt_start, appt_end))
 
     # For each slot, check each provider's availability
@@ -416,7 +409,7 @@ async def create_native_booking(
     patient_info: dict[str, str],
     appointment_type: str,
     start_time: str,
-    duration_minutes: int = 60,
+    duration_minutes: int = DEFAULT_APPOINTMENT_DURATION_MINUTES,
     provider_id: uuid.UUID | None = None,
 ) -> dict[str, Any] | None:
     """
@@ -441,6 +434,20 @@ async def create_native_booking(
 
     booking_uid = f"native-{uuid.uuid4().hex[:12]}"
 
+    # Normalise phone so it matches patient lookups (E.164 format)
+    from backend.services.patient_service import _normalise_phone, upsert_patient
+    norm_phone = _normalise_phone(patient_info.get("phone", ""))
+
+    # Upsert the patient record so caller recognition works on next call
+    await upsert_patient(
+        name=patient_info.get("name", ""),
+        phone=norm_phone,
+        dob=patient_info.get("dob", ""),
+        email=patient_info.get("email", ""),
+        appointment_type=appointment_type,
+        tenant_id=tenant_id,
+    )
+
     # Local import to avoid a hard dependency on SQLAlchemy at import time
     from sqlalchemy.exc import IntegrityError
 
@@ -450,7 +457,7 @@ async def create_native_booking(
                 tenant_id=tenant_id,
                 cal_booking_uid=booking_uid,
                 patient_name=patient_info.get("name", ""),
-                patient_phone=patient_info.get("phone", ""),
+                patient_phone=norm_phone,
                 patient_email=patient_info.get("email", ""),
                 date_of_birth=patient_info.get("dob", ""),
                 appointment_type=appointment_type,
