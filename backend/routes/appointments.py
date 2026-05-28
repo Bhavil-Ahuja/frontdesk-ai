@@ -19,7 +19,7 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import async_session, get_db
-from backend.defaults import DEFAULT_TIMEZONE
+from backend.defaults import DEFAULT_APPOINTMENT_DURATION_MINUTES, DEFAULT_TIMEZONE
 from backend.models.appointment import Appointment, AppointmentStatus, BookedVia
 from backend.models.provider import Provider
 from backend.models.tenant import Tenant
@@ -437,7 +437,13 @@ async def sync_google_calendar(
                 continue
 
             scheduled_at = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
-            duration = 60
+            # Derive default duration from tenant's appointment config (source of truth)
+            _tenant_appt_types = getattr(current_user, "appointment_types", None) or []
+            duration = (
+                _tenant_appt_types[0].get("duration_minutes", DEFAULT_APPOINTMENT_DURATION_MINUTES)
+                if _tenant_appt_types
+                else DEFAULT_APPOINTMENT_DURATION_MINUTES
+            )
             if end_str:
                 end_dt = datetime.fromisoformat(end_str.replace("Z", "+00:00"))
                 duration = max(int((end_dt - scheduled_at).total_seconds() / 60), 5)

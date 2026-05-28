@@ -56,6 +56,7 @@ async def get_native_slots(
     business_hours: dict[str, Any] | None = None,
     tz_name: str = DEFAULT_TIMEZONE,
     max_concurrent: int = 1,
+    exclude_booking_uid: str | None = None,
 ) -> list[str]:
     """
     Compute available time slots on `date_str` for an appointment of
@@ -88,6 +89,9 @@ async def get_native_slots(
         tz_name: tenant's timezone string
         max_concurrent: how many overlapping bookings are allowed per slot
             before it's considered full. Default 1 (classic single-booking).
+        exclude_booking_uid: if provided, excludes this booking from the
+            overlap check. Used during rescheduling so the patient's own
+            appointment doesn't block the new time they want to move to.
 
     Returns:
         List of ISO datetime strings with timezone offset
@@ -127,6 +131,11 @@ async def get_native_slots(
     close_time = dtime(close_h, close_m)
 
     # ── Generate slot grid in local timezone, convert to UTC ─────────────
+    # Use the smaller of the appointment duration and the default slot interval
+    # so shorter appointments (e.g. 15 min) get finer-grained slots (:00, :15,
+    # :30, :45) instead of only the default 30-min grid (:00, :30).
+    effective_interval = min(duration_minutes, _SLOT_INTERVAL)
+
     candidate_slots_local: list[datetime] = []
     candidate_slots_utc: list[datetime] = []
 
@@ -136,7 +145,7 @@ async def get_native_slots(
     while current_local <= latest_start_local:
         candidate_slots_local.append(current_local)
         candidate_slots_utc.append(current_local.astimezone(timezone.utc))
-        current_local += timedelta(minutes=_SLOT_INTERVAL)
+        current_local += timedelta(minutes=effective_interval)
 
     if not candidate_slots_utc:
         return []
@@ -157,22 +166,30 @@ async def get_native_slots(
         )
         if tenant_id:
             query = query.where(Appointment.tenant_id == tenant_id)
+        # Exclude the appointment being rescheduled so the patient's own
+        # booking doesn't block the new slot they want to move to.
+        if exclude_booking_uid:
+            query = query.where(Appointment.cal_booking_uid != exclude_booking_uid)
 
         result = await session.execute(query)
         existing_appointments = list(result.scalars().all())
 
-    logger.info("[NativeSched] %s: %d candidates, %d existing appts (max_concurrent=%d)",
-                date_str, len(candidate_slots_utc), len(existing_appointments), max_concurrent)
+    logger.info("[NativeSched] %s: %d candidates, %d existing appts (max_concurrent=%d, exclude=%s)",
+                date_str, len(candidate_slots_utc), len(existing_appointments), max_concurrent,
+                exclude_booking_uid or "none")
 
     # ── Count overlaps per slot (all in UTC) ─────────────────────────────
-    # Build list of (start_utc, end_utc) for existing appointments
+    # Build list of (start_utc, end_utc) for existing appointments.
+    # Each appointment's stored duration_minutes is the source of truth
+    # (written from tenant config at booking time). The fallback to the
+    # caller-supplied duration_minutes only fires for legacy rows with null.
     booked_ranges: list[tuple[datetime, datetime]] = []
     for appt in existing_appointments:
         appt_start = appt.scheduled_at
         # Ensure UTC-aware for comparison
         if appt_start.tzinfo is None:
             appt_start = appt_start.replace(tzinfo=timezone.utc)
-        appt_end = appt_start + timedelta(minutes=appt.duration_minutes or DEFAULT_APPOINTMENT_DURATION_MINUTES)
+        appt_end = appt_start + timedelta(minutes=appt.duration_minutes or duration_minutes)
         booked_ranges.append((appt_start, appt_end))
 
     available: list[str] = []
@@ -210,6 +227,7 @@ async def get_provider_aware_slots(
     tz_name: str = DEFAULT_TIMEZONE,
     provider_id: uuid.UUID | None = None,
     holidays: list[dict[str, Any]] | None = None,
+    exclude_booking_uid: str | None = None,
 ) -> dict[str, Any]:
     """
     Get available slots with provider-level concurrency tracking.
@@ -292,7 +310,9 @@ async def get_provider_aware_slots(
     open_time = dtime(open_h, open_m)
     close_time = dtime(close_h, close_m)
 
-    # Generate candidate slots
+    # Generate candidate slots — use finer granularity for shorter appointments
+    effective_interval = min(duration_minutes, _SLOT_INTERVAL)
+
     candidate_slots_local: list[datetime] = []
     candidate_slots_utc: list[datetime] = []
 
@@ -302,7 +322,7 @@ async def get_provider_aware_slots(
     while current_local <= latest_start_local:
         candidate_slots_local.append(current_local)
         candidate_slots_utc.append(current_local.astimezone(timezone.utc))
-        current_local += timedelta(minutes=_SLOT_INTERVAL)
+        current_local += timedelta(minutes=effective_interval)
 
     if not candidate_slots_utc:
         return {"slots": [], "provider_filter": str(provider_id) if provider_id else None}
@@ -325,7 +345,8 @@ async def get_provider_aware_slots(
         # No providers configured — fall back to global slot availability
         logger.info("[NativeSched] No providers found, using global availability")
         simple_slots = await get_native_slots(
-            date_str, duration_minutes, tenant_id, business_hours, tz_name, max_concurrent=1
+            date_str, duration_minutes, tenant_id, business_hours, tz_name,
+            max_concurrent=1, exclude_booking_uid=exclude_booking_uid,
         )
         return {
             "slots": [{"time": s, "available_providers": []} for s in simple_slots],
@@ -345,6 +366,11 @@ async def get_provider_aware_slots(
                 Appointment.status == AppointmentStatus.CONFIRMED,
             )
         )
+        # Exclude the appointment being rescheduled so the patient's own
+        # booking doesn't block the new slot they want to move to.
+        if exclude_booking_uid:
+            appt_query = appt_query.where(Appointment.cal_booking_uid != exclude_booking_uid)
+
         appt_result = await session.execute(appt_query)
         existing_appointments = list(appt_result.scalars().all())
 
@@ -355,7 +381,7 @@ async def get_provider_aware_slots(
             appt_start = appt.scheduled_at
             if appt_start.tzinfo is None:
                 appt_start = appt_start.replace(tzinfo=timezone.utc)
-            appt_end = appt_start + timedelta(minutes=appt.duration_minutes or DEFAULT_APPOINTMENT_DURATION_MINUTES)
+            appt_end = appt_start + timedelta(minutes=appt.duration_minutes or duration_minutes)
             provider_bookings[appt.provider_id].append((appt_start, appt_end))
 
     # For each slot, check each provider's availability

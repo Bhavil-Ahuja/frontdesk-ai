@@ -61,14 +61,19 @@ export default function AppointmentManager() {
   const [refreshing, setRefreshing] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState(null);
-  const [weekOffset, setWeekOffset] = useState(0);
+  const [viewYear, setViewYear] = useState(() => new Date().getFullYear());
+  const [viewMonth, setViewMonth] = useState(() => new Date().getMonth());
   const [error, setError] = useState(null);
   const [providers, setProviders] = useState([]);
   const [selectedProvider, setSelectedProvider] = useState(null);
-  // When set, the grid highlights this exact day inside the visible week.
+  // When set, the grid highlights this exact day inside the visible month.
   // Used by the calendar date picker so admins can jump to a date and have
-  // it stand out in the week grid.
+  // it stand out in the month grid.
   const [highlightedDate, setHighlightedDate] = useState(null);
+
+  // Tenant config: holidays + business hours (fetched from /api/config)
+  const [holidays, setHolidays] = useState([]);
+  const [businessHours, setBusinessHours] = useState(null);
 
   // Notes editing state
   const [editingNotes, setEditingNotes] = useState(false);
@@ -82,6 +87,7 @@ export default function AppointmentManager() {
   useEffect(() => {
     fetchAppointments();
     fetchProviders();
+    fetchConfig();
     // Auto-refresh every 60s so new bookings flow in live
     const interval = setInterval(fetchAppointments, 60000);
     return () => clearInterval(interval);
@@ -93,6 +99,16 @@ export default function AppointmentManager() {
       setProviders(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error('Failed to fetch providers:', err);
+    }
+  }
+
+  async function fetchConfig() {
+    try {
+      const data = await apiFetch('/api/config');
+      setHolidays(Array.isArray(data.holidays) ? data.holidays : []);
+      setBusinessHours(data.business_hours || null);
+    } catch (err) {
+      console.error('Failed to fetch config:', err);
     }
   }
 
@@ -194,30 +210,40 @@ export default function AppointmentManager() {
     return d;
   }
 
-  // Jump to a specific date — set weekOffset so the date appears in the week
-  // grid and highlight it. Used by the calendar date picker.
+  // Jump to a specific date — switch to its month and highlight it.
   function jumpToDate(date) {
     if (!date) return;
     const target = new Date(date);
     target.setHours(0, 0, 0, 0);
-    const targetMonday = mondayOf(target);
-    const todayMonday = mondayOf(new Date());
-    const diffMs = targetMonday - todayMonday;
-    const diffWeeks = Math.round(diffMs / (7 * 24 * 60 * 60 * 1000));
-    setWeekOffset(diffWeeks);
+    setViewYear(target.getFullYear());
+    setViewMonth(target.getMonth());
     setHighlightedDate(target);
   }
 
-  // Build a week grid
-  const today = new Date();
-  const weekStart = new Date(today);
-  weekStart.setDate(today.getDate() - today.getDay() + 1 + weekOffset * 7); // Monday
+  function navigateMonth(delta) {
+    const d = new Date(viewYear, viewMonth + delta, 1);
+    setViewYear(d.getFullYear());
+    setViewMonth(d.getMonth());
+  }
 
-  const weekDays = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(weekStart);
-    d.setDate(weekStart.getDate() + i);
-    return d;
-  });
+  const today = new Date();
+
+  // Build full-month grid (Mon–Sun rows, includes leading/trailing days)
+  const monthGridDays = (() => {
+    const firstOfMonth = new Date(viewYear, viewMonth, 1);
+    const lastOfMonth = new Date(viewYear, viewMonth + 1, 0);
+    const startDay = mondayOf(firstOfMonth);
+    const endDay = new Date(lastOfMonth);
+    const endDow = endDay.getDay();
+    if (endDow !== 0) endDay.setDate(endDay.getDate() + (7 - endDow));
+    const days = [];
+    const cursor = new Date(startDay);
+    while (cursor <= endDay) {
+      days.push(new Date(cursor));
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    return days;
+  })();
 
   function getAppointmentsForDay(date) {
     return appointments.filter((a) => {
@@ -246,7 +272,12 @@ export default function AppointmentManager() {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Appointments</h2>
-          <p className="text-gray-500 dark:text-gray-400 mt-1">{appointments.length} total appointments</p>
+          <p className="text-gray-500 dark:text-gray-400 mt-1">
+            {appointments.filter((a) => {
+              const d = new Date(a.scheduled_at);
+              return d >= new Date() && d.getMonth() === viewMonth && d.getFullYear() === viewYear;
+            }).length} remaining appointments this month
+          </p>
         </div>
         <div className="flex items-center gap-3 flex-wrap">
           {/* Polished provider dropdown — replaces the basic <select> */}
@@ -256,7 +287,7 @@ export default function AppointmentManager() {
             onChange={setSelectedProvider}
           />
 
-          {/* Date picker — jump to any date's week */}
+          {/* Date picker — jump to any date's month */}
           <ThemedDatePicker
             value={highlightedDate}
             onChange={jumpToDate}
@@ -283,19 +314,19 @@ export default function AppointmentManager() {
             <RefreshCw className={`w-4 h-4 text-gray-600 dark:text-gray-400 ${refreshing ? 'animate-spin' : ''}`} />
           </button>
           <button
-            onClick={() => setWeekOffset((w) => w - 1)}
+            onClick={() => navigateMonth(-1)}
             className="p-2 rounded-lg border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
           >
             <ChevronLeft className="w-4 h-4 text-gray-600 dark:text-gray-400" />
           </button>
           <button
-            onClick={() => { setWeekOffset(0); setHighlightedDate(null); }}
+            onClick={() => { setViewYear(new Date().getFullYear()); setViewMonth(new Date().getMonth()); setHighlightedDate(null); }}
             className="px-3 py-2 text-sm font-medium text-primary-600 dark:text-primary-400 bg-primary-50 dark:bg-primary-900/30 rounded-lg hover:bg-primary-100 dark:hover:bg-primary-900/50 transition-colors"
           >
-            This Week
+            Today
           </button>
           <button
-            onClick={() => setWeekOffset((w) => w + 1)}
+            onClick={() => navigateMonth(1)}
             className="p-2 rounded-lg border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
           >
             <ChevronRight className="w-4 h-4 text-gray-600 dark:text-gray-400" />
@@ -325,97 +356,137 @@ export default function AppointmentManager() {
         </div>
       )}
 
-      {/* Week label */}
-      <p className="text-sm text-gray-500 dark:text-gray-400">
-        {weekDays[0].toLocaleDateString('en-US', { month: 'long', day: 'numeric' })} —{' '}
-        {weekDays[6].toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
+      {/* Month label */}
+      <p className="text-lg font-semibold text-gray-700 dark:text-gray-300">
+        {new Date(viewYear, viewMonth).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
       </p>
 
-      {/* Calendar grid */}
-      <div className="grid grid-cols-7 gap-4">
-        {weekDays.map((day) => {
+      {/* Month calendar grid */}
+      <div className="grid grid-cols-7 gap-1">
+        {/* Day-of-week headers */}
+        {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => (
+          <div key={d} className="text-center text-[11px] font-semibold text-gray-400 dark:text-gray-500 uppercase py-2">
+            {d}
+          </div>
+        ))}
+
+        {monthGridDays.map((day) => {
           const dayApts = getAppointmentsForDay(day);
           const isToday = day.toDateString() === today.toDateString();
           const isHighlighted =
             highlightedDate && day.toDateString() === highlightedDate.toDateString();
-          const isSunday = day.getDay() === 0;
           const isPast = day < today && !isToday;
+          const isOutsideMonth = day.getMonth() !== viewMonth;
 
-          // Border / ring resolution: highlighted picked-date wins over today.
-          let borderRing =
-            'border-gray-200 dark:border-gray-700';
-          if (isHighlighted) {
-            borderRing =
-              'border-amber-400 dark:border-amber-500 ring-2 ring-amber-300 dark:ring-amber-700';
+          // Check if this day is a configured holiday
+          const dayStr = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`;
+          const holiday = !isOutsideMonth ? holidays.find((h) => h.date === dayStr) : null;
+
+          // Check if this day is closed per business hours
+          const dowKeys = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+          const dowKey = dowKeys[day.getDay()];
+          const dayHours = businessHours ? businessHours[dowKey] : null;
+          const isClosed = holiday
+            ? true
+            : businessHours
+            ? !dayHours
+            : day.getDay() === 0;
+
+          // Border / ring styling
+          let borderRing = 'border-gray-100 dark:border-gray-700';
+          if (holiday) {
+            borderRing = 'border-rose-300 dark:border-rose-700 ring-1 ring-rose-200 dark:ring-rose-800';
+          } else if (isHighlighted) {
+            borderRing = 'border-amber-400 dark:border-amber-500 ring-2 ring-amber-300 dark:ring-amber-700';
           } else if (isToday) {
-            borderRing =
-              'border-primary-400 dark:border-primary-500 ring-1 ring-primary-200 dark:ring-primary-800';
+            borderRing = 'border-primary-400 dark:border-primary-500 ring-1 ring-primary-200 dark:ring-primary-800';
           }
+
+          const MAX_VISIBLE = 3;
 
           return (
             <div
               key={day.toISOString()}
-              className={`bg-white dark:bg-gray-800 rounded-xl border min-h-[200px] ${borderRing} ${isSunday ? 'opacity-50' : ''} ${isPast ? 'opacity-80' : ''}`}
+              className={`bg-white dark:bg-gray-800 rounded-lg border min-h-[110px] ${borderRing} ${
+                isOutsideMonth ? 'opacity-30' : ''
+              } ${isClosed && !isOutsideMonth ? 'opacity-60' : ''} ${
+                isPast && !isOutsideMonth ? 'opacity-80' : ''
+              }`}
             >
-              {/* Day header */}
-              <div className={`px-3 py-2 border-b text-center ${
-                isHighlighted
-                  ? 'bg-amber-50 dark:bg-amber-900/30 border-amber-200 dark:border-amber-800'
+              {/* Day number header */}
+              <div className={`px-2 py-1 flex items-center gap-1 ${
+                holiday
+                  ? 'bg-rose-50 dark:bg-rose-900/30'
                   : isToday
-                  ? 'bg-primary-50 dark:bg-primary-900/30 border-primary-200 dark:border-primary-800'
-                  : 'bg-gray-50 dark:bg-gray-700/50 border-gray-100 dark:border-gray-700'
+                  ? 'bg-primary-50 dark:bg-primary-900/30'
+                  : ''
               }`}>
-                <p className="text-xs text-gray-500 dark:text-gray-400 uppercase">
-                  {day.toLocaleDateString('en-US', { weekday: 'short' })}
-                </p>
-                <p className={`text-lg font-bold ${
-                  isHighlighted
+                <span className={`text-xs font-bold leading-none ${
+                  isToday
+                    ? 'text-white bg-primary-500 rounded-full w-6 h-6 inline-flex items-center justify-center'
+                    : holiday
+                    ? 'text-rose-600 dark:text-rose-400'
+                    : isHighlighted
                     ? 'text-amber-600 dark:text-amber-400'
-                    : isToday
-                    ? 'text-primary-600 dark:text-primary-400'
-                    : 'text-gray-900 dark:text-white'
+                    : isOutsideMonth
+                    ? 'text-gray-300 dark:text-gray-600'
+                    : 'text-gray-700 dark:text-gray-300'
                 }`}>
                   {day.getDate()}
-                </p>
-              </div>
-
-              {/* Appointments */}
-              <div className="p-2 space-y-2">
-                {isSunday ? (
-                  <p className="text-xs text-gray-400 dark:text-gray-500 text-center py-2">Closed</p>
-                ) : dayApts.length === 0 ? (
-                  <p className="text-xs text-gray-300 dark:text-gray-600 text-center py-2">No appointments</p>
-                ) : (
-                  dayApts.map((apt) => (
-                    <button
-                      key={apt.id}
-                      onClick={() => {
-                        setSelectedApt(apt);
-                        setEditingNotes(false);
-                        setNotesText(apt.notes || '');
-                      }}
-                      className={`w-full text-left p-2 rounded-lg border-l-4 bg-gray-50 dark:bg-gray-700/50 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors ${
-                        TYPE_COLORS[apt.appointment_type] || 'border-l-gray-400'
-                      }`}
-                    >
-                      <p className="text-xs font-semibold text-gray-800 dark:text-gray-200 truncate">
-                        {apt.patient_name}
-                      </p>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                        {formatTime(apt.scheduled_at, tz)}
-                        {apt.provider_name && <span className="ml-1">• {apt.provider_name}</span>}
-                      </p>
-                      <span
-                        className={`inline-block mt-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${
-                          STATUS_STYLES[apt.status] || 'bg-gray-100 text-gray-600 dark:bg-gray-600 dark:text-gray-300'
-                        }`}
-                      >
-                        {STATUS_LABELS[apt.status] || apt.status}
-                      </span>
-                    </button>
-                  ))
+                </span>
+                {holiday && (
+                  <span className="text-[9px] font-medium text-rose-500 dark:text-rose-400 truncate" title={holiday.name}>
+                    🏖️ {holiday.name}
+                  </span>
                 )}
               </div>
+
+              {/* Day content */}
+              {!isOutsideMonth && (
+                <div className="px-1 pb-1 space-y-0.5">
+                  {holiday ? (
+                    <>
+                      <p className="text-[10px] text-rose-400 dark:text-rose-500 text-center">Office Closed</p>
+                      {dayApts.length > 0 && (
+                        <p className="text-[10px] text-amber-500 dark:text-amber-400 font-medium text-center">
+                          ⚠️ {dayApts.length} appt{dayApts.length > 1 ? 's' : ''}
+                        </p>
+                      )}
+                    </>
+                  ) : isClosed ? (
+                    <p className="text-[10px] text-gray-400 dark:text-gray-500 text-center py-1">Closed</p>
+                  ) : dayApts.length > 0 ? (
+                    <>
+                      {dayApts.slice(0, MAX_VISIBLE).map((apt) => (
+                        <button
+                          key={apt.id}
+                          onClick={() => {
+                            setSelectedApt(apt);
+                            setEditingNotes(false);
+                            setNotesText(apt.notes || '');
+                          }}
+                          className={`w-full text-left px-1.5 py-0.5 rounded border-l-2 text-[11px] leading-tight bg-gray-50 dark:bg-gray-700/50 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors truncate ${
+                            TYPE_COLORS[apt.appointment_type] || 'border-l-gray-400'
+                          }`}
+                        >
+                          <span className="font-semibold text-gray-800 dark:text-gray-200">
+                            {formatTime(apt.scheduled_at, tz)}
+                          </span>
+                          {' '}
+                          <span className="text-gray-500 dark:text-gray-400">
+                            {apt.patient_name?.split(' ')[0]}
+                          </span>
+                        </button>
+                      ))}
+                      {dayApts.length > MAX_VISIBLE && (
+                        <p className="text-[10px] text-primary-500 dark:text-primary-400 font-medium text-center cursor-default">
+                          +{dayApts.length - MAX_VISIBLE} more
+                        </p>
+                      )}
+                    </>
+                  ) : null}
+                </div>
+              )}
             </div>
           );
         })}

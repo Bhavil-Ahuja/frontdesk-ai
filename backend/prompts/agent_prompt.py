@@ -178,6 +178,39 @@ BOOKING RULES:
 - When a patient provides their DOB, allergies, or other personal details during the conversation, IMMEDIATELY save it using update_patient_info so it's stored for future visits.
 - For returning patients, use the data already in the system prompt (injected from CRM). Do NOT re-ask for info you already have.
 
+RESCHEDULING FLOW (when a patient wants to move / reschedule / change an existing appointment):
+This is a MULTI-STEP process — you MUST complete ALL steps. NEVER stop after checking slots.
+
+Step 1 — IDENTIFY the appointment:
+  • Look at the UPCOMING APPOINTMENTS section in this prompt.
+  • Copy the EXACT booking_uid string (e.g. "native-a1b2c3d4e5f6"). It's shown right under each appointment.
+  • Do NOT ask the patient for a booking reference — you already have it.
+  • Do NOT use a placeholder like "booking_uid_placeholder" — use the REAL string from the prompt.
+
+Step 2 — CHECK availability:
+  • Call get_available_slots for the patient's requested date, passing:
+    - date, appointment_type, provider_id (same as the original appointment)
+    - booking_uid: the EXACT booking_uid string from Step 1 (e.g. "native-a1b2c3d4e5f6")
+  • Passing booking_uid ensures the patient's current appointment doesn't block the new time.
+  • You MUST call get_available_slots — do NOT reuse old slot data.
+
+Step 3 — OFFER alternatives if needed:
+  • If the patient's exact requested time IS available → confirm it with them, then go to Step 4.
+  • If the exact time is NOT available → look at the returned slots and offer the 2–3 CLOSEST alternatives.
+    Example: Patient wants 4:30 PM, but slots show 4:15 PM and 4:45 PM → say "I don't have 4:30 available, but I do have 4:15 PM or 4:45 PM — would either of those work?"
+  • WAIT for the patient to pick a slot before proceeding.
+
+Step 4 — EXECUTE the reschedule:
+  • Call reschedule_appointment with BOTH:
+    - booking_uid: the EXACT string from Step 1 (NOT a placeholder, NOT made up)
+    - new_slot_time: the EXACT exact_slot_time string from get_available_slots (the one the patient confirmed)
+  • Do NOT skip this step. Offering slot options without calling reschedule_appointment means the appointment was NOT moved.
+
+Step 5 — CONFIRM:
+  • Tell the patient their appointment has been moved to the new time.
+
+CRITICAL: Use the REAL booking_uid from the UPCOMING APPOINTMENTS section — never a placeholder. If you call get_available_slots during a reschedule, you MUST follow through with reschedule_appointment once the patient picks a time.
+
 HANDLING SHORT / AMBIGUOUS REPLIES ("sure", "yes", "ok", "yeah", "no", "nope"):
 - These ALWAYS refer to the LAST question YOU asked. Look at your most recent message and apply the patient's answer to it.
 - Example: You asked "Would you like me to add you to our waitlist?" → Patient says "sure" → Treat as YES, proceed with add_to_waitlist using info you already have.
@@ -550,13 +583,31 @@ def _build_patient_section(ctx: dict, business_name: str = "") -> str:
     # Upcoming appointments — critical for rescheduling
     if upcoming:
         lines.append("\nUPCOMING APPOINTMENTS:")
+        first_uid = None
         for a in upcoming:
-            uid_hint = f" [booking_uid: {a['booking_uid']}]" if a.get("booking_uid") else ""
             relative = a.get("relative", "")
             relative_label = f" ({relative})" if relative else ""
-            lines.append(f"  - {a['type']} on {a['date']}{relative_label} at {a['time']}{uid_hint}")
-        lines.append("  → If the patient wants to reschedule, use the booking_uid above with reschedule_appointment.")
-        lines.append("  → IMPORTANT: Use the relative label (TODAY/TOMORROW) when speaking to the patient, not the full date.")
+            lines.append(f"  - {a['type']} on {a['date']}{relative_label} at {a['time']}")
+            if a.get("booking_uid"):
+                lines.append(f"    booking_uid = \"{a['booking_uid']}\"")
+                if not first_uid:
+                    first_uid = a["booking_uid"]
+        # Concrete reschedule instructions with the ACTUAL uid value
+        lines.append("")
+        lines.append("  RESCHEDULE INSTRUCTIONS (if the patient wants to move/change any appointment above):")
+        lines.append(f"    1. Use the EXACT booking_uid string from above. Do NOT make up a placeholder.")
+        if first_uid:
+            lines.append(f"       For example, for the first appointment above: booking_uid=\"{first_uid}\"")
+        lines.append("    2. Call get_available_slots(date=..., appointment_type=..., booking_uid=\"<exact uid from above>\")")
+        lines.append("       Passing booking_uid ensures their current appointment doesn't block the new time.")
+        lines.append("    3. If their exact time isn't available, offer the 2-3 closest alternatives from the result.")
+        lines.append("    4. Once they pick a time, call reschedule_appointment with BOTH values:")
+        if first_uid:
+            lines.append(f"       Example: reschedule_appointment(booking_uid=\"{first_uid}\", new_slot_time=\"<exact_slot_time from step 2>\")")
+        else:
+            lines.append(f"       reschedule_appointment(booking_uid=\"<exact uid from above>\", new_slot_time=\"<exact_slot_time from step 2>\")")
+        lines.append("    5. Do NOT stop after checking slots — you MUST call reschedule_appointment to actually move it.")
+        lines.append("  IMPORTANT: Use the relative label (TODAY/TOMORROW) when speaking to the patient, not the full date.")
     else:
         lines.append("\nNo upcoming appointments on file.")
 
@@ -586,5 +637,6 @@ def _build_patient_section(ctx: dict, business_name: str = "") -> str:
     if upcoming:
         lines.append("- They have an upcoming appointment — they might be calling to reschedule or ask about it.")
         lines.append("- IMPORTANT: You already know their appointment details from the info above. Answer immediately — do NOT say 'let me check' or 'one moment please' when they ask about their appointment. Just tell them directly.")
+        lines.append("- RESCHEDULE REMINDER: If they say 'move', 'reschedule', 'change', or 'push' their appointment, follow the RESCHEDULING FLOW in your instructions above. You MUST call reschedule_appointment after they pick a new slot — do NOT just report availability.")
 
     return "\n".join(lines)

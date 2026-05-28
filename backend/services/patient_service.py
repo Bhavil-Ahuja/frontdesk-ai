@@ -468,10 +468,16 @@ async def record_appointment(
     dob: str = "",
     tenant_id: _uuid.UUID | None = None,
     provider_id: _uuid.UUID | None = None,
+    duration_minutes: int | None = None,
 ) -> None:
     """
     Record an appointment in the DB after a successful calendar booking.
     Also upserts the patient record. Scoped to a tenant.
+
+    NOTE: For tenant-scoped native bookings, create_native_booking() already
+    persists the appointment with correct duration. This function is only
+    needed for legacy/demo paths. Always pass duration_minutes to avoid
+    falling back to the SQLAlchemy column default (60).
     """
     norm_phone = _normalise_phone(patient_phone)
 
@@ -487,7 +493,7 @@ async def record_appointment(
 
     # Create appointment record
     async with async_session() as session:
-        appointment = Appointment(
+        appt_kwargs = dict(
             tenant_id=tenant_id,
             cal_booking_uid=cal_booking_uid,
             cal_booking_id=cal_booking_id,
@@ -500,6 +506,9 @@ async def record_appointment(
             status=AppointmentStatus.CONFIRMED,
             provider_id=provider_id,
         )
+        if duration_minutes is not None:
+            appt_kwargs["duration_minutes"] = duration_minutes
+        appointment = Appointment(**appt_kwargs)
         session.add(appointment)
         await session.commit()
         logger.info("[PatientSvc] Recorded appointment: %s @ %s (uid=%s, tenant=%s, provider=%s)",

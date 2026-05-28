@@ -19,6 +19,7 @@ Multi-tenant: every function accepts a TenantContext so it uses the correct
 credentials, timezone, and event type mappings for the calling tenant.
 """
 
+import asyncio
 import logging
 import time
 from datetime import datetime
@@ -77,7 +78,15 @@ def _resolve_appointment_config(
     appointment_types config for the given appointment type key (e.g.
     "consultation", "follow_up").
 
-    Falls back to (60, 1) if no match or no tenant context.
+    Resolution order (tenant config is source of truth):
+      1. Exact match on appointment type code → use its duration
+      2. No code match → fall back to the FIRST configured type
+      3. No tenant context or no appointment_types → last-resort default (60, 1)
+
+    The inner ``.get("duration_minutes", DEFAULT)`` calls are pure data-integrity
+    safety nets — they only fire if the tenant's JSON is malformed (missing the
+    ``duration_minutes`` key). In normal operation, the clinic owner's config
+    always drives the value.
     """
     duration = DEFAULT_APPOINTMENT_DURATION_MINUTES
     max_conc = 1
@@ -130,6 +139,7 @@ async def get_available_slots(
     provider_id: str | None = None,
     *,
     event_type_id: str = "",  # deprecated, kept for call-site compat
+    exclude_booking_uid: str | None = None,
 ) -> list[str]:
     """
     Fetch available time slots.
@@ -145,15 +155,19 @@ async def get_available_slots(
             used to resolve duration and max_concurrent from tenant config.
         provider_id: Optional provider UUID — uses their calendar_id and
             business hours override if set.
+        exclude_booking_uid: If provided, excludes this booking from the
+            overlap check. Used during rescheduling so the patient's own
+            appointment doesn't block the new time they want to move to.
 
     Returns:
         List of available slot ISO datetime strings.
     """
     # ── Check slot cache first ─────────────────────────────────────────
+    # Skip cache when excluding a booking (reschedule) — must be fresh
     slug = tenant_ctx.slug if tenant_ctx else "default"
     tz = tenant_ctx.timezone if tenant_ctx else DEFAULT_TIMEZONE
     cache_key = _slot_cache_key(date_from, date_to, slug, appointment_type_key, provider_id)
-    cached = _slot_cache.get(cache_key)
+    cached = _slot_cache.get(cache_key) if not exclude_booking_uid else None
     if cached:
         ts, slots = cached
         if (time.time() - ts) < _SLOT_CACHE_TTL:
@@ -193,6 +207,7 @@ async def get_available_slots(
             business_hours=effective_hours,
             tz_name=tz,
             provider_id=provider_uuid,
+            exclude_booking_uid=exclude_booking_uid,
         )
         # Extract just the time strings for backwards compatibility
         slot_times = [s["time"] for s in result.get("slots", [])]
@@ -278,32 +293,19 @@ async def book_appointment(
             provider_id=provider_uuid,
         )
 
-        # ── Google Calendar sync (best-effort reminder) ───────────────
+        # ── Google Calendar sync (fire-and-forget, non-blocking) ────────
         if result and tenant_ctx.google_calendar_connected and tenant_ctx.google_calendar_refresh_token:
-            try:
-                provider_name: str | None = None
-                if provider_uuid:
-                    try:
-                        from backend.services import provider_service
-                        prov = await provider_service.get_provider(provider_uuid)
-                        if prov:
-                            provider_name = prov.get("name")
-                    except Exception:
-                        pass
-                gcal_event = await gcal.book_appointment(
+            asyncio.create_task(
+                _gcal_sync_booking(
+                    slug=slug,
                     refresh_token=tenant_ctx.google_calendar_refresh_token,
                     patient_info=patient_info,
                     start_time=start_time,
                     duration_minutes=duration,
                     timezone=tz,
-                    provider_name=provider_name,
+                    provider_uuid=provider_uuid,
                 )
-                if gcal_event:
-                    gcal_id = gcal_event.get("id", "")
-                    result["gcal_event_id"] = gcal_id
-                    logger.info("[Calendar][%s] ✓ Google Calendar reminder created (event=%s)", slug, gcal_id)
-            except Exception as gcal_exc:
-                logger.warning("[Calendar][%s] Google Calendar sync failed (booking still saved): %s", slug, gcal_exc)
+            )
 
         return result
 
@@ -338,22 +340,21 @@ async def reschedule_appointment(
         logger.info("[Calendar][%s] Using native reschedule", slug)
         result = await native_scheduling.reschedule_native_booking(booking_uid, new_start_time)
 
-        # ── Google Calendar sync (best-effort) ────────────────────────
+        # ── Google Calendar sync (fire-and-forget, non-blocking) ────────
         if result and tenant_ctx.google_calendar_connected and tenant_ctx.google_calendar_refresh_token:
             gcal_event_id = booking_uid if booking_uid.startswith("gcal-") else None
             if gcal_event_id:
-                try:
-                    duration, _ = _resolve_appointment_config("", tenant_ctx)
-                    await gcal.reschedule_appointment(
+                duration_for_gcal, _ = _resolve_appointment_config("", tenant_ctx)
+                asyncio.create_task(
+                    _gcal_sync_reschedule(
+                        slug=slug,
                         refresh_token=tenant_ctx.google_calendar_refresh_token,
                         event_id=gcal_event_id,
                         new_start_time=new_start_time,
-                        duration_minutes=duration,
+                        duration_minutes=duration_for_gcal,
                         timezone=tz,
                     )
-                    logger.info("[Calendar][%s] ✓ Google Calendar event rescheduled", slug)
-                except Exception as gcal_exc:
-                    logger.warning("[Calendar][%s] Google Calendar reschedule sync failed: %s", slug, gcal_exc)
+                )
 
         return result
 
@@ -386,18 +387,17 @@ async def cancel_appointment(
         logger.info("[Calendar][%s] Using native cancel", slug)
         success = await native_scheduling.cancel_native_booking(booking_uid, reason)
 
-        # ── Google Calendar sync (best-effort) ────────────────────────
+        # ── Google Calendar sync (fire-and-forget, non-blocking) ────────
         if success and tenant_ctx.google_calendar_connected and tenant_ctx.google_calendar_refresh_token:
             gcal_event_id = booking_uid if booking_uid.startswith("gcal-") else None
             if gcal_event_id:
-                try:
-                    await gcal.cancel_appointment(
+                asyncio.create_task(
+                    _gcal_sync_cancel(
+                        slug=slug,
                         refresh_token=tenant_ctx.google_calendar_refresh_token,
                         event_id=gcal_event_id,
                     )
-                    logger.info("[Calendar][%s] ✓ Google Calendar event cancelled", slug)
-                except Exception as gcal_exc:
-                    logger.warning("[Calendar][%s] Google Calendar cancel sync failed: %s", slug, gcal_exc)
+                )
 
         return success
 
@@ -408,6 +408,85 @@ async def cancel_appointment(
 
     logger.warning("[Calendar] No calendar configured and not in demo mode — cancel failed")
     return False
+
+
+# ── Fire-and-forget GCal sync helpers ──────────────────────────────────────────
+# These run as background tasks via asyncio.create_task() so the booking /
+# reschedule / cancel response is returned immediately without waiting for
+# the Google Calendar API round-trip.
+
+
+async def _gcal_sync_booking(
+    slug: str,
+    refresh_token: str,
+    patient_info: dict[str, Any],
+    start_time: str,
+    duration_minutes: int,
+    timezone: str,
+    provider_uuid: Any | None = None,
+) -> None:
+    """Background task: create a GCal event after a native booking."""
+    try:
+        provider_name: str | None = None
+        if provider_uuid:
+            try:
+                from backend.services import provider_service
+                prov = await provider_service.get_provider(provider_uuid)
+                if prov:
+                    provider_name = prov.get("name")
+            except Exception:
+                pass
+        gcal_event = await gcal.book_appointment(
+            refresh_token=refresh_token,
+            patient_info=patient_info,
+            start_time=start_time,
+            duration_minutes=duration_minutes,
+            timezone=timezone,
+            provider_name=provider_name,
+        )
+        if gcal_event:
+            gcal_id = gcal_event.get("id", "")
+            logger.info("[Calendar][%s] ✓ GCal reminder created in background (event=%s)", slug, gcal_id)
+    except Exception as exc:
+        logger.warning("[Calendar][%s] GCal background sync failed (booking still saved): %s", slug, exc)
+
+
+async def _gcal_sync_reschedule(
+    slug: str,
+    refresh_token: str,
+    event_id: str,
+    new_start_time: str,
+    duration_minutes: int,
+    timezone: str,
+) -> None:
+    """Background task: update a GCal event after a native reschedule."""
+    try:
+        await gcal.reschedule_appointment(
+            refresh_token=refresh_token,
+            event_id=event_id,
+            new_start_time=new_start_time,
+            duration_minutes=duration_minutes,
+            timezone=timezone,
+        )
+        logger.info("[Calendar][%s] ✓ GCal event rescheduled in background", slug)
+    except Exception as exc:
+        logger.warning("[Calendar][%s] GCal background reschedule sync failed: %s", slug, exc)
+
+
+async def _gcal_sync_cancel(
+    slug: str,
+    refresh_token: str,
+    event_id: str,
+) -> None:
+    """Background task: delete a GCal event after a native cancellation."""
+    try:
+        await gcal.cancel_appointment(
+            refresh_token=refresh_token,
+            event_id=event_id,
+        )
+        logger.info("[Calendar][%s] ✓ GCal event cancelled in background", slug)
+    except Exception as exc:
+        logger.warning("[Calendar][%s] GCal background cancel sync failed: %s", slug, exc)
 
 
 # ── Demo helpers (used when demo_mode=True) ───────────────────────────────────

@@ -28,7 +28,7 @@ from google import genai
 from google.genai import types as gtypes
 
 from backend.config import settings
-from backend.defaults import DEFAULT_APPOINTMENT_DURATION_MINUTES, DEFAULT_TIMEZONE
+from backend.defaults import DEFAULT_TIMEZONE
 from backend.services import calendar_service, sms_service, knowledge_service
 from backend.prompts.agent_prompt import build_system_prompt
 
@@ -345,7 +345,7 @@ ALL_TOOLS = [
         "type": "function",
         "function": {
             "name": "get_available_slots",
-            "description": "Look up available appointment slots for a given date and type. If the patient requested a specific provider, include their ID.",
+            "description": "Look up available appointment slots for a given date and type. If the patient requested a specific provider, include their ID. IMPORTANT: When checking slots for a RESCHEDULE, pass the booking_uid of the appointment being moved — this ensures the patient's own appointment doesn't block the new time.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -360,6 +360,10 @@ ALL_TOOLS = [
                     "provider_id": {
                         "type": "string",
                         "description": "Optional. ID of the provider the patient wants to see (from get_providers).",
+                    },
+                    "booking_uid": {
+                        "type": "string",
+                        "description": "Optional. When checking slots for a RESCHEDULE, pass the booking_uid of the appointment being moved. This excludes it from the overlap check so the patient's own booking doesn't block the new time.",
                     },
                 },
                 "required": ["date", "appointment_type"],
@@ -1644,13 +1648,15 @@ async def _execute_tool(
                 except (ValueError, TypeError):
                     pass
 
-            # Get duration from appointment config
-            duration = DEFAULT_APPOINTMENT_DURATION_MINUTES
-            if tenant_ctx and tenant_ctx.appointment_types:
-                for at in tenant_ctx.appointment_types:
-                    if at.get("code") == appt_type:
-                        duration = at.get("duration_minutes", DEFAULT_APPOINTMENT_DURATION_MINUTES)
-                        break
+            # If this is a reschedule check, extract the booking_uid to exclude
+            # the patient's own appointment from the overlap calculation.
+            exclude_uid = args.get("booking_uid", "") or None
+
+            # Get duration from tenant's appointment type config (source of truth).
+            # Falls back to first configured type if no exact match, then to
+            # DEFAULT_APPOINTMENT_DURATION_MINUTES only if no tenant context.
+            from backend.services.calendar_service import _resolve_appointment_config
+            duration, _ = _resolve_appointment_config(appt_type, tenant_ctx)
 
             # Use provider-aware scheduling to check per-provider concurrency
             office_tz_name = tenant_ctx.timezone if tenant_ctx else DEFAULT_TIMEZONE
@@ -1662,6 +1668,7 @@ async def _execute_tool(
                 tz_name=office_tz_name,
                 provider_id=provider_uuid,
                 holidays=(tenant_ctx.holidays if tenant_ctx and getattr(tenant_ctx, "holidays", None) else None),
+                exclude_booking_uid=exclude_uid,
             )
 
             # ── Holiday short-circuit ─────────────────────────────────────
@@ -1962,27 +1969,35 @@ async def _execute_tool(
                     logger.warning("[Call %s] SMS confirmation failed: %s", call_id, sms_exc)
 
                 # ── Persist appointment + patient in DB ──────────────
-                try:
-                    from backend.services import patient_service
-                    tenant_id = tenant_ctx.tenant_id if tenant_ctx else None
+                # NOTE: When tenant_ctx exists, native_scheduling.create_native_booking()
+                # already persisted the Appointment row (with correct duration_minutes
+                # and booking_uid) AND upserted the Patient record. Calling
+                # record_appointment here would create a DUPLICATE row — skip it.
+                # Only call record_appointment for legacy/demo paths (no tenant_ctx).
+                if not tenant_ctx:
+                    try:
+                        from backend.services import patient_service
+                        booking_uid = result.get("uid", "") if isinstance(result, dict) else ""
+                        booking_id = result.get("id", "") if isinstance(result, dict) else ""
+                        await patient_service.record_appointment(
+                            patient_phone=args.get("phone", ""),
+                            appointment_type=args.get("appointment_type", ""),
+                            scheduled_at=datetime.fromisoformat(slot_time),
+                            cal_booking_uid=str(booking_uid),
+                            cal_booking_id=str(booking_id),
+                            patient_name=args.get("patient_name", ""),
+                            patient_email=email,
+                            dob=args.get("dob", ""),
+                            tenant_id=None,
+                            provider_id=provider_id,
+                        )
+                        logger.info("[Call %s] ✓ Appointment recorded in DB (uid=%s)", call_id, booking_uid)
+                    except Exception as db_exc:
+                        logger.warning("[Call %s] Patient/appointment DB upsert failed: %s",
+                                       call_id, db_exc)
+                else:
                     booking_uid = result.get("uid", "") if isinstance(result, dict) else ""
-                    booking_id = result.get("id", "") if isinstance(result, dict) else ""
-                    await patient_service.record_appointment(
-                        patient_phone=args.get("phone", ""),
-                        appointment_type=args.get("appointment_type", ""),
-                        scheduled_at=datetime.fromisoformat(slot_time),
-                        cal_booking_uid=str(booking_uid),
-                        cal_booking_id=str(booking_id),
-                        patient_name=args.get("patient_name", ""),
-                        patient_email=email,
-                        dob=args.get("dob", ""),
-                        tenant_id=tenant_id,
-                        provider_id=provider_id,
-                    )
-                    logger.info("[Call %s] ✓ Appointment recorded in DB (uid=%s)", call_id, booking_uid)
-                except Exception as db_exc:
-                    logger.warning("[Call %s] Patient/appointment DB upsert failed: %s",
-                                   call_id, db_exc)
+                    logger.info("[Call %s] ✓ Native booking already persisted (uid=%s)", call_id, booking_uid)
 
                 elapsed = (time.time() - t0) * 1000
                 logger.info("[Call %s] book_appointment → SUCCESS in %.0fms: %s",
