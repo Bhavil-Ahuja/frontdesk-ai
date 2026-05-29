@@ -38,3 +38,8 @@ PyJWT>=2.10.0
 # Note: email validation handled by a lightweight regex in backend/routes/auth.py
 # (Pydantic's EmailStr is avoided because it pulls in the email-validator package
 # which can be blocked behind some corporate proxies.)
+
+# Testing
+pytest>=8.0.0
+pytest-asyncio>=0.24.0
+pytest-timeout>=2.3.0

@@ -71,6 +71,12 @@ export default function AppointmentManager() {
   // it stand out in the month grid.
   const [highlightedDate, setHighlightedDate] = useState(null);
 
+  // Track which day cells are expanded to show all appointments
+  const [expandedDay, setExpandedDay] = useState(null);
+
+  // Current time — ticks every minute for the time indicator bar
+  const [currentTime, setCurrentTime] = useState(() => new Date());
+
   // Tenant config: holidays + business hours (fetched from /api/config)
   const [holidays, setHolidays] = useState([]);
   const [businessHours, setBusinessHours] = useState(null);
@@ -84,6 +90,23 @@ export default function AppointmentManager() {
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [confirmAction, setConfirmAction] = useState(null); // { action: 'attended'|'no-show'|'cancel', id: number }
 
+  // Close detail drawer / confirmation modal on Escape key
+  useEffect(() => {
+    function onKeyDown(e) {
+      if (e.key === 'Escape') {
+        if (confirmAction) {
+          setConfirmAction(null);
+        } else if (selectedApt) {
+          setSelectedApt(null);
+        }
+      }
+    }
+    if (selectedApt || confirmAction) {
+      document.addEventListener('keydown', onKeyDown);
+    }
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [selectedApt, confirmAction]);
+
   useEffect(() => {
     fetchAppointments();
     fetchProviders();
@@ -91,6 +114,12 @@ export default function AppointmentManager() {
     // Auto-refresh every 60s so new bookings flow in live
     const interval = setInterval(fetchAppointments, 60000);
     return () => clearInterval(interval);
+  }, []);
+
+  // Tick every 60s to keep the current-time indicator bar moving
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(new Date()), 60000);
+    return () => clearInterval(timer);
   }, []);
 
   async function fetchProviders() {
@@ -403,11 +432,14 @@ export default function AppointmentManager() {
           }
 
           const MAX_VISIBLE = 3;
+          const isDayExpanded = expandedDay === dayStr;
+          const visibleApts = isDayExpanded ? dayApts : dayApts.slice(0, MAX_VISIBLE);
+          const now = currentTime;
 
           return (
             <div
               key={day.toISOString()}
-              className={`bg-white dark:bg-gray-800 rounded-lg border min-h-[110px] ${borderRing} ${
+              className={`bg-white dark:bg-gray-800 rounded-lg border min-h-[110px] relative ${borderRing} ${
                 isOutsideMonth ? 'opacity-30' : ''
               } ${isClosed && !isOutsideMonth ? 'opacity-60' : ''} ${
                 isPast && !isOutsideMonth ? 'opacity-80' : ''
@@ -439,11 +471,17 @@ export default function AppointmentManager() {
                     🏖️ {holiday.name}
                   </span>
                 )}
+                {/* Appointment count badge for busy days */}
+                {!holiday && !isClosed && dayApts.length > MAX_VISIBLE && (
+                  <span className="ml-auto text-[9px] font-semibold text-gray-400 dark:text-gray-500 bg-gray-100 dark:bg-gray-700 px-1.5 rounded-full">
+                    {dayApts.length}
+                  </span>
+                )}
               </div>
 
               {/* Day content */}
               {!isOutsideMonth && (
-                <div className="px-1 pb-1 space-y-0.5">
+                <div className={`px-1 pb-1 space-y-0.5 ${isDayExpanded ? 'max-h-[200px] overflow-y-auto' : ''}`}>
                   {holiday ? (
                     <>
                       <p className="text-[10px] text-rose-400 dark:text-rose-500 text-center">Office Closed</p>
@@ -457,36 +495,112 @@ export default function AppointmentManager() {
                     <p className="text-[10px] text-gray-400 dark:text-gray-500 text-center py-1">Closed</p>
                   ) : dayApts.length > 0 ? (
                     <>
-                      {dayApts.slice(0, MAX_VISIBLE).map((apt) => (
+                      {visibleApts.map((apt) => {
+                        const aptTime = new Date(apt.scheduled_at);
+                        const isCancelled = apt.status === 'CANCELLED';
+                        const isPastApt = aptTime < now && !isCancelled;
+                        const isUpcoming = aptTime >= now && apt.status === 'CONFIRMED';
+
+                        // Color coding: green=upcoming, red=cancelled, muted=past
+                        const pillBg = isCancelled
+                          ? 'bg-red-50 dark:bg-red-900/20 border-l-red-400'
+                          : isUpcoming
+                          ? 'bg-green-50 dark:bg-green-900/20 border-l-green-400'
+                          : isPastApt
+                          ? 'bg-gray-50 dark:bg-gray-700/50 ' + (TYPE_COLORS[apt.appointment_type] || 'border-l-gray-400')
+                          : 'bg-gray-50 dark:bg-gray-700/50 ' + (TYPE_COLORS[apt.appointment_type] || 'border-l-gray-400');
+
+                        return (
+                          <button
+                            key={apt.id}
+                            onClick={() => {
+                              setSelectedApt(apt);
+                              setEditingNotes(false);
+                              setNotesText(apt.notes || '');
+                            }}
+                            className={`w-full text-left px-1.5 py-0.5 rounded border-l-2 text-[11px] leading-tight hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors truncate ${pillBg} ${
+                              isCancelled ? 'line-through opacity-60' : ''
+                            }`}
+                          >
+                            <span className={`font-semibold ${
+                              isCancelled
+                                ? 'text-red-500 dark:text-red-400'
+                                : isUpcoming
+                                ? 'text-green-700 dark:text-green-300'
+                                : 'text-gray-800 dark:text-gray-200'
+                            }`}>
+                              {formatTime(apt.scheduled_at, tz)}
+                            </span>
+                            {' '}
+                            <span className={`${
+                              isCancelled
+                                ? 'text-red-400 dark:text-red-500'
+                                : 'text-gray-500 dark:text-gray-400'
+                            }`}>
+                              {apt.patient_name?.split(' ')[0]}
+                            </span>
+                          </button>
+                        );
+                      })}
+                      {dayApts.length > MAX_VISIBLE && !isDayExpanded && (
                         <button
-                          key={apt.id}
-                          onClick={() => {
-                            setSelectedApt(apt);
-                            setEditingNotes(false);
-                            setNotesText(apt.notes || '');
-                          }}
-                          className={`w-full text-left px-1.5 py-0.5 rounded border-l-2 text-[11px] leading-tight bg-gray-50 dark:bg-gray-700/50 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors truncate ${
-                            TYPE_COLORS[apt.appointment_type] || 'border-l-gray-400'
-                          }`}
+                          onClick={() => setExpandedDay(dayStr)}
+                          className="text-[10px] text-primary-500 dark:text-primary-400 font-medium text-center cursor-pointer hover:text-primary-600 dark:hover:text-primary-300 w-full"
                         >
-                          <span className="font-semibold text-gray-800 dark:text-gray-200">
-                            {formatTime(apt.scheduled_at, tz)}
-                          </span>
-                          {' '}
-                          <span className="text-gray-500 dark:text-gray-400">
-                            {apt.patient_name?.split(' ')[0]}
-                          </span>
-                        </button>
-                      ))}
-                      {dayApts.length > MAX_VISIBLE && (
-                        <p className="text-[10px] text-primary-500 dark:text-primary-400 font-medium text-center cursor-default">
                           +{dayApts.length - MAX_VISIBLE} more
-                        </p>
+                        </button>
+                      )}
+                      {isDayExpanded && (
+                        <button
+                          onClick={() => setExpandedDay(null)}
+                          className="text-[10px] text-gray-400 dark:text-gray-500 font-medium text-center cursor-pointer hover:text-gray-600 dark:hover:text-gray-300 w-full"
+                        >
+                          show less
+                        </button>
                       )}
                     </>
                   ) : null}
                 </div>
               )}
+
+              {/* Current time indicator — horizontal line on today's cell */}
+              {isToday && !isClosed && !holiday && dayHours && (() => {
+                const openParts = dayHours.open?.split(':');
+                const closeParts = dayHours.close?.split(':');
+                if (!openParts || !closeParts) return null;
+                const openMin = parseInt(openParts[0]) * 60 + parseInt(openParts[1] || 0);
+                const closeMin = parseInt(closeParts[0]) * 60 + parseInt(closeParts[1] || 0);
+                const totalRange = closeMin - openMin;
+                if (totalRange <= 0) return null;
+
+                // Convert current time to clinic timezone
+                const nowInTz = new Date(now.toLocaleString('en-US', { timeZone: tz }));
+                const nowMin = nowInTz.getHours() * 60 + nowInTz.getMinutes();
+
+                // Only show if within business hours
+                if (nowMin < openMin || nowMin > closeMin) return null;
+                const pct = ((nowMin - openMin) / totalRange) * 100;
+
+                // Format current time label (e.g. "2:45 PM")
+                const timeLabel = nowInTz.toLocaleTimeString('en-US', {
+                  hour: 'numeric',
+                  minute: '2-digit',
+                  hour12: true,
+                });
+
+                return (
+                  <div
+                    className="absolute left-0 right-0 pointer-events-none z-10 flex items-center"
+                    style={{ top: `${20 + (pct * 0.8)}%` }}
+                  >
+                    <div className="w-2 h-2 rounded-full bg-red-500 -ml-1 shrink-0" />
+                    <div className="flex-1 h-[2px] bg-red-500/70" />
+                    <span className="text-[8px] font-bold text-red-500 bg-white dark:bg-gray-800 px-0.5 rounded leading-none whitespace-nowrap -mr-0.5">
+                      {timeLabel}
+                    </span>
+                  </div>
+                );
+              })()}
             </div>
           );
         })}

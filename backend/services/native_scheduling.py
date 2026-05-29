@@ -195,8 +195,8 @@ async def get_native_slots(
     available: list[str] = []
     now_local = datetime.now(local_tz)
     for slot_utc, slot_local in zip(candidate_slots_utc, candidate_slots_local):
-        # Skip slots that are in the past (with 5-minute buffer)
-        if slot_local < now_local - timedelta(minutes=5):
+        # Skip slots that start in the past or less than 5 minutes from now
+        if slot_local < now_local + timedelta(minutes=5):
             continue
         slot_end_utc = slot_utc + timedelta(minutes=duration_minutes)
         overlap_count = 0
@@ -389,8 +389,8 @@ async def get_provider_aware_slots(
     result_slots = []
 
     for slot_utc, slot_local in zip(candidate_slots_utc, candidate_slots_local):
-        # Skip past slots
-        if slot_local < now_local - timedelta(minutes=5):
+        # Skip slots that start in the past or less than 5 minutes from now
+        if slot_local < now_local + timedelta(minutes=5):
             continue
 
         slot_end_utc = slot_utc + timedelta(minutes=duration_minutes)
