@@ -58,7 +58,7 @@ class TestBookingHappyPath:
         replies = await chat_multi(auth_token, [
             f"Hi, I'd like to book a consultation with {doc1['name']} on {target_str}",
             "Yes, that's my number. 10 AM works",
-            "My name is     , phone is +1-555-0101, DOB is January 15, 1990",
+            "My name is Test Patient One, phone is +1-555-0101, DOB is January 15, 1990",
             "Yes, please confirm the booking",
         ], conversation_id)
 
