@@ -694,8 +694,15 @@ function TenantRow({ tenant, expanded, onToggle, onAction, onPurge, actionLoadin
           </div>
         </div>
 
-        {/* Integration badges */}
+        {/* Integration badges + agent status */}
         <div className="hidden md:flex items-center gap-1.5">
+          <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${
+            tenant.agent_active !== false
+              ? 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400'
+              : 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-400'
+          }`}>
+            {tenant.agent_active !== false ? 'Agent ON' : 'Agent OFF'}
+          </span>
           <IntegrationBadge label="Vapi" active={tenant.vapi_configured} enabled={tenant.feature_vapi_enabled !== false} />
           <IntegrationBadge label="GCal" active={tenant.google_calendar_connected} />
           <IntegrationBadge label="Twilio" active={tenant.twilio_configured} enabled={tenant.feature_twilio_enabled !== false} />
@@ -846,6 +853,7 @@ function IntegrationsTab({ tenantId, tenant, onRefresh }) {
     vapi_assistant_id: '',
     vapi_phone_number_id: '',
     twilio_phone_number: '',
+    agent_active: tenant.agent_active !== false,
     feature_vapi_enabled: tenant.feature_vapi_enabled !== false,
     feature_twilio_enabled: tenant.feature_twilio_enabled !== false,
   });
@@ -862,6 +870,7 @@ function IntegrationsTab({ tenantId, tenant, onRefresh }) {
         vapi_assistant_id: data.vapi_assistant_id || '',
         vapi_phone_number_id: data.vapi_phone_number_id || '',
         twilio_phone_number: data.twilio_phone_number || '',
+        agent_active: data.agent_active !== false,
         feature_vapi_enabled: data.feature_vapi_enabled !== false,
         feature_twilio_enabled: data.feature_twilio_enabled !== false,
       });
@@ -869,6 +878,7 @@ function IntegrationsTab({ tenantId, tenant, onRefresh }) {
       // Use tenant-level data as fallback
       setFields((f) => ({
         ...f,
+        agent_active: tenant.agent_active !== false,
         feature_vapi_enabled: tenant.feature_vapi_enabled !== false,
         feature_twilio_enabled: tenant.feature_twilio_enabled !== false,
       }));
@@ -879,6 +889,7 @@ function IntegrationsTab({ tenantId, tenant, onRefresh }) {
   async function handleSave() {
     setSaving(true);
     try {
+      // Save integration assignments + feature flags
       await apiFetch(`/api/integrations/vapi/assign`, {
         method: 'POST',
         body: JSON.stringify({
@@ -889,6 +900,11 @@ function IntegrationsTab({ tenantId, tenant, onRefresh }) {
           feature_vapi_enabled: fields.feature_vapi_enabled,
           feature_twilio_enabled: fields.feature_twilio_enabled,
         }),
+      });
+      // Save agent_active via tenant update endpoint
+      await apiFetch(`/api/tenants/${tenantId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ agent_active: fields.agent_active }),
       });
       toast.success('Integration settings saved.');
       if (onRefresh) onRefresh();
@@ -902,6 +918,24 @@ function IntegrationsTab({ tenantId, tenant, onRefresh }) {
 
   return (
     <div className="space-y-6">
+      {/* Agent Status — admin can turn on/off */}
+      <div className={`p-4 rounded-lg border ${
+        fields.agent_active
+          ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'
+          : 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800'
+      }`}>
+        <FeatureToggle
+          label="Agent Status"
+          description={
+            fields.agent_active
+              ? 'AI agent is LIVE — answering calls and processing requests'
+              : 'Agent is OFF — inbound calls are forwarded to the business phone'
+          }
+          enabled={fields.agent_active}
+          onChange={(v) => setFields((f) => ({ ...f, agent_active: v }))}
+        />
+      </div>
+
       {/* Feature Flags section */}
       <div className="p-4 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
         <h4 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">

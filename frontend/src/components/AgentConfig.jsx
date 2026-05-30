@@ -59,6 +59,7 @@ const VOICE_OPTIONS = [
 
 export default function AgentConfig() {
   const { isAdmin } = useAuth();
+  const { confirm, prompt, toast } = useModal();
   const [config, setConfig] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -296,24 +297,101 @@ export default function AgentConfig() {
         </div>
       )}
 
-      {/* Agent status (read-only — derived from tenant.status) */}
+      {/* Agent status — toggleable with double confirm */}
       <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
-        <div className="flex items-center gap-3">
-          <div
-            className={`p-3 rounded-lg ${config.agent_active ? 'bg-green-50 dark:bg-green-900/30' : 'bg-red-50 dark:bg-red-900/30'}`}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div
+              className={`p-3 rounded-lg ${config.agent_active ? 'bg-green-50 dark:bg-green-900/30' : 'bg-red-50 dark:bg-red-900/30'}`}
+            >
+              <Power
+                className={`w-6 h-6 ${config.agent_active ? 'text-green-600' : 'text-red-600'}`}
+              />
+            </div>
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Agent Status</h3>
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                {config.agent_active
+                  ? 'Your agent is ACTIVE and answering calls.'
+                  : `Your agent is OFF — calls are redirected to ${config.business_phone || 'your business phone'}.`}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={async () => {
+              if (config.agent_active) {
+                // Turning OFF — double confirm
+                const step1 = await confirm({
+                  title: 'Turn off AI Agent?',
+                  message: `All incoming calls will be redirected to ${config.business_phone || 'your business phone number'}. The AI agent will stop answering calls until you turn it back on.`,
+                  confirmText: 'Continue',
+                  variant: 'danger',
+                });
+                if (!step1) return;
+
+                const typed = await prompt({
+                  title: 'Confirm deactivation',
+                  message: 'Type DISABLE to turn off your AI agent.',
+                  placeholder: 'Type DISABLE',
+                  confirmText: 'Turn Off Agent',
+                  variant: 'danger',
+                });
+                if (typed !== 'DISABLE') {
+                  if (typed !== null) toast.warning('Cancelled — you must type DISABLE exactly.');
+                  return;
+                }
+
+                update('agent_active', false);
+                // Auto-save immediately for agent status changes
+                try {
+                  await apiFetch('/api/config', {
+                    method: 'PUT',
+                    body: { ...config, agent_active: false },
+                  });
+                  await fetchConfig();
+                  toast.success('Agent turned OFF — calls redirected to your business phone.');
+                } catch (err) {
+                  toast.error(err.message || 'Failed to update agent status');
+                  update('agent_active', true); // revert
+                }
+              } else {
+                // Turning ON — single confirm
+                const ok = await confirm({
+                  title: 'Activate AI Agent?',
+                  message: 'Your AI agent will start answering incoming calls immediately.',
+                  confirmText: 'Activate Agent',
+                  variant: 'default',
+                });
+                if (!ok) return;
+
+                update('agent_active', true);
+                try {
+                  await apiFetch('/api/config', {
+                    method: 'PUT',
+                    body: { ...config, agent_active: true },
+                  });
+                  await fetchConfig();
+                  toast.success('Agent activated — now answering calls!');
+                } catch (err) {
+                  toast.error(err.message || 'Failed to update agent status');
+                  update('agent_active', false); // revert
+                }
+              }
+            }}
+            className={`relative inline-flex h-8 w-14 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 ${
+              config.agent_active
+                ? 'bg-green-500 focus:ring-green-500'
+                : 'bg-gray-300 dark:bg-gray-600 focus:ring-gray-400'
+            }`}
+            aria-label={config.agent_active ? 'Turn off agent' : 'Turn on agent'}
           >
-            <Power
-              className={`w-6 h-6 ${config.agent_active ? 'text-green-600' : 'text-red-600'}`}
+            <span
+              className={`inline-block h-6 w-6 rounded-full bg-white shadow-md transform transition-transform ${
+                config.agent_active ? 'translate-x-7' : 'translate-x-1'
+              }`}
             />
-          </div>
-          <div>
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Agent Status</h3>
-            <p className="text-sm text-gray-500 dark:text-gray-400">
-              {config.agent_active
-                ? 'Your agent is ACTIVE and answering calls.'
-                : 'Your agent is paused (status set by admin).'}
-            </p>
-          </div>
+          </button>
         </div>
       </div>
 

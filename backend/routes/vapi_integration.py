@@ -134,6 +134,9 @@ async def admin_get_tenant_integrations(
         "twilio_phone_number": tenant.twilio_phone_number or "",
         "vapi_configured": bool(tenant.vapi_assistant_id),
         "twilio_configured": bool(tenant.twilio_phone_number),
+        "agent_active": bool(tenant.agent_active) if tenant.agent_active is not None else True,
+        "feature_vapi_enabled": tenant.feature_vapi_enabled,
+        "feature_twilio_enabled": tenant.feature_twilio_enabled,
     }
 
 

@@ -202,6 +202,37 @@ async def _handle_assistant_request(assistant_id: str = "") -> dict[str, Any]:
         tenant_ctx = await resolve_by_assistant_id(assistant_id)
 
     if tenant_ctx:
+        # If the owner has turned off the agent, tell Vapi to forward the
+        # call to the business phone immediately instead of running the AI.
+        if not getattr(tenant_ctx, "agent_active", True):
+            forward_number = (
+                getattr(tenant_ctx, "business_phone", None)
+                or getattr(tenant_ctx, "escalation_phone", None)
+                or ""
+            )
+            business_name = tenant_ctx.business_name or "the office"
+            logger.info(
+                "Agent is OFF for %s — forwarding call to %s",
+                tenant_ctx.slug if hasattr(tenant_ctx, 'slug') else '?',
+                forward_number or '(none)',
+            )
+            return {
+                "assistant": {
+                    "name": f"Forwarding - {business_name}",
+                    "model": {
+                        "provider": "custom-llm",
+                        "url": f"{settings.SERVER_BASE_URL}/api/llm",
+                        "model": settings.OLLAMA_MODEL,
+                    },
+                    "voice": {"provider": _VOICE_PROVIDER, "voiceId": _VOICE_ID},
+                    "firstMessage": (
+                        f"Thank you for calling {business_name}. "
+                        f"Please hold while I transfer you to the office."
+                    ),
+                    **({"forwardingPhoneNumber": forward_number} if forward_number else {}),
+                }
+            }
+
         agent_name = tenant_ctx.agent_name or DEFAULT_AGENT_NAME
         business_name = tenant_ctx.business_name
         greeting = tenant_ctx.greeting_message or f"Thank you for calling {business_name}. How can I help you today?"

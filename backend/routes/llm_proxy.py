@@ -13,6 +13,7 @@ Architecture:
      (Vapi REQUIRES streaming SSE from custom-llm providers)
 """
 
+import asyncio
 import json
 import logging
 import time
@@ -652,7 +653,7 @@ async def _stream_with_tools_sse(
                                        model_date, resolved)
                         fn_args["date"] = resolved
 
-                tool_result = await _execute_tool(fn_name, fn_args, tenant_ctx=tenant_ctx)
+                tool_result = await _execute_tool(fn_name, fn_args, tenant_ctx=tenant_ctx, caller_phone=caller_phone)
                 logger.info("[LLM Proxy]   🔧 RESULT: %s",
                             json.dumps(tool_result, default=str)[:500])
 
@@ -729,7 +730,74 @@ async def _stream_with_tools_sse(
     except Exception as exc:
         elapsed = (time.time() - t0) * 1000
         logger.error("[LLM Proxy] Streaming failed after %.0fms: %s", elapsed, exc, exc_info=True)
-        yield _sse({"content": "I apologize, I'm having a brief technical difficulty. Could you repeat that?"})
+
+        # ── Retry up to 2 more times before giving up ──────────────────
+        retried = False
+        for retry_num in range(1, 3):
+            logger.warning("[LLM Proxy] Retry %d/2 after error: %s", retry_num, str(exc)[:200])
+            await asyncio.sleep(min(2 * retry_num, 5))  # 2s, 4s backoff
+            try:
+                retry_kwargs = {
+                    "model": model,
+                    "messages": messages,
+                    "temperature": 0.7,
+                    "max_tokens": 1024,
+                    "stream": True,
+                    "tools": get_tools(tenant_ctx) if tenant_ctx else [],
+                }
+                retry_stream = await client.chat.completions.create(**retry_kwargs)
+                async for chunk in retry_stream:
+                    choice = chunk.choices[0] if chunk.choices else None
+                    if not choice or not choice.delta:
+                        continue
+                    token = choice.delta.content or ""
+                    if token:
+                        yield _sse({"content": token})
+                retried = True
+                logger.info("[LLM Proxy] Retry %d succeeded", retry_num)
+                break
+            except Exception as retry_exc:
+                logger.error("[LLM Proxy] Retry %d failed: %s", retry_num, retry_exc)
+                continue
+
+        if not retried:
+            # All retries exhausted — offer to transfer to reception
+            logger.error("[LLM Proxy] All retries exhausted — offering transfer to reception")
+            transfer_dest = ""
+            if tenant_ctx:
+                transfer_dest = (
+                    getattr(tenant_ctx, "escalation_transfer_number", "") or
+                    getattr(tenant_ctx, "business_phone", "") or
+                    getattr(tenant_ctx, "escalation_phone", "") or
+                    ""
+                ).strip()
+
+            if transfer_dest:
+                yield _sse({"content": (
+                    "I'm really sorry, I'm experiencing some technical difficulties right now. "
+                    "Let me transfer you to our reception team so they can help you directly. "
+                    "Please hold for just a moment."
+                )})
+                # Emit Vapi transferCall to redirect to clinic reception
+                yield _sse({
+                    "tool_calls": [{
+                        "index": 0,
+                        "id": f"call_error_transfer_{int(time.time())}",
+                        "type": "function",
+                        "function": {
+                            "name": "transferCall",
+                            "arguments": json.dumps({"destination": transfer_dest}),
+                        },
+                    }]
+                })
+                yield _sse({}, finish_reason="tool_calls")
+                return
+            else:
+                yield _sse({"content": (
+                    "I'm really sorry, I'm experiencing some technical difficulties right now. "
+                    "Could you please call back in a few minutes? "
+                    "I apologize for the inconvenience."
+                )})
 
     elapsed = (time.time() - t0) * 1000
     logger.info("=" * 70)
@@ -954,7 +1022,7 @@ async def _stream_with_tools_sse_gemini(
                     logger.warning("[LLM Proxy]   📅 Date correction: %r → %r", model_date, resolved)
                     fn_args["date"] = resolved
 
-            tool_result = await _execute_tool(fn_name, fn_args, tenant_ctx=tenant_ctx)
+            tool_result = await _execute_tool(fn_name, fn_args, tenant_ctx=tenant_ctx, caller_phone=caller_phone)
             logger.info("[LLM Proxy]   🔧 RESULT (Gemini): %s",
                         json.dumps(tool_result, default=str)[:500])
 
@@ -1235,6 +1303,7 @@ async def _call_with_tools(
     messages: list,
     t0: float,
     tenant_ctx: TenantContext | None = None,
+    caller_phone: str = "",
 ) -> str:
     """
     Call Ollama with tool definitions. If it requests a tool call,
@@ -1319,7 +1388,7 @@ async def _call_with_tools(
                                    model_date, resolved)
                     fn_args["date"] = resolved
 
-            tool_result = await _execute_tool(fn_name, fn_args, tenant_ctx=tenant_ctx)
+            tool_result = await _execute_tool(fn_name, fn_args, tenant_ctx=tenant_ctx, caller_phone=caller_phone)
 
             logger.info("[LLM Proxy]   🔧 TOOL RESULT: %s", json.dumps(tool_result, default=str)[:500])
 
@@ -1352,6 +1421,7 @@ async def _execute_tool(
     name: str,
     args: dict,
     tenant_ctx: TenantContext | None = None,
+    caller_phone: str = "",
 ) -> dict[str, Any]:
     """
     Execute a tool call and return the result dict.
@@ -1374,6 +1444,31 @@ async def _execute_tool(
         if args["phone"] != raw_phone:
             logger.info("[Tool Exec] Normalised phone: %s → %s (region=%s)",
                         raw_phone, args["phone"], region)
+
+    # ── Privacy gate: block cross-patient data access ────────────────
+    # Same enforcement as llm_service.py — tools that access patient
+    # data MUST use the caller's own phone number.
+    from backend.services.llm_service import _PHONE_GATED_TOOLS, _normalize_phone_for_match
+    if name in _PHONE_GATED_TOOLS and caller_phone:
+        tool_phone = args.get("phone", "")
+        if tool_phone:
+            caller_norm = _normalize_phone_for_match(caller_phone)
+            tool_norm = _normalize_phone_for_match(tool_phone)
+            if caller_norm and tool_norm and caller_norm != tool_norm:
+                logger.warning(
+                    "[Tool Exec] PRIVACY BLOCK: tool=%s tried phone=%s but caller=%s",
+                    name, tool_phone, caller_phone,
+                )
+                return {
+                    "ok": False,
+                    "privacy_blocked": True,
+                    "summary_for_assistant": (
+                        "For patient privacy and security, I can only access records for the "
+                        "phone number on this call. If someone else needs to manage their "
+                        "appointments, they should call us directly from their own number, "
+                        "or our office staff can help them in person."
+                    ),
+                }
 
     try:
         if name == "get_available_slots":

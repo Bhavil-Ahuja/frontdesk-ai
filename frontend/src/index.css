@@ -6,6 +6,26 @@ body {
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
 }
 
+/* ── Mobile viewport height fix ─────────────────────
+   h-dvh (100dvh) accounts for the mobile address bar.
+   Fallback to 100vh for browsers that don't support dvh.
+   Also set 100svh on mobile so the layout never extends
+   behind the address bar on initial load. */
+.h-dvh {
+  height: 100vh;            /* fallback */
+  height: 100dvh;           /* dynamic viewport — resizes with addr bar */
+}
+
+/* ── Overscroll containment — prevent scroll-chaining ── */
+.overscroll-y-contain {
+  overscroll-behavior-y: contain;
+}
+
+/* ── Safe-area padding for notched phones ───────────── */
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
 /* Dark mode body */
 .dark body,
 html.dark body {

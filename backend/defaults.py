@@ -25,7 +25,7 @@ DEFAULT_BUSINESS_HOURS = {
     "wednesday": {"open": "08:00", "close": "18:00"},
     "thursday": {"open": "08:00", "close": "18:00"},
     "friday": {"open": "08:00", "close": "18:00"},
-    "saturday": None,
+    "saturday": {"open": "09:00", "close": "14:00"},
     "sunday": None,
 }
 

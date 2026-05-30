@@ -7,7 +7,7 @@
  * they stream in — so the UX matches Vapi's transcript stream.
  */
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { Send, RotateCcw, Bot, User as UserIcon, MessageSquare, Phone, Plus, Trash2, ChevronDown, Download } from 'lucide-react';
+import { Send, RotateCcw, Bot, User as UserIcon, MessageSquare, Phone, Plus, Trash2, ChevronDown, Download, AlertTriangle } from 'lucide-react';
 import { getToken, API_BASE } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -134,6 +134,7 @@ export default function LocalChat() {
   // Unified test callers: [{phone, name}, ...]
   const [testCallers, setTestCallers] = useState([]);
   const [selectedCaller, setSelectedCaller] = useState(null); // {phone, name}
+  const [agentActive, setAgentActive] = useState(true);
   const [callerDropdownOpen, setCallerDropdownOpen] = useState(false);
   const [addingCaller, setAddingCaller] = useState(false);
   const [newCallerName, setNewCallerName] = useState('');
@@ -169,6 +170,7 @@ export default function LocalChat() {
       .then((cfg) => {
         const callers = cfg?.test_callers || [];
         setTestCallers(callers);
+        setAgentActive(cfg?.agent_active !== false);
         // Set selected caller (prefer current selection if still exists)
         setSelectedCaller((prev) => {
           if (prev && callers.some((c) => c.phone === prev.phone)) {
@@ -522,22 +524,53 @@ export default function LocalChat() {
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full overflow-hidden">
       {/* Header */}
-      <div className="px-4 md:px-8 py-3 md:py-6 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="w-9 h-9 md:w-10 md:h-10 bg-primary-100 dark:bg-primary-900/50 rounded-xl flex items-center justify-center shrink-0">
-            <MessageSquare className="w-4 h-4 md:w-5 md:h-5 text-primary-600" />
+      <div className="px-4 md:px-8 py-3 md:py-6 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 space-y-3 shrink-0">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 md:gap-3 min-w-0">
+            <div className="w-9 h-9 md:w-10 md:h-10 bg-primary-100 dark:bg-primary-900/50 rounded-xl flex items-center justify-center shrink-0">
+              <MessageSquare className="w-4 h-4 md:w-5 md:h-5 text-primary-600" />
+            </div>
+            <div className="min-w-0">
+              <h1 className="text-base md:text-xl font-bold text-gray-900 dark:text-white truncate">Test Agent</h1>
+              <p className="text-xs md:text-sm text-gray-500 dark:text-gray-400 hidden sm:block">
+                Same LLM + tools as the voice agent — chat to test before going live.
+              </p>
+            </div>
           </div>
-          <div className="min-w-0">
-            <h1 className="text-base md:text-xl font-bold text-gray-900 dark:text-white truncate">Test Agent</h1>
-            <p className="text-xs md:text-sm text-gray-500 dark:text-gray-400 hidden sm:block">
-              Same LLM + tools as the voice agent — chat to test before going live.
+          <div className="flex items-center gap-1.5 md:gap-2 shrink-0">
+            <button
+              onClick={exportChat}
+              className="flex items-center gap-2 p-2.5 md:px-3 md:py-2 text-sm text-gray-600 dark:text-gray-400 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/50 hover:text-gray-900 dark:hover:text-white border border-gray-200 dark:border-gray-700 transition-colors"
+              title="Export conversation as JSON for debugging"
+            >
+              <Download className="w-4 h-4" />
+              <span className="hidden md:inline">Export</span>
+            </button>
+            <button
+              onClick={resetConversation}
+              className="flex items-center gap-2 p-2.5 md:px-3 md:py-2 text-sm text-gray-600 dark:text-gray-400 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/50 hover:text-gray-900 dark:hover:text-white border border-gray-200 dark:border-gray-700 transition-colors"
+              title="Start a new conversation (clears server-side session)"
+            >
+              <RotateCcw className="w-4 h-4" />
+              <span className="hidden md:inline">New chat</span>
+            </button>
+          </div>
+        </div>
+        {/* Agent OFF warning banner */}
+        {!agentActive && (
+          <div className="flex items-center gap-2 px-3 py-2 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded-lg">
+            <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" />
+            <p className="text-xs text-amber-700 dark:text-amber-400">
+              <span className="font-semibold">Agent is OFF</span> — real calls are being forwarded to your business phone. Test mode still works so you can verify your setup.
             </p>
           </div>
-          {/* ── Unified Test Caller selector dropdown (phone + name) ─────────── */}
-          {testCallers.length > 0 && (
-            <div className="relative ml-2" ref={callerDropdownRef}>
+        )}
+        {/* ── Unified Test Caller selector dropdown (centered) ─────────── */}
+        {testCallers.length > 0 && (
+          <div className="flex justify-center" ref={callerDropdownRef}>
+            <div className="relative">
               <button
                 type="button"
                 onClick={() => setCallerDropdownOpen((v) => !v)}
@@ -555,7 +588,7 @@ export default function LocalChat() {
                 <ChevronDown className={`w-3 h-3 text-teal-500 transition-transform ${callerDropdownOpen ? 'rotate-180' : ''}`} />
               </button>
               {callerDropdownOpen && (
-                <div className="absolute top-full left-0 mt-1 w-72 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-lg z-50 py-1">
+                <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 w-72 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-lg z-50 py-1">
                   <div className="px-3 py-2 border-b border-gray-100 dark:border-gray-700">
                     <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Test Callers</p>
                     <p className="text-[10px] text-gray-400 mt-0.5">Each phone maps to a unique patient</p>
@@ -573,7 +606,6 @@ export default function LocalChat() {
                           className="flex items-center gap-2 flex-1 text-left"
                           onClick={() => {
                             if (caller.phone !== selectedCaller?.phone) {
-                              // Just switch — chatScope change auto-loads that caller's history
                               setSelectedCaller(caller);
                             }
                             setCallerDropdownOpen(false);
@@ -632,30 +664,13 @@ export default function LocalChat() {
                 </div>
               )}
             </div>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={exportChat}
-            className="flex items-center gap-2 px-3 py-2 text-sm text-gray-600 dark:text-gray-400 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/50 hover:text-gray-900 dark:hover:text-white border border-gray-200 dark:border-gray-700 transition-colors"
-            title="Export conversation as JSON for debugging"
-          >
-            <Download className="w-4 h-4" />
-            Export
-          </button>
-          <button
-            onClick={resetConversation}
-            className="flex items-center gap-2 px-3 py-2 text-sm text-gray-600 dark:text-gray-400 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/50 hover:text-gray-900 dark:hover:text-white border border-gray-200 dark:border-gray-700 transition-colors"
-            title="Start a new conversation (clears server-side session)"
-          >
-            <RotateCcw className="w-4 h-4" />
-            New chat
-          </button>
-        </div>
+          </div>
+        )}
       </div>
 
-      {/* Message list */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 md:px-8 py-4 md:py-6 space-y-4">
+      {/* Message list — min-h-0 lets flexbox shrink it; overscroll-y-contain
+           prevents scroll-chaining to the parent <main> on mobile */}
+      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain px-4 md:px-8 py-4 md:py-6 space-y-4" style={{ WebkitOverflowScrolling: 'touch' }}>
         {messages.map((m, i) => (
           <MessageBubble key={i} message={m} />
         ))}
@@ -666,10 +681,10 @@ export default function LocalChat() {
         )}
       </div>
 
-      {/* Composer */}
+      {/* Composer — pb-safe adds padding for notched phones' home indicator */}
       <form
         onSubmit={sendMessage}
-        className="px-4 md:px-8 py-3 md:py-4 border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800"
+        className="px-4 md:px-8 py-3 md:py-4 pb-safe border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shrink-0"
       >
         <div className="flex items-end gap-2 md:gap-3 max-w-3xl mx-auto">
           <textarea
@@ -681,9 +696,10 @@ export default function LocalChat() {
                 sendMessage();
               }
             }}
+            enterKeyHint="send"
             placeholder="Type a message..."
             rows={1}
-            className="flex-1 resize-none px-3 md:px-4 py-2.5 md:py-3 border border-gray-300 dark:border-gray-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent text-sm dark:bg-gray-700 dark:text-white"
+            className="flex-1 resize-none px-3 md:px-4 py-2.5 md:py-3 border border-gray-300 dark:border-gray-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent text-base md:text-sm dark:bg-gray-700 dark:text-white"
             disabled={streaming}
           />
           <button
@@ -715,7 +731,7 @@ function MessageBubble({ message }) {
         {isUser ? <UserIcon className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
       </div>
       <div
-        className={`px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${
+        className={`px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap break-words max-w-[85vw] md:max-w-none ${
           isUser
             ? 'bg-primary-500 text-white rounded-tr-sm'
             : 'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-900 dark:text-gray-100 rounded-tl-sm'

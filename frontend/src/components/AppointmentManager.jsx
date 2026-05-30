@@ -338,7 +338,7 @@ export default function AppointmentManager() {
             className="flex items-center gap-2 px-3 py-2 rounded-lg border border-primary-200 dark:border-primary-700 bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 hover:bg-primary-100 dark:hover:bg-primary-900/50 transition-colors disabled:opacity-50 text-sm font-medium"
           >
             <CalendarCheck className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
-            {syncing ? 'Syncing...' : 'Sync GCal'}
+            {syncing ? 'Syncing...' : 'Sync Google Calendar'}
           </button>
           <button
             onClick={() => fetchAppointments(true)}

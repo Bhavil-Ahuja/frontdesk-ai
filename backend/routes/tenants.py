@@ -80,6 +80,8 @@ class TenantUpdateRequest(BaseModel):
     emergency_guidance: Optional[str] = None
     demo_mode: Optional[bool] = None
     plan: Optional[str] = None
+    # Agent on/off — owner or admin can toggle
+    agent_active: Optional[bool] = None
     # Feature flags (per-tenant toggles — admin only)
     feature_vapi_enabled: Optional[bool] = None
     feature_twilio_enabled: Optional[bool] = None
@@ -99,6 +101,7 @@ class TenantOut(BaseModel):
     timezone: str
     plan: Optional[str]
     status: str
+    agent_active: bool
     demo_mode: bool
     agent_name: Optional[str]
     greeting_message: Optional[str]
@@ -137,6 +140,7 @@ def _tenant_to_out(t: Tenant) -> TenantOut:
         timezone=t.timezone or DEFAULT_TIMEZONE,
         plan=t.plan.value if t.plan else None,
         status=t.status.value if t.status else "PENDING",
+        agent_active=bool(t.agent_active) if t.agent_active is not None else True,
         demo_mode=t.demo_mode if t.demo_mode is not None else True,
         agent_name=t.agent_name,
         greeting_message=t.greeting_message,

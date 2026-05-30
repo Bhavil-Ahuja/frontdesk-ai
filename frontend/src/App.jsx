@@ -271,7 +271,7 @@ function AppShell() {
   };
 
   return (
-    <div className="flex h-screen bg-gray-50 dark:bg-gray-900">
+    <div className="flex h-dvh bg-gray-50 dark:bg-gray-900">
       {/* ── Mobile top bar ──────────────────────────────────────────── */}
       <div className="fixed top-0 left-0 right-0 z-30 md:hidden bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-4 py-3 flex items-center justify-between">
         <button
@@ -330,7 +330,7 @@ function AppShell() {
       </aside>
 
       {/* Main content — add top padding on mobile for the fixed header */}
-      <main className="flex-1 overflow-y-auto bg-gray-50 dark:bg-gray-900 pt-[60px] md:pt-0">
+      <main className="flex-1 overflow-y-auto overscroll-y-contain bg-gray-50 dark:bg-gray-900 pt-[60px] md:pt-0">
         <Routes>
           {/* Tenant routes */}
           <Route

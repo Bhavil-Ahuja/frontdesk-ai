@@ -374,12 +374,12 @@ ALL_TOOLS = [
         "type": "function",
         "function": {
             "name": "book_appointment",
-            "description": "Book an appointment for the patient. Always include provider_id — use a specific UUID from get_providers, or '__auto__' if the patient has no preference (system will auto-assign the best available provider). IMPORTANT: You MUST confirm the patient's phone number verbally before calling this tool.",
+            "description": "Book an appointment for the patient. Always include provider_id — use a specific UUID from get_providers, or '__auto__' if the patient has no preference (system will auto-assign the best available provider). IMPORTANT: Always use the caller-ID phone number from your system prompt.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "patient_name": {"type": "string"},
-                    "phone": {"type": "string", "description": "Patient's phone number — must be verbally confirmed with the patient first."},
+                    "phone": {"type": "string", "description": "Patient's phone number — MUST be the caller-ID number from your system prompt."},
                     "email": {"type": "string", "description": "Patient email (optional — system provides default if not given)."},
                     "dob": {"type": "string", "description": "Date of birth (MM/DD/YYYY)."},
                     "appointment_type": {
@@ -501,16 +501,15 @@ ALL_TOOLS = [
                 "Use when a returning patient wants to reschedule, cancel, or check "
                 "on an existing appointment. Returns appointment details including "
                 "booking_uid needed for reschedule/cancel. "
-                "IMPORTANT: You MUST verbally confirm the phone number with the patient "
-                "BEFORE calling this tool. Even if you have their number from caller-ID, "
-                "ask 'Just to confirm, is [number] the best number for you?' first."
+                "IMPORTANT: Always use the caller's phone number from caller-ID. "
+                "Confirm it verbally first, but always pass the caller-ID number."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "phone": {
                         "type": "string",
-                        "description": "Patient's confirmed phone number. Must be confirmed with the patient before calling this tool.",
+                        "description": "Patient's phone number — MUST be the caller-ID number from your system prompt.",
                     },
                 },
                 "required": ["phone"],
@@ -1291,10 +1290,39 @@ async def _process_message_ollama(
 
     except Exception as exc:
         logger.error("LLM processing error for call %s: %s", call_id, exc, exc_info=True)
-        return (
-            "I apologize, I'm having a brief technical difficulty. "
-            "Could you repeat that? Or I can connect you with a team member."
+
+        # ── Retry up to 2 more times before giving up ──────────────────
+        import asyncio
+        for retry_num in range(1, 3):
+            logger.warning("[Call %s] Retry %d/2 after error: %s", call_id, retry_num, str(exc)[:200])
+            await asyncio.sleep(min(2 * retry_num, 5))  # 2s, 4s backoff
+            try:
+                client = _get_client()
+                retry_kwargs = {
+                    "model": settings.OLLAMA_MODEL,
+                    "messages": _strip_timestamps(session["messages"]),
+                    "temperature": 0.7,
+                    "max_tokens": 1024,
+                }
+                retry_response = client.chat.completions.create(**retry_kwargs)
+                reply = retry_response.choices[0].message.content or ""
+                if reply:
+                    logger.info("[Call %s] Retry %d succeeded", call_id, retry_num)
+                    session["messages"].append({"role": "assistant", "content": reply})
+                    return reply
+            except Exception as retry_exc:
+                logger.error("[Call %s] Retry %d failed: %s", call_id, retry_num, retry_exc)
+                continue
+
+        # All retries exhausted — apologize (can't ask a question the broken LLM can't handle)
+        logger.error("[Call %s] All retries exhausted — returning apology", call_id)
+        fallback = (
+            "I'm really sorry, I'm experiencing some technical difficulties right now "
+            "and I'm unable to process your request. Please try again in a few minutes, "
+            "or call the office directly for immediate help."
         )
+        session["messages"].append({"role": "assistant", "content": fallback})
+        return fallback
 
 
 # ── Streaming variant ─────────────────────────────────────────────────────────
@@ -1556,10 +1584,130 @@ async def process_message_stream(
 
     except Exception as exc:
         logger.error("LLM streaming error for call %s: %s", call_id, exc, exc_info=True)
-        yield (
-            "I apologize, I'm having a brief technical difficulty. "
-            "Could you repeat that? Or I can connect you with a team member."
-        )
+
+        # ── Retry up to 2 more times before giving up ──────────────────
+        retried = False
+        for retry_num in range(1, 3):
+            logger.warning("[Call %s] Stream retry %d/2 after error: %s", call_id, retry_num, str(exc)[:200])
+            await asyncio.sleep(min(2 * retry_num, 5))
+            try:
+                retry_client = _get_async_client()
+                retry_stream = await retry_client.chat.completions.create(
+                    model=settings.OLLAMA_MODEL,
+                    messages=_strip_timestamps(session["messages"]),
+                    temperature=0.7,
+                    max_tokens=1024,
+                    stream=True,
+                )
+                retry_content = ""
+                async for chunk in retry_stream:
+                    choice = chunk.choices[0] if chunk.choices else None
+                    if not choice or not choice.delta:
+                        continue
+                    token = choice.delta.content or ""
+                    if token:
+                        retry_content += token
+                        yield token
+                if retry_content:
+                    session["messages"].append({
+                        "role": "assistant",
+                        "content": retry_content,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    })
+                    retried = True
+                    logger.info("[Call %s] Stream retry %d succeeded", call_id, retry_num)
+                    break
+            except Exception as retry_exc:
+                logger.error("[Call %s] Stream retry %d failed: %s", call_id, retry_num, retry_exc)
+                continue
+
+        if not retried:
+            logger.error("[Call %s] All stream retries exhausted — returning apology", call_id)
+            fallback = (
+                "I'm really sorry, I'm experiencing some technical difficulties right now "
+                "and I'm unable to process your request. Please try again in a few minutes, "
+                "or call the office directly for immediate help."
+            )
+            session["messages"].append({"role": "assistant", "content": fallback})
+            yield fallback
+
+
+# ── Caller-phone enforcement (privacy / compliance) ──────────────────────────
+# Tools that access or mutate patient data MUST operate on the caller's own
+# phone number.  This is a hard backend gate — prompt-level instructions alone
+# are insufficient because callers (or prompt-injection attacks) can ask the
+# LLM to look up arbitrary numbers.
+
+_PHONE_GATED_TOOLS = frozenset({
+    "lookup_patient",
+    "lookup_patient_appointments",
+    "update_patient_info",
+    "book_appointment",
+    "add_to_waitlist",
+    "send_callback_request",
+})
+
+
+def _normalize_phone_for_match(phone: str) -> str:
+    """Strip a phone to its last 10 digits for comparison.
+
+    Different sources store phones in different formats (+12125551234 vs
+    2125551234 vs 212-555-1234).  Comparing the last 10 digits is a simple,
+    reliable way to match US numbers regardless of formatting.
+    """
+    digits = _re.sub(r"\D", "", phone or "")
+    return digits[-10:] if len(digits) >= 10 else digits
+
+
+def _enforce_caller_phone(
+    session: dict | None,
+    name: str,
+    args: dict,
+    call_id: str,
+) -> dict | None:
+    """If the tool is phone-gated, verify the phone arg matches the caller.
+
+    Returns None if the check passes (or doesn't apply).
+    Returns a rejection dict for the LLM if the check fails.
+    """
+    if name not in _PHONE_GATED_TOOLS:
+        return None
+
+    if not session:
+        return None  # No session → can't enforce (shouldn't happen)
+
+    caller_phone = session.get("caller_number", "")
+    if not caller_phone:
+        return None  # No caller-ID on file → can't enforce (web widget, etc.)
+
+    tool_phone = args.get("phone", "")
+    if not tool_phone:
+        return None  # Tool doesn't have a phone arg yet → let it proceed (tool will ask)
+
+    caller_norm = _normalize_phone_for_match(caller_phone)
+    tool_norm = _normalize_phone_for_match(tool_phone)
+
+    if not caller_norm or not tool_norm:
+        return None  # Edge case — can't compare
+
+    if caller_norm == tool_norm:
+        return None  # ✅ Match — proceed normally
+
+    # ❌ Mismatch — block the request
+    logger.warning(
+        "[Call %s] PRIVACY BLOCK: tool=%s tried phone=%s but caller=%s",
+        call_id, name, tool_phone, caller_phone,
+    )
+    return {
+        "ok": False,
+        "privacy_blocked": True,
+        "summary_for_assistant": (
+            "For patient privacy and security, I can only access records for the "
+            "phone number on this call. If someone else needs to manage their "
+            "appointments, they should call us directly from their own number, "
+            "or our office staff can help them in person."
+        ),
+    }
 
 
 # ── Tool execution ────────────────────────────────────────────────────────────
@@ -1584,6 +1732,11 @@ async def _execute_tool(
                 call_id, name, json.dumps(args)[:300],
                 tenant_ctx.slug if tenant_ctx else "global", is_test)
     t0 = time.time()
+
+    # ── Privacy gate: block cross-patient data access ─────────────────
+    privacy_rejection = _enforce_caller_phone(session, name, args, call_id)
+    if privacy_rejection:
+        return privacy_rejection
 
     try:
         if name == "get_available_slots":
@@ -1761,8 +1914,67 @@ async def _execute_tool(
                     f"speak naturally in 1-2 sentences."
                 )
             else:
-                top = formatted_slots[:3]
+                # ── Smart slot selection: show slots near the patient's
+                #    requested time, not just the first 3 of the day ────────
+                requested_time_str = args.get("time", "")
+                # Also check the user's last message for a time mention
+                if not requested_time_str and session:
+                    import re as _re
+                    for m in reversed(session.get("messages", [])):
+                        if m.get("role") == "user":
+                            _user_txt = (m.get("content") or "").strip()
+                            # Match patterns like "12:30", "12:30 PM", "2 PM", "2:00pm"
+                            _time_match = _re.search(
+                                r'(\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM))',
+                                _user_txt
+                            )
+                            if _time_match:
+                                requested_time_str = _time_match.group(1)
+                            break
+
+                # Parse the requested time to find the closest slots
+                top = formatted_slots[:3]  # default: first 3
+                exact_match = False
+                if requested_time_str:
+                    try:
+                        from dateutil import parser as _tp
+                        _req_dt = _tp.parse(requested_time_str)
+                        _req_minutes = _req_dt.hour * 60 + _req_dt.minute
+
+                        # Score each slot by distance from the requested time
+                        scored = []
+                        for i, s in enumerate(formatted_slots):
+                            try:
+                                _s_dt = _tp.parse(s["exact_slot_time"])
+                                _s_minutes = _s_dt.hour * 60 + _s_dt.minute
+                                scored.append((abs(_s_minutes - _req_minutes), i, s))
+                                # Check for exact match
+                                if _s_minutes == _req_minutes:
+                                    exact_match = True
+                            except Exception:
+                                scored.append((9999, i, s))
+
+                        scored.sort(key=lambda x: (x[0], x[1]))
+                        top = [s for _, _, s in scored[:3]]
+                    except Exception:
+                        pass  # Fall back to first 3
+
                 time_list = ", ".join(s["time_label"] for s in top)
+                tz_note = f" All times are in {office_tz_name} timezone." if office_tz_name else ""
+
+                # Build the summary — tell the LLM if the exact time is available
+                if exact_match:
+                    exact_label = top[0]["time_label"]  # closest match is first after sorting
+                    match_note = (
+                        f"The patient's requested time ({exact_label}) IS available. "
+                        f"Confirm it with them and proceed to collect their details. "
+                    )
+                else:
+                    match_note = (
+                        f"The patient's requested time is NOT available. "
+                        f"The closest available times are: {time_list}. "
+                        f"Offer these alternatives. "
+                    )
 
                 # Check if specific provider was requested but has no availability
                 if provider_id_str:
@@ -1778,26 +1990,23 @@ async def _execute_tool(
                             for p in s.get("available_providers", []):
                                 other_providers.add(p["name"])
                         other_names = ", ".join(list(other_providers)[:2])
-                        tz_note = f" (all times are in {office_tz_name} timezone)" if office_tz_name else ""
                         summary = (
                             f"The requested provider is fully booked on {friendly_date}, "
                             f"but {other_names} {'has' if len(other_providers) == 1 else 'have'} availability. "
                             f"Ask the patient if they'd like to see another provider instead. "
-                            f"Available times{tz_note}: {time_list}."
+                            f"Available times ({office_tz_name}): {time_list}."
                         )
                     else:
-                        tz_note = f" All times are in {office_tz_name} timezone." if office_tz_name else ""
                         summary = (
+                            f"{match_note}"
                             f"Available times on {friendly_date}: {time_list}.{tz_note} "
-                            f"Offer these to the patient in natural conversation (1-2 sentences). "
                             f"When they pick one, call book_appointment with the EXACT exact_slot_time string and provider_id. "
                             f"Do NOT construct or modify the time string yourself. Do NOT read JSON or field names aloud."
                         )
                 else:
-                    tz_note = f" All times are in {office_tz_name} timezone." if office_tz_name else ""
                     summary = (
+                        f"{match_note}"
                         f"Available times on {friendly_date}: {time_list}.{tz_note} "
-                        f"Offer these to the patient in natural conversation (1-2 sentences). "
                         f"When they pick one, call book_appointment with the EXACT exact_slot_time string. "
                         f"Do NOT construct or modify the time string yourself. "
                         f"Include provider_id if the patient chose a specific provider. "

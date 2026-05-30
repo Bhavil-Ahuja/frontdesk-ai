@@ -199,6 +199,9 @@ _MIGRATIONS: list[str] = [
     "UPDATE patients SET phone = regexp_replace(phone, '[^0-9+]', '', 'g') WHERE phone ~ '[^0-9+]'",
     "UPDATE waitlist_entries SET patient_phone = regexp_replace(patient_phone, '[^0-9+]', '', 'g') WHERE patient_phone IS NOT NULL AND patient_phone ~ '[^0-9+]'",
     "UPDATE sms_messages SET to_number = regexp_replace(to_number, '[^0-9+]', '', 'g') WHERE to_number IS NOT NULL AND to_number ~ '[^0-9+]'",
+
+    # ── tenants table — owner-toggleable agent on/off (separate from status)
+    "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS agent_active BOOLEAN NOT NULL DEFAULT true",
 ]
 
 

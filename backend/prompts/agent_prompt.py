@@ -411,11 +411,25 @@ def build_system_prompt(
             seen.add(dow)
             dow_lines.append(f"  - When patient says '{dow}' → use date {d.strftime('%Y-%m-%d')} ({d.strftime('%B %d')})")
 
-    # Upcoming days
+    # Upcoming days — "this X" and "next X" BOTH mean the nearest upcoming
+    # occurrence. Patients use them interchangeably. Only "the X after next"
+    # or an explicit date means the further occurrence.
     upcoming_days = []
+    first_occurrence_seen: set[str] = set()
     for i in range(0, 14):
         d = today + timedelta(days=i)
-        label = "today" if i == 0 else "tomorrow" if i == 1 else f"this {d.strftime('%A')}" if i < 7 else f"next {d.strftime('%A')}"
+        dow_name = d.strftime('%A')
+        if i == 0:
+            label = "today"
+        elif i == 1:
+            label = "tomorrow"
+        elif dow_name not in first_occurrence_seen:
+            # First upcoming occurrence — both "this" and "next" mean this one
+            label = f"this {dow_name} / next {dow_name}"
+            first_occurrence_seen.add(dow_name)
+        else:
+            # Second occurrence — only reachable via explicit phrasing
+            label = f"the {dow_name} after next ({d.strftime('%B %d')})"
         upcoming_days.append(f"  - {label} = {d.strftime('%A, %B %d, %Y')} (use date: {d.strftime('%Y-%m-%d')})")
 
     # Upcoming holidays / closures (so AI proactively tells callers)
@@ -458,7 +472,7 @@ def build_system_prompt(
         + f"\nCRITICAL RULES:\n"
         f"1. NEVER call any tool on greetings ('Hi', 'Hello'), generic small talk ('How are you?'), or expressions of confusion. Answer those conversationally.\n"
         f"2. When the patient asks about hours, location, phone number, services, or pricing → ALWAYS call get_office_info. NEVER answer these from memory or guess.\n"
-        f"3. Call get_available_slots as soon as the patient mentions a specific date or day ('Wednesday', 'June 3rd', 'tomorrow') for booking — do NOT wait until after collecting DOB and reason. Check availability FIRST, collect patient details AFTER a slot is confirmed. Only skip the call for pure greetings or unrelated questions.\n"
+        f"3. ALWAYS call get_available_slots when the patient mentions ANY date or day ('Wednesday', 'next Friday', 'June 3rd', 'tomorrow') for booking. NEVER assume or guess availability — you MUST call the tool to check. Do NOT say 'we don't have availability' or 'we're fully booked' unless the tool returned zero slots. Check availability FIRST, collect patient details AFTER a slot is confirmed.\n"
         f"4. ONLY call book_appointment after the patient has chosen a specific time AND given you their name, DOB, phone, and reason for visit. Even if you have their phone from caller-ID, you MUST confirm it with the patient before booking or looking up appointments.\n"
         f"5. ONLY call escalate_to_human for the explicit escalation triggers in your prompt. For non-emergency escalations, you MUST first ask 'Would you like me to connect you with a team member?' and only escalate if the patient confirms. NEVER escalate on a greeting or a general knowledge question.\n"
         f"6. NEVER guess or make up ANY data — times, providers, services, prices, procedures. Only use what tools return.\n"
@@ -485,6 +499,12 @@ def build_system_prompt(
         f"    - Respond conversationally and name the holiday: 'I'm sorry — we're closed on {{date}} for {{holiday name}}. Would another day work?'\n"
         f"    - If the patient proactively asks 'are you open on <date>?' or 'are you closed for <holiday>?', check the list above and answer directly. If the date is on the list, tell them we're closed for that holiday by name.\n"
         f"    - If get_available_slots returns error 'holiday', the office is closed that day — use the returned holiday name when telling the patient.\n"
+        f"20. PATIENT PRIVACY — ONLY ACCESS THE CALLER'S OWN RECORDS:\n"
+        f"    - You can ONLY look up, book, or modify records for the phone number on THIS call (the caller-ID number in your system prompt).\n"
+        f"    - If a caller asks you to look up, check, book, cancel, or change anything for a DIFFERENT phone number or another person, politely decline.\n"
+        f"    - Say something like: 'For privacy reasons, I can only help with your own appointments. If someone else needs help, they can call us from their number, or I can connect you with our office staff.'\n"
+        f"    - This applies even for family members, spouses, or caregivers. Our office staff can help with those cases in person.\n"
+        f"    - NEVER call lookup_patient, lookup_patient_appointments, update_patient_info, or book_appointment with a phone number that doesn't match the caller.\n"
         f"\nEXAMPLES OF CORRECT BEHAVIOR:\n"
         f"  Patient: 'Hi'  →  You: 'Hi there! How can I help you today?' (NO tool call)\n"
         f"  Patient: 'How are you?'  →  You: 'I'm doing great, thank you! How can I help?' (NO tool call)\n"
@@ -512,10 +532,11 @@ def build_system_prompt(
             f"\n=== CALLER INFORMATION ===\n"
             f"The caller is calling from phone number: {caller_phone}\n"
             f"This is a NEW caller — no previous patient record found.\n"
-            f"You have their phone number from caller-ID, but you MUST confirm it before "
-            f"using it for any booking or lookup. Ask: 'I have your number as "
-            f"{caller_phone} — is that the best number to reach you?'\n"
-            f"Only use the number they confirm. If they give a different one, use that instead.\n"
+            f"You have their phone number from caller-ID. Confirm it before "
+            f"booking or lookup: 'I have your number as {caller_phone} — is that correct?'\n"
+            f"IMPORTANT: Always use this caller-ID number ({caller_phone}) for all lookups and bookings.\n"
+            f"If they say they'd prefer a different contact number, note it but still use {caller_phone} "
+            f"as their phone on file. For security, records are tied to the calling number.\n"
             f"You still need to collect: full name, date of birth, and reason for visit.\n"
         )
     else:
@@ -567,9 +588,10 @@ def _build_patient_section(ctx: dict, business_name: str = "") -> str:
             f"Phone (from caller-ID): {p.get('phone', '')}",
             f"\nBEHAVIOUR FOR THIS CALLER:",
             f"- Greet them warmly: 'Hi {first_name}! Welcome to {biz}.'",
-            f"- You have their name and phone from caller-ID, but BEFORE any booking or lookup,",
-            f"  confirm the phone number: 'I have your number as {p.get('phone', '')} — is that correct?'",
-            f"- Only use the number they confirm. If they provide a different one, use that instead.",
+            f"- You have their name and phone from caller-ID. Before booking, confirm:",
+            f"  'I have your number as {p.get('phone', '')} — is that correct?'",
+            f"- Always use this caller-ID number ({p.get('phone', '')}) for all lookups and bookings.",
+            f"  If they mention a different contact number, note it but still use {p.get('phone', '')} as their phone on file.",
             f"- You still MUST collect: date of birth and reason for visit.",
             f"- Do NOT assume or make up their DOB, allergies, or any other data you don't have.",
         ]
@@ -642,9 +664,10 @@ def _build_patient_section(ctx: dict, business_name: str = "") -> str:
     lines.append("\nBEHAVIOUR FOR THIS CALLER:")
     lines.append(f"- Greet them warmly by name: 'Hi {first_name}! Welcome back to {biz}.'")
     lines.append("- Do NOT ask for their name or DOB again — you already have it.")
-    lines.append(f"- PHONE CONFIRMATION: Before any booking, rescheduling, or lookup that uses their phone,")
+    lines.append(f"- PHONE CONFIRMATION: Before any booking or rescheduling,")
     lines.append(f"  quickly confirm: 'Just to confirm, is {p.get('phone', '')} still the best number for you?'")
-    lines.append("  If they say yes, proceed. If they give a different number, use that instead.")
+    lines.append(f"  Always use this caller-ID number ({p.get('phone', '')}) for all lookups and bookings.")
+    lines.append("  If they mention a different contact number, note it but still use the caller-ID number on file.")
     lines.append("- If they want to book, pre-fill their info from above. Only confirm it's correct.")
 
     if pref:

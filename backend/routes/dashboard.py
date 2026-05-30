@@ -158,11 +158,10 @@ async def get_dashboard_stats(
             "count": count,
         })
 
-    # Agent status — derived from tenant.status
-    from backend.models.tenant import TenantStatus as _TS
+    # Agent status — from the dedicated agent_active column (owner-toggleable)
     if tid:
         ten = await tenant_service.get_tenant(tid)
-        agent_active = bool(ten and ten.status == _TS.ACTIVE)
+        agent_active = bool(ten and getattr(ten, 'agent_active', True))
     else:
         agent_active = True  # Admin global view — assume agents are running
 
@@ -246,7 +245,7 @@ async def get_config(current_user: Tenant = Depends(auth_service.get_current_use
 
     voice_cfg = t.voice_config or {}
     return {
-        "agent_active": t.status.value == "ACTIVE" if t.status else False,
+        "agent_active": bool(t.agent_active) if t.agent_active is not None else (t.status.value == "ACTIVE" if t.status else False),
         "agent_name": t.agent_name or DEFAULT_AGENT_NAME,
         "escalation_phone": t.escalation_phone or "",
         "escalation_transfer_number": t.escalation_transfer_number or "",
@@ -361,6 +360,10 @@ async def update_config(
             "provider": data.get("voice_provider", "11labs"),
             "voiceId": data.get("voice_id", "21m00Tcm4TlvDq8ikWAM"),
         }
+
+    # Handle agent_active toggle — stored as a dedicated boolean on tenant
+    if "agent_active" in data:
+        update_fields["agent_active"] = bool(data["agent_active"])
 
     if not update_fields:
         raise HTTPException(status_code=400, detail="No valid fields to update.")

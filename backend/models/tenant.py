@@ -73,6 +73,7 @@ class Tenant(Base):
     # ── Plan & status ────────────────────────────────────────────────────
     plan = Column(Enum(PlanTier), nullable=False, default=PlanTier.STARTER)
     status = Column(Enum(TenantStatus), nullable=False, default=TenantStatus.PENDING)
+    agent_active = Column(Boolean, nullable=False, default=True)  # owner can toggle; separate from status
     demo_mode = Column(Boolean, nullable=False, default=True)
 
     # ── Agent personality ────────────────────────────────────────────────

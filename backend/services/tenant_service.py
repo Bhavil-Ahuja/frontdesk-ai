@@ -595,6 +595,7 @@ async def update_tenant(tenant_id: uuid.UUID, data: dict[str, Any]) -> Tenant | 
             "emergency_guidance", "demo_mode", "plan",
             "reminder_settings", "review_settings",
             "feature_vapi_enabled", "feature_twilio_enabled",
+            "agent_active",
         }
         # Normalize holidays — strip duplicates by date, drop blanks, sort ASC
         if "holidays" in data and isinstance(data["holidays"], list):

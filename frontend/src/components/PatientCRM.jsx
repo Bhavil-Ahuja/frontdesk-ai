@@ -177,14 +177,30 @@ export default function PatientCRM() {
   return (
     <div className="p-4 md:p-8 space-y-4 md:space-y-6 max-w-5xl mx-auto">
       {/* Header */}
-      <div>
-        <h2 className="text-xl md:text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
-          <Users className="w-6 md:w-7 h-6 md:h-7 text-primary-500" />
-          Patients
-        </h2>
-        <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-          Built automatically from AI bookings and SMS.
-        </p>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <h2 className="text-xl md:text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
+            <Users className="w-6 md:w-7 h-6 md:h-7 text-primary-500" />
+            Patients
+          </h2>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+            Built automatically from AI bookings and SMS.
+          </p>
+        </div>
+        <button
+          onClick={() => {
+            setSelectMode(!selectMode);
+            if (selectMode) setSelectedIds(new Set());
+          }}
+          className={`flex items-center gap-1.5 px-4 py-2.5 border rounded-lg text-sm font-medium transition-colors ${
+            selectMode
+              ? 'bg-primary-50 dark:bg-primary-900/30 border-primary-300 dark:border-primary-700 text-primary-700 dark:text-primary-400'
+              : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/50'
+          }`}
+        >
+          <CheckCircle2 className="w-4 h-4" />
+          {selectMode ? 'Cancel Selection' : 'Select'}
+        </button>
       </div>
 
       {/* Search & Sort bar */}
@@ -201,20 +217,6 @@ export default function PatientCRM() {
         </div>
         <div className="flex items-center gap-2">
           <TestDataToggle enabled={showTestData} onChange={setShowTestData} />
-          <button
-            onClick={() => {
-              setSelectMode(!selectMode);
-              if (selectMode) setSelectedIds(new Set());
-            }}
-            className={`flex items-center gap-1.5 px-3 py-2.5 border rounded-lg text-sm font-medium transition-colors ${
-              selectMode
-                ? 'bg-primary-50 dark:bg-primary-900/30 border-primary-300 dark:border-primary-700 text-primary-700 dark:text-primary-400'
-                : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/50'
-            }`}
-          >
-            <CheckCircle2 className="w-4 h-4" />
-            Select
-          </button>
           <ThemedSelect
             value={sort}
             onChange={setSort}
@@ -1096,7 +1098,7 @@ function SMSTab({ messages, tz }) {
     return <EmptyState icon={MessageSquare} message="No SMS messages." />;
   }
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 max-h-[500px] overflow-y-auto p-4 space-y-2">
+    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 max-h-[500px] overflow-y-auto overscroll-y-contain p-4 space-y-2" style={{ WebkitOverflowScrolling: 'touch' }}>
       {/* Messages are newest first from API, reverse for chat order */}
       {[...messages].reverse().map((msg) => {
         const isOutbound = msg.direction === 'OUTBOUND';

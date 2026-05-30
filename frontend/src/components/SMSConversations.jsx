@@ -210,7 +210,7 @@ export default function SMSConversations() {
               <p className="text-sm text-gray-500 dark:text-gray-400">No messages found for this number.</p>
             </div>
           ) : (
-            <div className="max-h-[600px] overflow-y-auto p-4 space-y-3 bg-gray-50 dark:bg-gray-900">
+            <div className="max-h-[600px] overflow-y-auto overscroll-y-contain p-4 space-y-3 bg-gray-50 dark:bg-gray-900" style={{ WebkitOverflowScrolling: 'touch' }}>
               {messages.map((msg) => {
                 const isOutbound = msg.direction === 'OUTBOUND';
                 return (
