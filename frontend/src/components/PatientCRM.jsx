@@ -60,6 +60,7 @@ export default function PatientCRM() {
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState('recent');
   const [showTestData, setShowTestData] = useState(false);
+  const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [deleting, setDeleting] = useState(false);
   const searchTimeout = useRef(null);
@@ -151,6 +152,7 @@ export default function PatientCRM() {
         `Deleted ${result.deleted.patients} patient${result.deleted.patients > 1 ? 's' : ''} and ${result.total - result.deleted.patients} related records.`
       );
       setSelectedIds(new Set());
+      setSelectMode(false);
       await fetchPatients();
     } catch (err) {
       toast.error(err.message || 'Failed to delete patients');
@@ -199,6 +201,20 @@ export default function PatientCRM() {
         </div>
         <div className="flex items-center gap-2">
           <TestDataToggle enabled={showTestData} onChange={setShowTestData} />
+          <button
+            onClick={() => {
+              setSelectMode(!selectMode);
+              if (selectMode) setSelectedIds(new Set());
+            }}
+            className={`flex items-center gap-1.5 px-3 py-2.5 border rounded-lg text-sm font-medium transition-colors ${
+              selectMode
+                ? 'bg-primary-50 dark:bg-primary-900/30 border-primary-300 dark:border-primary-700 text-primary-700 dark:text-primary-400'
+                : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/50'
+            }`}
+          >
+            <CheckCircle2 className="w-4 h-4" />
+            Select
+          </button>
           <ThemedSelect
             value={sort}
             onChange={setSort}
@@ -213,7 +229,7 @@ export default function PatientCRM() {
       </div>
 
       {/* Bulk delete toolbar — shows when patients are selected */}
-      {selectedIds.size > 0 && (
+      {selectMode && selectedIds.size > 0 && (
         <div className="flex items-center justify-between bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl px-4 py-3">
           <span className="text-sm font-medium text-red-700 dark:text-red-400">
             {selectedIds.size} patient{selectedIds.size > 1 ? 's' : ''} selected
@@ -264,14 +280,16 @@ export default function PatientCRM() {
         <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
           {/* Table header — desktop only */}
           <div className="hidden md:flex items-center gap-3 px-4 py-3 bg-gray-50 dark:bg-gray-700/50 border-b border-gray-200 dark:border-gray-700 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
-            <div className="shrink-0 w-5">
-              <input
-                type="checkbox"
-                checked={selectedIds.size === patients.length && patients.length > 0}
-                onChange={toggleSelectAll}
-                className="w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-primary-500 focus:ring-primary-500 cursor-pointer"
-              />
-            </div>
+            {selectMode && (
+              <div className="shrink-0 w-5">
+                <input
+                  type="checkbox"
+                  checked={selectedIds.size === patients.length && patients.length > 0}
+                  onChange={toggleSelectAll}
+                  className="w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-primary-500 focus:ring-primary-500 cursor-pointer"
+                />
+              </div>
+            )}
             <div className="grid grid-cols-12 gap-3 flex-1">
               <div className="col-span-4">Patient</div>
               <div className="col-span-2">Contact</div>
@@ -287,18 +305,20 @@ export default function PatientCRM() {
               key={p.id}
               className={`w-full hover:bg-primary-50/50 dark:hover:bg-primary-900/20 transition-colors ${
                 idx > 0 ? 'border-t border-gray-100 dark:border-gray-700' : ''
-              } ${selectedIds.has(p.id) ? 'bg-red-50/50 dark:bg-red-900/10' : ''}`}
+              } ${selectMode && selectedIds.has(p.id) ? 'bg-red-50/50 dark:bg-red-900/10' : ''}`}
             >
               {/* Desktop row */}
               <div className="hidden md:flex items-center gap-3 px-4 py-3.5">
-                <div className="shrink-0 w-5" onClick={(e) => e.stopPropagation()}>
-                  <input
-                    type="checkbox"
-                    checked={selectedIds.has(p.id)}
-                    onChange={() => toggleSelect(p.id)}
-                    className="w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-primary-500 focus:ring-primary-500 cursor-pointer"
-                  />
-                </div>
+                {selectMode && (
+                  <div className="shrink-0 w-5" onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(p.id)}
+                      onChange={() => toggleSelect(p.id)}
+                      className="w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-primary-500 focus:ring-primary-500 cursor-pointer"
+                    />
+                  </div>
+                )}
                 <button
                   onClick={() => setSelectedPatientId(p.id)}
                   className="grid grid-cols-12 gap-3 flex-1 items-center text-left"
@@ -362,14 +382,16 @@ export default function PatientCRM() {
 
               {/* Mobile card */}
               <div className="md:hidden px-4 py-3.5 flex items-center gap-3">
-                <div onClick={(e) => e.stopPropagation()} className="shrink-0">
-                  <input
-                    type="checkbox"
-                    checked={selectedIds.has(p.id)}
-                    onChange={() => toggleSelect(p.id)}
-                    className="w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-primary-500 focus:ring-primary-500 cursor-pointer"
-                  />
-                </div>
+                {selectMode && (
+                  <div onClick={(e) => e.stopPropagation()} className="shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(p.id)}
+                      onChange={() => toggleSelect(p.id)}
+                      className="w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-primary-500 focus:ring-primary-500 cursor-pointer"
+                    />
+                  </div>
+                )}
                 <button
                   onClick={() => setSelectedPatientId(p.id)}
                   className="flex-1 flex items-center gap-3 text-left min-w-0"
