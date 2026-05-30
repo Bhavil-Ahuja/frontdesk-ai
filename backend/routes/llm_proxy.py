@@ -29,7 +29,7 @@ from openai import AsyncOpenAI, OpenAI
 from google.genai import types as gtypes
 
 from backend.config import settings
-from backend.defaults import DEFAULT_TIMEZONE
+from backend.defaults import DEFAULT_TIMEZONE, slugify_appointment_type
 from backend.prompts.agent_prompt import build_system_prompt
 from backend.services.llm_service import (
     get_tools,
@@ -1598,8 +1598,9 @@ async def _execute_tool(
                     # Get duration from tenant appointment types
                     auto_duration = 30
                     if tenant_ctx and tenant_ctx.appointment_types:
+                        slug = slugify_appointment_type(appt_type_for_auto)
                         for at in tenant_ctx.appointment_types:
-                            if at.get("code") == appt_type_for_auto:
+                            if slugify_appointment_type(at.get("code", "")) == slug:
                                 auto_duration = at.get("duration_minutes", 30)
                                 break
 

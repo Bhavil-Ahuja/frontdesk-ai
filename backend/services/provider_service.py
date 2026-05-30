@@ -22,6 +22,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import select, and_, func
 
 from backend.database import async_session
+from backend.defaults import slugify_appointment_type
 from backend.models.provider import Provider
 from backend.models.appointment import Appointment, AppointmentStatus
 
@@ -101,7 +102,7 @@ async def create_provider(
             tenant_id=tenant_id,
             name=name.strip(),
             title=title.strip() if title else None,
-            appointment_types=appointment_types or [],
+            appointment_types=[slugify_appointment_type(t) for t in appointment_types] if appointment_types else [],
             calendar_id=calendar_id,
             business_hours_override=business_hours_override,
             max_concurrent=max(1, max_concurrent),
@@ -215,6 +216,9 @@ async def update_provider(provider_id: uuid.UUID, data: dict) -> dict | None:
         updated_fields = []
         for field_name, value in data.items():
             if field_name in _UPDATABLE_FIELDS:
+                # Normalize appointment type slugs on write
+                if field_name == "appointment_types" and isinstance(value, list):
+                    value = [slugify_appointment_type(t) for t in value]
                 setattr(provider, field_name, value)
                 updated_fields.append(field_name)
 
@@ -307,9 +311,11 @@ async def get_providers_for_appointment_type(
         all_active = result.scalars().all()
 
     matched = []
+    slug = slugify_appointment_type(appointment_type)
     for p in all_active:
         types_list = p.appointment_types or []
-        if not types_list or appointment_type in types_list:
+        slugged_list = [slugify_appointment_type(t) for t in types_list] if types_list else []
+        if not types_list or slug in slugged_list:
             matched.append({
                 "id": str(p.id),
                 "name": p.name,
@@ -360,9 +366,11 @@ async def auto_assign_provider(
 
     # Filter to those matching the appointment type
     candidates = []
+    slug = slugify_appointment_type(appointment_type)
     for p in all_active:
         types_list = p.appointment_types or []
-        if not types_list or appointment_type in types_list:
+        slugged_list = [slugify_appointment_type(t) for t in types_list] if types_list else []
+        if not types_list or slug in slugged_list:
             candidates.append(p)
 
     if not candidates:

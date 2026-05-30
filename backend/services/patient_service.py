@@ -22,6 +22,7 @@ from sqlalchemy import select, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import async_session
+from backend.defaults import slugify_appointment_type
 from backend.models.patient import Patient
 from backend.models.appointment import Appointment, AppointmentStatus
 
@@ -389,6 +390,9 @@ async def upsert_patient(
     norm_phone = _normalise_phone(phone)
     if not norm_phone:
         raise ValueError("Cannot upsert patient without a phone number")
+    # Canonical slug so preferred_appointment_type is always consistent
+    if appointment_type:
+        appointment_type = slugify_appointment_type(appointment_type)
 
     async with async_session() as session:
         # Exact match first
@@ -482,6 +486,7 @@ async def record_appointment(
     falling back to the SQLAlchemy column default (60).
     """
     norm_phone = _normalise_phone(patient_phone)
+    appointment_type = slugify_appointment_type(appointment_type)
 
     # Upsert patient first
     await upsert_patient(

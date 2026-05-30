@@ -24,6 +24,7 @@ from backend.defaults import (
     DEFAULT_AGENT_NAME,
     DEFAULT_TEST_PATIENT_NAME,
     DEFAULT_TIMEZONE,
+    slugify_appointment_type,
 )
 from backend.database import async_session, get_db
 from backend.models.call import Call, CallOutcome
@@ -36,6 +37,50 @@ from backend.services.http_client import http
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Dashboard"])
+
+
+# ── Appointment-type slug helpers ──────────────────────────────────────────
+
+
+def _normalise_appointment_types(types: list[dict]) -> list[dict]:
+    """
+    Server-side slug generation and deduplication for appointment types.
+
+    Rules:
+      1. Every type gets a ``code`` derived from its ``name`` via the
+         canonical ``slugify_appointment_type`` from defaults.py.
+      2. If two types produce the same slug, a numeric suffix is appended
+         (``cleaning``, ``cleaning_2``, ``cleaning_3``…).
+      3. Sane defaults are enforced for duration and concurrency.
+      4. Empty/blank names are silently dropped.
+    """
+    seen_codes: dict[str, int] = {}  # code → count of occurrences
+    normalised: list[dict] = []
+
+    for at in types:
+        name = (at.get("name") or "").strip()
+        if not name:
+            continue  # drop blank entries
+
+        base_code = slugify_appointment_type(name)
+
+        # Deduplicate: first occurrence keeps the base code, subsequent get _2, _3…
+        if base_code in seen_codes:
+            seen_codes[base_code] += 1
+            code = f"{base_code}_{seen_codes[base_code]}"
+        else:
+            seen_codes[base_code] = 1
+            code = base_code
+
+        normalised.append({
+            "code": code,
+            "name": name,
+            "duration_minutes": max(5, min(480, int(at.get("duration_minutes") or 60))),
+            "max_concurrent": max(1, min(50, int(at.get("max_concurrent") or 1))),
+        })
+
+    return normalised
+
 
 # Default config used when a tenant hasn't customised yet
 _DEFAULT_BUSINESS_HOURS = {
@@ -354,6 +399,11 @@ async def update_config(
                 if isinstance(v, str) and "•" in v:
                     continue  # Don't overwrite with masked value
             update_fields[k] = data[k]
+
+    # Server-side slug generation + deduplication for appointment types.
+    # The user enters display names; the server owns the codes.
+    if "appointment_types" in update_fields and isinstance(update_fields["appointment_types"], list):
+        update_fields["appointment_types"] = _normalise_appointment_types(update_fields["appointment_types"])
 
     if "voice_id" in data or "voice_provider" in data:
         update_fields["voice_config"] = {

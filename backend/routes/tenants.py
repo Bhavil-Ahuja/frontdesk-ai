@@ -282,6 +282,11 @@ async def update_tenant(
     if not update_data:
         raise HTTPException(status_code=400, detail="No fields to update.")
 
+    # Server-side slug generation + deduplication for appointment types
+    if "appointment_types" in update_data and isinstance(update_data["appointment_types"], list):
+        from backend.routes.dashboard import _normalise_appointment_types
+        update_data["appointment_types"] = _normalise_appointment_types(update_data["appointment_types"])
+
     tenant = await tenant_service.update_tenant(uid, update_data)
     if not tenant:
         raise HTTPException(status_code=404, detail="Tenant not found.")

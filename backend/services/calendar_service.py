@@ -26,7 +26,7 @@ from datetime import datetime
 from typing import Any
 
 from backend.config import settings
-from backend.defaults import DEFAULT_APPOINTMENT_DURATION_MINUTES, DEFAULT_TIMEZONE
+from backend.defaults import DEFAULT_APPOINTMENT_DURATION_MINUTES, DEFAULT_TIMEZONE, slugify_appointment_type
 from backend.services import native_scheduling
 from backend.services import google_calendar as gcal
 
@@ -93,10 +93,11 @@ def _resolve_appointment_config(
     if not tenant_ctx or not tenant_ctx.appointment_types:
         return duration, max_conc
 
-    # Try to match by code
-    key = (appointment_type_key or "").lower().replace(" ", "_")
+    # Try to match by code — slugify both sides so "Follow-up", "follow_up",
+    # and "FOLLOW UP" all resolve to the same canonical code.
+    key = slugify_appointment_type(appointment_type_key)
     for at in tenant_ctx.appointment_types:
-        if at.get("code", "").lower() == key:
+        if slugify_appointment_type(at.get("code", "")) == key:
             duration = at.get("duration_minutes", DEFAULT_APPOINTMENT_DURATION_MINUTES)
             max_conc = at.get("max_concurrent", 1)
             return duration, max_conc

@@ -33,6 +33,7 @@ from backend.defaults import (
     DEFAULT_BUSINESS_HOURS,
     DEFAULT_SLOT_INTERVAL_MINUTES,
     DEFAULT_TIMEZONE,
+    slugify_appointment_type,
 )
 from backend.models.appointment import Appointment, AppointmentStatus, BookedVia
 
@@ -177,9 +178,11 @@ async def get_native_slots(
             query = query.where(Appointment.tenant_id == tenant_id)
         # Only count appointments of the SAME type toward the concurrency
         # limit — different types are independent resource pools.
+        # Stored values are normalised at booking time via
+        # slugify_appointment_type, so a simple lower() match works.
         if appointment_type:
             query = query.where(
-                func.lower(Appointment.appointment_type) == appointment_type.lower()
+                func.lower(Appointment.appointment_type) == slugify_appointment_type(appointment_type)
             )
         # Exclude the appointment being rescheduled so the patient's own
         # booking doesn't block the new slot they want to move to.
@@ -392,7 +395,7 @@ async def get_provider_aware_slots(
         # limit — different types are independent resource pools.
         if appointment_type:
             appt_query = appt_query.where(
-                func.lower(Appointment.appointment_type) == appointment_type.lower()
+                func.lower(Appointment.appointment_type) == slugify_appointment_type(appointment_type)
             )
         # Exclude the appointment being rescheduled so the patient's own
         # booking doesn't block the new slot they want to move to.
@@ -488,6 +491,10 @@ async def create_native_booking(
         return None
 
     booking_uid = f"native-{uuid.uuid4().hex[:12]}"
+
+    # Canonicalize the appointment type code so it always matches the slug
+    # used in tenant config and SQL overlap queries.
+    appointment_type = slugify_appointment_type(appointment_type)
 
     # Normalise phone so it matches patient lookups (E.164 format)
     from backend.services.patient_service import _normalise_phone, upsert_patient

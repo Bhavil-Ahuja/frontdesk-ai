@@ -10,6 +10,26 @@ Vapi assistant settings managed on the Vapi side. They live in
 vapi_service.py where they belong.
 """
 
+import re
+
+
+def slugify_appointment_type(value: str) -> str:
+    """
+    Canonical slug for appointment type codes.
+
+    Converts any input — display name, mixed-case code, or raw user text —
+    into the lowercase, underscore-separated code used throughout the system.
+
+        "Dental Cleaning"  → "dental_cleaning"
+        "Follow-up"        → "follow_up"
+        "NEW PATIENT VISIT" → "new_patient_visit"
+        "consultation"     → "consultation"
+
+    Every place that compares, stores, or resolves an appointment type code
+    MUST use this function so slugs are consistent everywhere.
+    """
+    return re.sub(r"[^a-z0-9]+", "_", (value or "").lower().strip()).strip("_") or "appointment"
+
 # Agent
 DEFAULT_AGENT_NAME = "Sarah"
 DEFAULT_BUSINESS_NAME = "Our Office"

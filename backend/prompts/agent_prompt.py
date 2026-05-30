@@ -47,12 +47,18 @@ def _build_static_prompt(
     Build the static personality + rules section of the system prompt.
     Parameterised so it works for any business type — dental, hospital, clinic, etc.
     """
-    # Format appointment types into readable text
+    # Format appointment types into readable text.
+    # Show both the display name and the internal code so the LLM knows
+    # exactly which value to pass in tool calls (the code).
     appt_lines = []
     for at in appointment_types:
         label = at.get("name", at.get("code", "Appointment"))
+        code = at.get("code", "")
         duration = at.get("duration_minutes", DEFAULT_APPOINTMENT_DURATION_MINUTES)
-        appt_lines.append(f"- {label}: {duration} minutes")
+        if code and code != label.lower().replace(" ", "_"):
+            appt_lines.append(f"- {label} (code: \"{code}\"): {duration} minutes")
+        else:
+            appt_lines.append(f"- {label}: {duration} minutes")
     appt_text = "\n".join(appt_lines) if appt_lines else "- Consultation: 45 minutes"
 
     # Emergency guidance (use tenant-specific if available, else generic only when escalation is enabled)

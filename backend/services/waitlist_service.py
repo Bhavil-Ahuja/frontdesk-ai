@@ -19,7 +19,7 @@ from typing import Any
 from sqlalchemy import select, and_, update
 
 from backend.database import async_session
-from backend.defaults import DEFAULT_TIMEZONE
+from backend.defaults import DEFAULT_TIMEZONE, slugify_appointment_type
 from backend.models.waitlist import WaitlistEntry, WaitlistStatus
 from backend.services import sms_service
 from backend.services.patient_service import _phone_digits_tail, _phone_col_clean, _normalise_phone
@@ -153,6 +153,9 @@ async def add_to_waitlist(
 
     # Normalise the phone before storing — prevents dirty data (dashes, spaces)
     norm_phone = _normalise_phone(patient_phone)
+
+    # Canonicalize so waitlist matching uses the same slug as booking
+    appointment_type = slugify_appointment_type(appointment_type)
 
     entry = WaitlistEntry(
         id=uuid.uuid4(),
@@ -334,6 +337,9 @@ async def check_waitlist_for_opening(
     # Provider filtering is enforced via OR in the WHERE so the DB only
     # returns rows that requested THIS provider or no provider at all.
     from sqlalchemy import or_  # local import to avoid widening top-level surface
+
+    # Normalize so the match is consistent with what was stored
+    appointment_type = slugify_appointment_type(appointment_type)
 
     filters = [
         WaitlistEntry.tenant_id == tenant_id,
