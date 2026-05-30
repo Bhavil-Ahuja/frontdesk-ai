@@ -3,6 +3,7 @@ Async SQLAlchemy database engine, session factory, and table initialisation.
 """
 
 import logging
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
@@ -11,10 +12,37 @@ from backend.config import settings
 
 logger = logging.getLogger(__name__)
 
+# ── Sanitise DATABASE_URL for asyncpg compatibility ─────────────────────────
+# Cloud providers like Neon append query params (channel_binding, sslmode)
+# that asyncpg doesn't understand.  Strip them so the engine can connect.
+
+_ASYNCPG_UNSUPPORTED_PARAMS = {"channel_binding", "sslmode"}
+
+
+def _sanitise_db_url(raw_url: str) -> str:
+    """Remove query-string params that asyncpg cannot handle."""
+    parsed = urlparse(raw_url)
+    params = parse_qs(parsed.query, keep_blank_values=True)
+
+    # Convert sslmode=require → ssl=require (asyncpg uses 'ssl')
+    if "sslmode" in params and "ssl" not in params:
+        params["ssl"] = params["sslmode"]
+
+    cleaned = {k: v for k, v in params.items() if k not in _ASYNCPG_UNSUPPORTED_PARAMS}
+    new_query = urlencode(cleaned, doseq=True)
+    sanitised = urlunparse(parsed._replace(query=new_query))
+    if sanitised != raw_url:
+        logger.info("Sanitised DATABASE_URL: removed unsupported asyncpg params %s",
+                     [k for k in params if k in _ASYNCPG_UNSUPPORTED_PARAMS])
+    return sanitised
+
+
+_db_url = _sanitise_db_url(settings.DATABASE_URL)
+
 # ── Engine & session factory ──────────────────────────────────────────────────
 
 engine = create_async_engine(
-    settings.DATABASE_URL,
+    _db_url,
     echo=False,
     pool_size=10,
     max_overflow=20,
