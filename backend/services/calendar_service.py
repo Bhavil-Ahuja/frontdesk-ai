@@ -208,6 +208,7 @@ async def get_available_slots(
             tz_name=tz,
             provider_id=provider_uuid,
             exclude_booking_uid=exclude_booking_uid,
+            appointment_type=appointment_type_key,
         )
         # Extract just the time strings for backwards compatibility
         slot_times = [s["time"] for s in result.get("slots", [])]

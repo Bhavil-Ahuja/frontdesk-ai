@@ -1831,6 +1831,7 @@ async def _execute_tool(
                 provider_id=provider_uuid,
                 holidays=(tenant_ctx.holidays if tenant_ctx and getattr(tenant_ctx, "holidays", None) else None),
                 exclude_booking_uid=exclude_uid,
+                appointment_type=appt_type,
             )
 
             # ── Holiday short-circuit ─────────────────────────────────────

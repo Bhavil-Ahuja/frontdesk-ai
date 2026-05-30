@@ -24,7 +24,7 @@ from datetime import datetime, timedelta, timezone, time as dtime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select, and_
+from sqlalchemy import func, select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import async_session
@@ -57,6 +57,7 @@ async def get_native_slots(
     tz_name: str = DEFAULT_TIMEZONE,
     max_concurrent: int = 1,
     exclude_booking_uid: str | None = None,
+    appointment_type: str = "",
 ) -> list[str]:
     """
     Compute available time slots on `date_str` for an appointment of
@@ -67,6 +68,11 @@ async def get_native_slots(
     candidate slot and only mark it unavailable when the count reaches
     ``max_concurrent``.
 
+    Concurrency is **appointment-type scoped**: only existing appointments of
+    the same type count toward the ``max_concurrent`` limit. A "cleaning" at
+    3:45 PM does not affect whether a "consultation" can start at 4:00 PM —
+    they are independent resource pools.
+
     All arithmetic is done in UTC so that overlap detection against DB
     appointments (stored in UTC) is correct.  The returned ISO strings
     include the tenant's timezone offset so downstream consumers (the LLM,
@@ -76,7 +82,8 @@ async def get_native_slots(
       1. Look up business hours for that day of week
       2. Generate a grid of start times (every _SLOT_INTERVAL minutes) in
          the tenant's local timezone, then convert to UTC
-      3. Fetch existing CONFIRMED appointments for that UTC range + tenant
+      3. Fetch existing CONFIRMED appointments *of the same type* for that
+         UTC range + tenant
       4. Count overlaps per slot — block only when count ≥ max_concurrent
       5. Return remaining slots as timezone-aware ISO datetime strings in
          the tenant's local timezone (e.g. "2026-05-06T09:00:00-05:00")
@@ -92,6 +99,9 @@ async def get_native_slots(
         exclude_booking_uid: if provided, excludes this booking from the
             overlap check. Used during rescheduling so the patient's own
             appointment doesn't block the new time they want to move to.
+        appointment_type: when set, only count existing appointments of the
+            same type toward the concurrency limit (case-insensitive).
+            Different types are treated as independent resource pools.
 
     Returns:
         List of ISO datetime strings with timezone offset
@@ -131,10 +141,9 @@ async def get_native_slots(
     close_time = dtime(close_h, close_m)
 
     # ── Generate slot grid in local timezone, convert to UTC ─────────────
-    # Use the smaller of the appointment duration and the default slot interval
-    # so shorter appointments (e.g. 15 min) get finer-grained slots (:00, :15,
-    # :30, :45) instead of only the default 30-min grid (:00, :30).
-    effective_interval = min(duration_minutes, _SLOT_INTERVAL)
+    # Always use a fixed 15-minute grid (:00, :15, :30, :45) regardless of
+    # appointment duration so patients can start at any quarter-hour.
+    effective_interval = _SLOT_INTERVAL
 
     candidate_slots_local: list[datetime] = []
     candidate_slots_utc: list[datetime] = []
@@ -166,6 +175,12 @@ async def get_native_slots(
         )
         if tenant_id:
             query = query.where(Appointment.tenant_id == tenant_id)
+        # Only count appointments of the SAME type toward the concurrency
+        # limit — different types are independent resource pools.
+        if appointment_type:
+            query = query.where(
+                func.lower(Appointment.appointment_type) == appointment_type.lower()
+            )
         # Exclude the appointment being rescheduled so the patient's own
         # booking doesn't block the new slot they want to move to.
         if exclude_booking_uid:
@@ -174,8 +189,8 @@ async def get_native_slots(
         result = await session.execute(query)
         existing_appointments = list(result.scalars().all())
 
-    logger.info("[NativeSched] %s: %d candidates, %d existing appts (max_concurrent=%d, exclude=%s)",
-                date_str, len(candidate_slots_utc), len(existing_appointments), max_concurrent,
+    logger.info("[NativeSched] %s: %d candidates, %d existing appts (type=%s, max_concurrent=%d, exclude=%s)",
+                date_str, len(candidate_slots_utc), len(existing_appointments), appointment_type or "all", max_concurrent,
                 exclude_booking_uid or "none")
 
     # ── Count overlaps per slot (all in UTC) ─────────────────────────────
@@ -228,6 +243,7 @@ async def get_provider_aware_slots(
     provider_id: uuid.UUID | None = None,
     holidays: list[dict[str, Any]] | None = None,
     exclude_booking_uid: str | None = None,
+    appointment_type: str = "",
 ) -> dict[str, Any]:
     """
     Get available slots with provider-level concurrency tracking.
@@ -236,6 +252,11 @@ async def get_provider_aware_slots(
     - Considers each provider's max_concurrent limit separately
     - Returns which providers are available for each slot
     - Supports filtering to a specific provider
+
+    Concurrency is **appointment-type scoped**: only existing appointments of
+    the same type count toward each provider's ``max_concurrent`` limit.
+    Different appointment types are independent resource pools — a "cleaning"
+    does not consume capacity for "consultation" slots.
 
     Returns:
         {
@@ -310,8 +331,8 @@ async def get_provider_aware_slots(
     open_time = dtime(open_h, open_m)
     close_time = dtime(close_h, close_m)
 
-    # Generate candidate slots — use finer granularity for shorter appointments
-    effective_interval = min(duration_minutes, _SLOT_INTERVAL)
+    # Generate candidate slots — always use fixed 15-minute grid
+    effective_interval = _SLOT_INTERVAL
 
     candidate_slots_local: list[datetime] = []
     candidate_slots_utc: list[datetime] = []
@@ -347,6 +368,7 @@ async def get_provider_aware_slots(
         simple_slots = await get_native_slots(
             date_str, duration_minutes, tenant_id, business_hours, tz_name,
             max_concurrent=1, exclude_booking_uid=exclude_booking_uid,
+            appointment_type=appointment_type,
         )
         return {
             "slots": [{"time": s, "available_providers": []} for s in simple_slots],
@@ -366,6 +388,12 @@ async def get_provider_aware_slots(
                 Appointment.status == AppointmentStatus.CONFIRMED,
             )
         )
+        # Only count appointments of the SAME type toward the concurrency
+        # limit — different types are independent resource pools.
+        if appointment_type:
+            appt_query = appt_query.where(
+                func.lower(Appointment.appointment_type) == appointment_type.lower()
+            )
         # Exclude the appointment being rescheduled so the patient's own
         # booking doesn't block the new slot they want to move to.
         if exclude_booking_uid:

@@ -17,7 +17,7 @@ DEFAULT_GREETING = "Thank you for calling. How can I help you today?"
 
 # Scheduling
 DEFAULT_TIMEZONE = "America/Chicago"
-DEFAULT_SLOT_INTERVAL_MINUTES = 30
+DEFAULT_SLOT_INTERVAL_MINUTES = 15
 DEFAULT_APPOINTMENT_DURATION_MINUTES = 60
 DEFAULT_BUSINESS_HOURS = {
     "monday": {"open": "08:00", "close": "18:00"},

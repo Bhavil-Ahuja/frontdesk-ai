@@ -300,7 +300,7 @@ async def get_available_slots(
             open_h, open_m = _parse_hour_minute(day_hours["open"])
             close_h, close_m = _parse_hour_minute(day_hours["close"])
 
-            # Generate 30-minute interval slots within business hours
+            # Generate 15-minute interval slots within business hours
             slot_hour, slot_min = open_h, open_m
             while True:
                 slot_start = current_date.replace(
@@ -317,7 +317,7 @@ async def get_available_slots(
                 # Skip slots that are in the past (with 5-minute buffer)
                 now_tz = datetime.now(tz)
                 if slot_start_tz < now_tz - timedelta(minutes=5):
-                    slot_min += 30
+                    slot_min += 15
                     if slot_min >= 60:
                         slot_hour += 1
                         slot_min -= 60
@@ -335,8 +335,8 @@ async def get_available_slots(
                 if overlap_count < max_concurrent:
                     slots.append(slot_start_tz.isoformat())
 
-                # Advance by 30 minutes
-                slot_min += 30
+                # Advance by 15 minutes
+                slot_min += 15
                 if slot_min >= 60:
                     slot_hour += 1
                     slot_min -= 60
