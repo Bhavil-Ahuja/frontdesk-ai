@@ -115,20 +115,11 @@ _MIGRATIONS: list[str] = [
         END IF;
     END $$;""",
 
-    # ── appointments — prevent double-booking the same provider at the same
-    #    instant. Partial unique index excludes cancelled/completed/no-show
-    #    rows so reusing a slot after cancellation is still possible.
-    #    NOTE: COALESCE handles NULL provider_id by treating "no provider" as
-    #    a single virtual provider — useful for tenants who don't yet use
-    #    providers. If you need to allow multiple "no provider" bookings at
-    #    the same time, drop this index.
-    """CREATE UNIQUE INDEX IF NOT EXISTS uniq_appt_provider_time
-       ON appointments (
-           tenant_id,
-           COALESCE(provider_id, '00000000-0000-0000-0000-000000000000'::uuid),
-           scheduled_at
-       )
-       WHERE status IN ('CONFIRMED', 'RESCHEDULED')""",
+    # ── appointments — drop the old single-concurrency unique index.
+    #    With max_concurrent > 1, multiple bookings at the same time/provider
+    #    are allowed. Concurrency is now enforced at the application level via
+    #    pre-booking checks in create_native_booking and reschedule_native_booking.
+    "DROP INDEX IF EXISTS uniq_appt_provider_time",
 
     # ── tenants table — usage metering columns (Option A billing) ────────
     "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS call_minutes_used DOUBLE PRECISION NOT NULL DEFAULT 0",
