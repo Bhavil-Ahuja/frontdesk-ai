@@ -33,6 +33,8 @@ export default function SMSConversations() {
   const [search, setSearch] = useState('');
   const messagesEndRef = useRef(null);
   const searchTimeout = useRef(null);
+  const initialLoadDone = useRef(false);
+  const searchInputRef = useRef(null);
 
   const fetchConversations = useCallback(async (showRefresh = false) => {
     if (showRefresh) setRefreshing(true);
@@ -70,9 +72,16 @@ export default function SMSConversations() {
   }, [showTestData]);
 
   useEffect(() => {
-    setLoading(true);
+    // Only show full-page spinner on initial load, not on search-driven re-fetches
+    if (!initialLoadDone.current) {
+      setLoading(true);
+    }
     if (searchTimeout.current) clearTimeout(searchTimeout.current);
-    searchTimeout.current = setTimeout(() => fetchConversations(), 300);
+    searchTimeout.current = setTimeout(() => {
+      fetchConversations().then(() => {
+        initialLoadDone.current = true;
+      });
+    }, 300);
     return () => clearTimeout(searchTimeout.current);
   }, [fetchConversations]);
 
@@ -156,12 +165,19 @@ export default function SMSConversations() {
         <div className="relative mb-4">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
           <input
+            ref={searchInputRef}
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search by name or phone..."
-            className="w-full pl-10 pr-4 py-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 dark:bg-gray-700 dark:text-white"
+            className="w-full pl-10 pr-10 py-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 dark:bg-gray-700 dark:text-white"
           />
+          {/* Inline searching spinner */}
+          {search && refreshing && (
+            <div className="absolute right-3 top-1/2 -translate-y-1/2">
+              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary-500"></div>
+            </div>
+          )}
         </div>
       )}
 

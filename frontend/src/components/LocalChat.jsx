@@ -265,6 +265,7 @@ export default function LocalChat() {
   }, [messages]);
   const abortRef = useRef(null);
   const scrollRef = useRef(null);
+  const inputRef = useRef(null);
 
   // Subscribe to background stream updates (for when component remounts mid-stream)
   useEffect(() => {
@@ -318,6 +319,16 @@ export default function LocalChat() {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [messages, streaming]);
+
+  // Refocus the textarea when streaming ends so user can type immediately
+  const prevStreaming = useRef(false);
+  useEffect(() => {
+    if (prevStreaming.current && !streaming) {
+      // Streaming just finished — restore focus to input
+      setTimeout(() => inputRef.current?.focus(), 50);
+    }
+    prevStreaming.current = streaming;
+  }, [streaming]);
 
   async function sendMessage(e) {
     e?.preventDefault?.();
@@ -688,6 +699,7 @@ export default function LocalChat() {
       >
         <div className="flex items-end gap-2 md:gap-3 max-w-3xl mx-auto">
           <textarea
+            ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {

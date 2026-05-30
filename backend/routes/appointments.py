@@ -252,9 +252,10 @@ _ALLOWED_STATUS_TRANSITIONS = {
     "NO_SHOW": {"COMPLETED"},
     # From COMPLETED: can correct to no-show
     "COMPLETED": {"NO_SHOW"},
-    # CANCELLED/RESCHEDULED are terminal for now
+    # CANCELLED is terminal
     "CANCELLED": set(),
-    "RESCHEDULED": set(),
+    # RESCHEDULED transitions back to CONFIRMED (handled by AI agent), or can be cancelled
+    "RESCHEDULED": {"CONFIRMED", "CANCELLED"},
 }
 
 
@@ -412,6 +413,23 @@ async def get_appointment_history(
         .order_by(AppointmentStatusHistory.created_at.asc())
     )
     entries = history_result.scalars().all()
+
+    # Backfill: older appointments created before the status_history feature
+    # won't have any entries. Create a synthetic initial entry so the timeline
+    # isn't empty. This is persisted so it only happens once per appointment.
+    if not entries and apt.created_at:
+        booked_via_label = apt.booked_via.value.lower().replace("_", " ") if apt.booked_via else "unknown"
+        backfill = AppointmentStatusHistory(
+            appointment_id=apt.id,
+            old_status=None,
+            new_status=AppointmentStatus.CONFIRMED.value,
+            changed_by=booked_via_label,
+            note=f"Booked via {booked_via_label}",
+            created_at=apt.created_at,
+        )
+        db.add(backfill)
+        await db.flush()
+        entries = [backfill]
 
     return [
         {

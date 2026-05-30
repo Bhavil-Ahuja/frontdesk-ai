@@ -585,8 +585,21 @@ async def cancel_native_booking(
             logger.warning("[NativeSched] Cancel failed — no booking with uid=%s", booking_uid)
             return False
 
+        old_status = appt.status
         appt.status = AppointmentStatus.CANCELLED
         appt.notes = (appt.notes or "") + f"\nCancelled: {reason}" if reason else appt.notes
+
+        # Record in audit trail
+        from backend.models.status_history import AppointmentStatusHistory
+        history_entry = AppointmentStatusHistory(
+            appointment_id=appt.id,
+            old_status=old_status.value if old_status else None,
+            new_status=AppointmentStatus.CANCELLED.value,
+            changed_by="ai_agent",
+            note=f"Cancelled by patient via call{(': ' + reason) if reason else ''}",
+        )
+        session.add(history_entry)
+
         await session.commit()
 
     logger.info("[NativeSched] ✓ Cancelled booking %s (reason: %s)", booking_uid, reason or "none")
@@ -624,8 +637,7 @@ async def reschedule_native_booking(
             return None
 
         old_time = appt.scheduled_at.isoformat() if appt.scheduled_at else "unknown"
-        appt.scheduled_at = new_dt
-        appt.status = AppointmentStatus.CONFIRMED  # reset from RESCHEDULED if needed
+        old_status = appt.status
 
         # Update provider if a new one was requested
         if provider_id:
@@ -635,6 +647,30 @@ async def reschedule_native_booking(
                 logger.info("[NativeSched] Provider changed to %s for %s", provider_id, booking_uid)
             except (ValueError, AttributeError) as exc:
                 logger.warning("[NativeSched] Invalid provider_id=%s — %s", provider_id, exc)
+
+        # Record in audit trail: transition through RESCHEDULED status
+        from backend.models.status_history import AppointmentStatusHistory
+
+        # Step 1: old status → RESCHEDULED (marks the reschedule event)
+        appt.status = AppointmentStatus.RESCHEDULED
+        session.add(AppointmentStatusHistory(
+            appointment_id=appt.id,
+            old_status=old_status.value if old_status else None,
+            new_status=AppointmentStatus.RESCHEDULED.value,
+            changed_by="ai_agent",
+            note=f"Rescheduled from {old_time}",
+        ))
+
+        # Step 2: RESCHEDULED → CONFIRMED at the new time
+        appt.scheduled_at = new_dt
+        appt.status = AppointmentStatus.CONFIRMED
+        session.add(AppointmentStatusHistory(
+            appointment_id=appt.id,
+            old_status=AppointmentStatus.RESCHEDULED.value,
+            new_status=AppointmentStatus.CONFIRMED.value,
+            changed_by="ai_agent",
+            note=f"Confirmed at new time {new_dt.isoformat()}",
+        ))
 
         await session.commit()
 
