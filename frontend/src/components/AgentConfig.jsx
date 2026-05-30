@@ -247,12 +247,12 @@ export default function AgentConfig() {
   }
 
   return (
-    <div className="p-8 space-y-6 max-w-4xl mx-auto">
+    <div className="p-4 md:p-8 space-y-4 md:space-y-6 max-w-4xl mx-auto">
       {/* Header */}
-      <div className="flex items-center justify-between sticky top-0 bg-gray-50 dark:bg-gray-900 -mx-8 px-8 py-4 border-b border-gray-200 dark:border-gray-700 z-10">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sticky top-0 bg-gray-50 dark:bg-gray-900 -mx-4 md:-mx-8 px-4 md:px-8 py-3 md:py-4 border-b border-gray-200 dark:border-gray-700 z-10">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Agent Configuration</h2>
-          <p className="text-gray-500 dark:text-gray-400 mt-1">Manage your AI receptionist settings</p>
+          <h2 className="text-xl md:text-2xl font-bold text-gray-900 dark:text-white">Agent Configuration</h2>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Manage your AI receptionist settings</p>
         </div>
         <button
           onClick={saveConfig}
@@ -459,8 +459,8 @@ export default function AgentConfig() {
             const hours = config.business_hours?.[day];
             const isOpen = hours !== null && hours !== undefined;
             return (
-              <div key={day} className="flex items-center gap-4">
-                <div className="w-24">
+              <div key={day} className="flex flex-wrap items-center gap-2 md:gap-4">
+                <div className="w-20 md:w-24">
                   <span className="text-sm font-medium text-gray-700 dark:text-gray-300 capitalize">{day}</span>
                 </div>
                 <button
@@ -532,7 +532,7 @@ export default function AgentConfig() {
         <div className="space-y-3">
           {(config.appointment_types || []).map((at, idx) => (
             <div key={idx} className="flex items-start gap-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3 border border-gray-100 dark:border-gray-700">
-              <div className="flex-1 grid grid-cols-2 md:grid-cols-3 gap-3">
+              <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
                 <Field label="Name">
                   <input
                     type="text"
@@ -883,7 +883,7 @@ function UsagePlanSection() {
 
 function Section({ icon: Icon, title, children }) {
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 space-y-4">
+    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4 md:p-6 space-y-4">
       <h3 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
         <Icon className="w-5 h-5 text-primary-500" />
         {title}
@@ -1012,11 +1012,11 @@ function HolidaysEditor({ holidays, onChange }) {
             return (
               <div
                 key={h.date}
-                className={`flex items-center gap-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3 border border-gray-100 dark:border-gray-700 ${
+                className={`flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3 border border-gray-100 dark:border-gray-700 ${
                   isPast ? 'opacity-60' : ''
                 }`}
               >
-                <div className="w-44 shrink-0">
+                <div className="sm:w-44 shrink-0">
                   <div className="text-sm font-medium text-gray-900 dark:text-white">
                     {fmtDate(h.date)}
                   </div>
@@ -1044,8 +1044,8 @@ function HolidaysEditor({ holidays, onChange }) {
       )}
 
       {/* Add new row */}
-      <div className="flex items-end gap-3 pt-2 border-t border-gray-100 dark:border-gray-700">
-        <div className="min-w-[12rem]">
+      <div className="flex flex-col sm:flex-row sm:items-end gap-3 pt-2 border-t border-gray-100 dark:border-gray-700">
+        <div className="sm:min-w-[12rem]">
           <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
             Date
           </label>

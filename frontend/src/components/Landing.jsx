@@ -18,7 +18,7 @@ export default function Landing() {
     <div className="min-h-screen bg-white dark:bg-gray-900">
       {/* Top bar */}
       <header className="border-b border-gray-100 dark:border-gray-800">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
+        <div className="max-w-6xl mx-auto px-4 md:px-6 py-3 md:py-4 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <div className="w-9 h-9 bg-primary-500 rounded-xl flex items-center justify-center">
               <Sparkles className="w-5 h-5 text-white" />
@@ -44,19 +44,19 @@ export default function Landing() {
       </header>
 
       {/* Hero */}
-      <section className="max-w-6xl mx-auto px-6 py-20 text-center">
+      <section className="max-w-6xl mx-auto px-4 md:px-6 py-12 md:py-20 text-center">
         <div className="inline-flex items-center gap-2 px-3 py-1 bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-400 rounded-full text-xs font-medium mb-6">
           <Zap className="w-3.5 h-3.5" />
           AI-Powered Voice Agents for Healthcare
         </div>
-        <h1 className="text-5xl font-bold text-gray-900 dark:text-white leading-tight max-w-3xl mx-auto">
+        <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold text-gray-900 dark:text-white leading-tight max-w-3xl mx-auto">
           Never miss a patient call <span className="text-primary-500">again</span>
         </h1>
-        <p className="text-lg text-gray-500 dark:text-gray-400 mt-6 max-w-2xl mx-auto">
+        <p className="text-base md:text-lg text-gray-500 dark:text-gray-400 mt-4 md:mt-6 max-w-2xl mx-auto">
           FrontDesk AI answers your front desk calls 24/7, books appointments into your calendar,
           sends SMS reminders, and escalates emergencies — all automatically.
         </p>
-        <div className="mt-8 flex items-center justify-center gap-3">
+        <div className="mt-6 md:mt-8 flex flex-col sm:flex-row items-center justify-center gap-3">
           <Link
             to="/register"
             className="inline-flex items-center gap-2 px-6 py-3 bg-primary-500 text-white rounded-lg text-sm font-medium hover:bg-primary-600 transition-colors shadow-lg shadow-primary-500/30"
@@ -74,7 +74,7 @@ export default function Landing() {
       </section>
 
       {/* Features */}
-      <section className="max-w-6xl mx-auto px-6 py-16">
+      <section className="max-w-6xl mx-auto px-4 md:px-6 py-10 md:py-16">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
           <Feature
             icon={Phone}
@@ -110,8 +110,8 @@ export default function Landing() {
       </section>
 
       {/* How it works */}
-      <section className="max-w-4xl mx-auto px-6 py-16">
-        <h2 className="text-3xl font-bold text-gray-900 dark:text-white text-center mb-12">How it works</h2>
+      <section className="max-w-4xl mx-auto px-4 md:px-6 py-10 md:py-16">
+        <h2 className="text-2xl md:text-3xl font-bold text-gray-900 dark:text-white text-center mb-8 md:mb-12">How it works</h2>
         <div className="space-y-6">
           <Step
             number="1"
@@ -142,9 +142,9 @@ export default function Landing() {
       </section>
 
       {/* CTA */}
-      <section className="max-w-3xl mx-auto px-6 py-16 text-center">
-        <div className="bg-gradient-to-br from-primary-500 to-primary-600 rounded-3xl p-12 text-white">
-          <h2 className="text-3xl font-bold mb-3">Ready to stop missing calls?</h2>
+      <section className="max-w-3xl mx-auto px-4 md:px-6 py-10 md:py-16 text-center">
+        <div className="bg-gradient-to-br from-primary-500 to-primary-600 rounded-2xl md:rounded-3xl p-8 md:p-12 text-white">
+          <h2 className="text-2xl md:text-3xl font-bold mb-3">Ready to stop missing calls?</h2>
           <p className="text-primary-50 text-lg mb-6">
             Get started in minutes — no credit card required.
           </p>

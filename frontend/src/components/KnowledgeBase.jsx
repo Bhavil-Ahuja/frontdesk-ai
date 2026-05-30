@@ -91,12 +91,12 @@ export default function KnowledgeBase() {
   }
 
   return (
-    <div className="p-8 space-y-8 max-w-5xl">
+    <div className="p-4 md:p-8 space-y-6 md:space-y-8 max-w-5xl">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Practice Info</h2>
-          <p className="text-gray-500 dark:text-gray-400 mt-1">
+          <h2 className="text-xl md:text-2xl font-bold text-gray-900 dark:text-white">Practice Info</h2>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
             Edit information the AI agent uses to answer questions
           </p>
         </div>
@@ -152,7 +152,7 @@ export default function KnowledgeBase() {
           {(kb.services || []).map((svc, i) => (
             <div
               key={i}
-              className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg"
+              className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg"
             >
               <input
                 type="text"
@@ -176,13 +176,13 @@ export default function KnowledgeBase() {
                   onChange={(e) => updateService(i, 'price_max', e.target.value)}
                   className="w-20 px-2 py-1.5 border border-gray-200 dark:border-gray-600 rounded text-sm bg-white dark:bg-gray-700 dark:text-white focus:ring-2 focus:ring-primary-500 outline-none"
                 />
+                <button
+                  onClick={() => removeService(i)}
+                  className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded ml-1"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
               </div>
-              <button
-                onClick={() => removeService(i)}
-                className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded"
-              >
-                <Trash2 className="w-4 h-4" />
-              </button>
             </div>
           ))}
         </div>
@@ -236,7 +236,7 @@ export default function KnowledgeBase() {
 
 function Section({ title, icon: Icon, action, children }) {
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
+    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4 md:p-6">
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
           {Icon && <Icon className="w-5 h-5 text-primary-500" />}

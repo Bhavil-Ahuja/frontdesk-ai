@@ -296,19 +296,19 @@ export default function AppointmentManager() {
   }
 
   return (
-    <div className="p-8 space-y-6">
+    <div className="p-4 md:p-8 space-y-4 md:space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Appointments</h2>
-          <p className="text-gray-500 dark:text-gray-400 mt-1">
+          <h2 className="text-xl md:text-2xl font-bold text-gray-900 dark:text-white">Appointments</h2>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
             {appointments.filter((a) => {
               const d = new Date(a.scheduled_at);
               return d >= new Date() && d.getMonth() === viewMonth && d.getFullYear() === viewYear;
-            }).length} remaining appointments this month
+            }).length} remaining this month
           </p>
         </div>
-        <div className="flex items-center gap-3 flex-wrap">
+        <div className="flex items-center gap-2 md:gap-3 flex-wrap">
           {/* Polished provider dropdown — replaces the basic <select> */}
           <ProviderPicker
             providers={providers}
@@ -390,11 +390,12 @@ export default function AppointmentManager() {
         {new Date(viewYear, viewMonth).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
       </p>
 
-      {/* Month calendar grid */}
-      <div className="grid grid-cols-7 gap-1">
+      {/* Month calendar grid — horizontally scrollable on small screens */}
+      <div className="overflow-x-auto -mx-4 md:mx-0 px-4 md:px-0">
+      <div className="grid grid-cols-7 gap-1 min-w-[640px] md:min-w-0">
         {/* Day-of-week headers */}
         {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => (
-          <div key={d} className="text-center text-[11px] font-semibold text-gray-400 dark:text-gray-500 uppercase py-2">
+          <div key={d} className="text-center text-[10px] md:text-[11px] font-semibold text-gray-400 dark:text-gray-500 uppercase py-2">
             {d}
           </div>
         ))}
@@ -605,12 +606,13 @@ export default function AppointmentManager() {
           );
         })}
       </div>
+      </div>
 
       {/* Detail drawer */}
       {selectedApt && (
         <div className="fixed inset-0 bg-black/30 z-50 flex justify-end" onClick={() => setSelectedApt(null)}>
-          <div className="w-[420px] bg-white dark:bg-gray-800 shadow-xl h-full overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-            <div className="p-6 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
+          <div className="w-full sm:w-[420px] bg-white dark:bg-gray-800 shadow-xl h-full overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="p-4 md:p-6 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
               <h3 className="text-lg font-bold text-gray-900 dark:text-white">Appointment Details</h3>
               <button
                 onClick={() => setSelectedApt(null)}
@@ -619,7 +621,7 @@ export default function AppointmentManager() {
                 <X className="w-5 h-5 text-gray-500 dark:text-gray-400" />
               </button>
             </div>
-            <div className="p-6 space-y-5">
+            <div className="p-4 md:p-6 space-y-5">
               <DetailRow icon={User} label="Patient" value={selectedApt.patient_name} />
               <DetailRow icon={PhoneIcon} label="Phone" value={selectedApt.patient_phone} />
               <DetailRow icon={Mail} label="Email" value={selectedApt.patient_email || '—'} />
@@ -855,7 +857,7 @@ function ProviderPicker({ providers, value, onChange }) {
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className={`flex items-center gap-2 pl-3 pr-2 py-2 rounded-lg border text-sm font-medium transition-colors min-w-[180px] ${
+        className={`flex items-center gap-2 pl-3 pr-2 py-2 rounded-lg border text-sm font-medium transition-colors min-w-[140px] md:min-w-[180px] ${
           selected
             ? 'border-primary-200 dark:border-primary-700 bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 hover:bg-primary-100 dark:hover:bg-primary-900/50'
             : 'border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600'

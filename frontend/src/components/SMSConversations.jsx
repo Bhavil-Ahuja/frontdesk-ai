@@ -79,33 +79,30 @@ export default function SMSConversations() {
   }
 
   return (
-    <div className="p-8 max-w-5xl mx-auto">
+    <div className="p-4 md:p-8 max-w-5xl mx-auto">
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div className="flex items-center gap-3">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4 md:mb-6">
+        <div className="flex items-center gap-3 min-w-0">
           {selectedPhone && (
             <button
               onClick={goBack}
-              className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+              className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors shrink-0"
             >
               <ArrowLeft className="w-5 h-5" />
             </button>
           )}
-          <div>
-            <h2 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
-              <MessageSquare className="w-7 h-7 text-primary-500" />
+          <div className="min-w-0">
+            <h2 className="text-xl md:text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
+              <MessageSquare className="w-6 md:w-7 h-6 md:h-7 text-primary-500 shrink-0" />
               {selectedPhone ? (
-                <>
-                  <Phone className="w-5 h-5 text-gray-400" />
-                  {selectedPhone}
-                </>
+                <span className="truncate text-base md:text-2xl">{selectedPhone}</span>
               ) : (
-                'SMS Conversations'
+                'SMS'
               )}
             </h2>
             {!selectedPhone && (
-              <p className="text-gray-500 dark:text-gray-400 mt-1">
-                Two-way SMS message history between patients and the AI agent.
+              <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                Two-way SMS between patients and the AI agent.
               </p>
             )}
           </div>

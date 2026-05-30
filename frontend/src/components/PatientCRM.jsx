@@ -96,20 +96,20 @@ export default function PatientCRM() {
   }
 
   return (
-    <div className="p-8 space-y-6 max-w-5xl mx-auto">
+    <div className="p-4 md:p-8 space-y-4 md:space-y-6 max-w-5xl mx-auto">
       {/* Header */}
       <div>
-        <h2 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
-          <Users className="w-7 h-7 text-primary-500" />
+        <h2 className="text-xl md:text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
+          <Users className="w-6 md:w-7 h-6 md:h-7 text-primary-500" />
           Patients
         </h2>
-        <p className="text-gray-500 dark:text-gray-400 mt-1">
-          Your patient database — built automatically from AI bookings and SMS conversations.
+        <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+          Built automatically from AI bookings and SMS.
         </p>
       </div>
 
       {/* Search & Sort bar */}
-      <div className="flex items-center gap-3">
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
           <input
@@ -157,8 +157,8 @@ export default function PatientCRM() {
         </div>
       ) : (
         <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
-          {/* Table header */}
-          <div className="grid grid-cols-12 gap-3 px-4 py-3 bg-gray-50 dark:bg-gray-700/50 border-b border-gray-200 dark:border-gray-700 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+          {/* Table header — desktop only */}
+          <div className="hidden md:grid grid-cols-12 gap-3 px-4 py-3 bg-gray-50 dark:bg-gray-700/50 border-b border-gray-200 dark:border-gray-700 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
             <div className="col-span-4">Patient</div>
             <div className="col-span-2">Contact</div>
             <div className="col-span-2 text-center">Visits</div>
@@ -166,19 +166,74 @@ export default function PatientCRM() {
             <div className="col-span-2 text-center">Upcoming</div>
           </div>
 
-          {/* Rows */}
+          {/* Rows — desktop table / mobile card */}
           {patients.map((p, idx) => (
             <button
               key={p.id}
               onClick={() => setSelectedPatientId(p.id)}
-              className={`w-full grid grid-cols-12 gap-3 px-4 py-3.5 items-center text-left hover:bg-primary-50/50 dark:hover:bg-primary-900/20 transition-colors ${
+              className={`w-full text-left hover:bg-primary-50/50 dark:hover:bg-primary-900/20 transition-colors ${
                 idx > 0 ? 'border-t border-gray-100 dark:border-gray-700' : ''
               }`}
             >
-              {/* Name + type */}
-              <div className="col-span-4 flex items-center gap-3 min-w-0">
+              {/* Desktop row */}
+              <div className="hidden md:grid grid-cols-12 gap-3 px-4 py-3.5 items-center">
+                {/* Name + type */}
+                <div className="col-span-4 flex items-center gap-3 min-w-0">
+                  <div
+                    className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-semibold shrink-0 ${
+                      p.is_new_patient
+                        ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400'
+                        : 'bg-primary-100 text-primary-700 dark:bg-primary-900/50 dark:text-primary-400'
+                    }`}
+                  >
+                    {(p.name || '?').charAt(0).toUpperCase()}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">{p.name}</p>
+                    <div className="flex items-center gap-1.5">
+                      {p.is_new_patient && (
+                        <span className="text-xs text-amber-600 font-medium">New</span>
+                      )}
+                      {p.preferred_appointment_type && (
+                        <span className="text-xs text-gray-400 truncate">
+                          {p.preferred_appointment_type.replace(/_/g, ' ')}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <div className="col-span-2 text-xs text-gray-500 dark:text-gray-400 space-y-0.5 min-w-0">
+                  <p className="truncate">{p.phone}</p>
+                  {p.email && <p className="truncate text-gray-400">{p.email}</p>}
+                </div>
+                <div className="col-span-2 text-center">
+                  <span className="text-sm font-semibold text-gray-900 dark:text-white">{p.visit_count}</span>
+                  {p.no_show_count > 0 && (
+                    <span className="ml-1 text-xs text-red-400">({p.no_show_count} NS)</span>
+                  )}
+                </div>
+                <div className="col-span-2 text-xs text-gray-500 dark:text-gray-400">
+                  {p.last_appointment_at
+                    ? fmtRelative(p.last_appointment_at, tz)
+                    : <span className="text-gray-300">Never</span>}
+                </div>
+                <div className="col-span-2 flex items-center justify-center gap-1">
+                  {p.upcoming_count > 0 ? (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-full text-xs font-medium">
+                      <Calendar className="w-3 h-3" />
+                      {p.upcoming_count}
+                    </span>
+                  ) : (
+                    <span className="text-xs text-gray-300">—</span>
+                  )}
+                  <ChevronRight className="w-4 h-4 text-gray-300" />
+                </div>
+              </div>
+
+              {/* Mobile card */}
+              <div className="md:hidden px-4 py-3.5 flex items-center gap-3">
                 <div
-                  className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-semibold shrink-0 ${
+                  className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold shrink-0 ${
                     p.is_new_patient
                       ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400'
                       : 'bg-primary-100 text-primary-700 dark:bg-primary-900/50 dark:text-primary-400'
@@ -186,53 +241,25 @@ export default function PatientCRM() {
                 >
                   {(p.name || '?').charAt(0).toUpperCase()}
                 </div>
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">{p.name}</p>
-                  <div className="flex items-center gap-1.5">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">{p.name}</p>
                     {p.is_new_patient && (
-                      <span className="text-xs text-amber-600 font-medium">New</span>
+                      <span className="text-[10px] bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-400 px-1.5 py-0.5 rounded-full font-medium shrink-0">New</span>
                     )}
-                    {p.preferred_appointment_type && (
-                      <span className="text-xs text-gray-400 truncate">
-                        {p.preferred_appointment_type.replace(/_/g, ' ')}
-                      </span>
+                  </div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5">{p.phone}</p>
+                  <div className="flex items-center gap-3 mt-1 text-xs text-gray-400">
+                    <span>{p.visit_count} visit{p.visit_count !== 1 ? 's' : ''}</span>
+                    {p.upcoming_count > 0 && (
+                      <span className="text-green-600 dark:text-green-400 font-medium">{p.upcoming_count} upcoming</span>
+                    )}
+                    {p.last_appointment_at && (
+                      <span>{fmtRelative(p.last_appointment_at, tz)}</span>
                     )}
                   </div>
                 </div>
-              </div>
-
-              {/* Contact */}
-              <div className="col-span-2 text-xs text-gray-500 dark:text-gray-400 space-y-0.5 min-w-0">
-                <p className="truncate">{p.phone}</p>
-                {p.email && <p className="truncate text-gray-400">{p.email}</p>}
-              </div>
-
-              {/* Visit count */}
-              <div className="col-span-2 text-center">
-                <span className="text-sm font-semibold text-gray-900 dark:text-white">{p.visit_count}</span>
-                {p.no_show_count > 0 && (
-                  <span className="ml-1 text-xs text-red-400">({p.no_show_count} NS)</span>
-                )}
-              </div>
-
-              {/* Last seen */}
-              <div className="col-span-2 text-xs text-gray-500 dark:text-gray-400">
-                {p.last_appointment_at
-                  ? fmtRelative(p.last_appointment_at, tz)
-                  : <span className="text-gray-300">Never</span>}
-              </div>
-
-              {/* Upcoming */}
-              <div className="col-span-2 flex items-center justify-center gap-1">
-                {p.upcoming_count > 0 ? (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-full text-xs font-medium">
-                    <Calendar className="w-3 h-3" />
-                    {p.upcoming_count}
-                  </span>
-                ) : (
-                  <span className="text-xs text-gray-300">—</span>
-                )}
-                <ChevronRight className="w-4 h-4 text-gray-300" />
+                <ChevronRight className="w-4 h-4 text-gray-300 shrink-0" />
               </div>
             </button>
           ))}
@@ -377,7 +404,7 @@ function PatientProfile({ patientId, tz, onBack }) {
   ];
 
   return (
-    <div className="p-8 max-w-5xl mx-auto space-y-6">
+    <div className="p-4 md:p-8 max-w-5xl mx-auto space-y-4 md:space-y-6">
       {/* Back button */}
       <button
         onClick={onBack}
@@ -394,11 +421,11 @@ function PatientProfile({ patientId, tz, onBack }) {
       )}
 
       {/* Patient header card */}
-      <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
-        <div className="flex items-start gap-4">
+      <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4 md:p-6">
+        <div className="flex flex-col sm:flex-row items-start gap-4">
           {/* Avatar */}
           <div
-            className={`w-14 h-14 rounded-full flex items-center justify-center text-xl font-bold shrink-0 ${
+            className={`w-12 h-12 md:w-14 md:h-14 rounded-full flex items-center justify-center text-lg md:text-xl font-bold shrink-0 ${
               p.is_new_patient
                 ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400'
                 : 'bg-primary-100 text-primary-700 dark:bg-primary-900/50 dark:text-primary-400'
@@ -439,7 +466,7 @@ function PatientProfile({ patientId, tz, onBack }) {
             </div>
 
             {/* Quick stats */}
-            <div className="flex items-center gap-4 mt-3">
+            <div className="flex items-center gap-2 md:gap-4 mt-3 flex-wrap">
               <StatBadge
                 label="Total Visits"
                 value={p.visit_count}
