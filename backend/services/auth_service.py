@@ -178,10 +178,17 @@ async def ensure_admin_exists() -> None:
     """
     Ensure at least one admin user exists. Reads ADMIN_EMAIL and ADMIN_PASSWORD
     from environment on first startup. If no admin exists and env vars are set,
-    creates one.
+    creates one. Skips admin creation if env vars are missing.
     """
-    admin_email = os.getenv("ADMIN_EMAIL", "admin@scheduler.ai")
-    admin_password = os.getenv("ADMIN_PASSWORD", "admin123")  # dev default
+    admin_email = os.getenv("ADMIN_EMAIL")
+    admin_password = os.getenv("ADMIN_PASSWORD")
+
+    if not admin_email or not admin_password:
+        logger.warning(
+            "[Auth] ADMIN_EMAIL and/or ADMIN_PASSWORD not set in environment. "
+            "Skipping admin seeding. Set both in your .env file to create an admin user."
+        )
+        return
 
     async with async_session() as session:
         result = await session.execute(
@@ -219,6 +226,4 @@ async def ensure_admin_exists() -> None:
         )
         session.add(admin)
         await session.commit()
-        logger.info("[Auth] Created default admin user: %s (password: %s)",
-                    admin_email, admin_password)
-        logger.warning("[Auth] *** Change the admin password in production! ***")
+        logger.info("[Auth] Created admin user: %s", admin_email)
