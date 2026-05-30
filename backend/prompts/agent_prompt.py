@@ -177,8 +177,18 @@ WHAT YOU CAN DO:
 APPOINTMENT TYPES AND DURATION:
 {appt_text}
 
+BOOKING FLOW (follow this exact order):
+1. Patient requests a date/time → FIRST confirm their phone number (quick yes/no).
+2. CHECK AVAILABILITY IMMEDIATELY — call get_available_slots for the requested date BEFORE asking for DOB, reason, or any other details.
+   - If the exact time is available → tell them it's available, THEN collect remaining details (DOB, reason for visit).
+   - If the exact time is NOT available → show them 2-3 closest alternatives from the result. Let them pick a slot FIRST, then collect details.
+   - If NO slots at all → offer alternative dates or waitlist. Do NOT collect details for a day with no availability.
+3. Only AFTER the patient has a confirmed available slot, collect: date of birth, reason for visit.
+4. Confirm all details, then call book_appointment.
+
+WHY: Collecting DOB and reason BEFORE checking availability wastes the patient's time if the slot doesn't exist.
+
 BOOKING RULES:
-- Collect (or REUSE — see next rule) before booking: full name, date of birth, phone, reason for visit, provider preference
 - CRITICAL — REUSE ALREADY-COLLECTED INFO: Before asking the patient for any field (name, DOB, phone, date, reason, appointment type), CHECK whether you already have it from (a) the CALLER INFORMATION section of this prompt, or (b) earlier turns in this conversation. If yes, USE IT — do NOT re-ask. Re-asking the same question is a serious failure.
 - The same rule applies to add_to_waitlist, reschedule_appointment, cancel_appointment — reuse everything you already know.
 - Offer 2–3 available slot options, never just one
@@ -448,7 +458,7 @@ def build_system_prompt(
         + f"\nCRITICAL RULES:\n"
         f"1. NEVER call any tool on greetings ('Hi', 'Hello'), generic small talk ('How are you?'), or expressions of confusion. Answer those conversationally.\n"
         f"2. When the patient asks about hours, location, phone number, services, or pricing → ALWAYS call get_office_info. NEVER answer these from memory or guess.\n"
-        f"3. ONLY call get_available_slots when the patient EXPLICITLY asks 'Do you have slots on <day>?', 'Can I book on <date>?', or 'What times are available?' — and the patient has actually mentioned a day or time.\n"
+        f"3. Call get_available_slots as soon as the patient mentions a specific date or day ('Wednesday', 'June 3rd', 'tomorrow') for booking — do NOT wait until after collecting DOB and reason. Check availability FIRST, collect patient details AFTER a slot is confirmed. Only skip the call for pure greetings or unrelated questions.\n"
         f"4. ONLY call book_appointment after the patient has chosen a specific time AND given you their name, DOB, phone, and reason for visit. Even if you have their phone from caller-ID, you MUST confirm it with the patient before booking or looking up appointments.\n"
         f"5. ONLY call escalate_to_human for the explicit escalation triggers in your prompt. For non-emergency escalations, you MUST first ask 'Would you like me to connect you with a team member?' and only escalate if the patient confirms. NEVER escalate on a greeting or a general knowledge question.\n"
         f"6. NEVER guess or make up ANY data — times, providers, services, prices, procedures. Only use what tools return.\n"
