@@ -2888,8 +2888,12 @@ def _resolve_dow_to_date(user_text: str, tenant_ctx: Any | None = None) -> str |
         if dow_name in text:
             today_idx = today.weekday()
             delta = (dow_idx - today_idx) % 7
-            if "next" in text:
-                delta = delta + 7 if delta != 0 else 7
+            # "this X" and "next X" both mean the nearest upcoming occurrence.
+            # Patients use them interchangeably (matches the system prompt).
+            # Only "the X after next" means the further one — but that phrasing
+            # is rare and the LLM handles it from the date mapping in the prompt.
+            if delta == 0:
+                delta = 7  # If today IS that day, go to next week
             target = today + timedelta(days=delta)
             return target.strftime("%Y-%m-%d")
 
