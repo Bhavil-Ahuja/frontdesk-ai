@@ -2,17 +2,19 @@
 Patient CRM API routes — list patients, get full patient profile with
 appointment history, call logs, and SMS threads.
 
-GET  /api/patients              -> list all patients for the tenant
-GET  /api/patients/{patient_id} -> full patient profile with history
-PUT  /api/patients/{patient_id} -> update patient notes/allergies/etc.
+GET    /api/patients              -> list all patients for the tenant
+GET    /api/patients/{patient_id} -> full patient profile with history
+PUT    /api/patients/{patient_id} -> update patient notes/allergies/etc.
+DELETE /api/patients/{patient_id} -> delete patient + related data
+POST   /api/patients/bulk-delete  -> delete multiple patients + related data
 """
 
 import logging
-from typing import Optional
+from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select, and_, func, desc
+from sqlalchemy import select, and_, func, desc, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import async_session
@@ -42,6 +44,11 @@ class PatientUpdateRequest(BaseModel):
     allergies: Optional[str] = None
     notes: Optional[str] = None
     preferred_appointment_type: Optional[str] = None
+
+
+class BulkDeleteRequest(BaseModel):
+    """Request body for bulk patient deletion."""
+    patient_ids: List[str]
 
 
 # -- Routes --------------------------------------------------------------------
@@ -289,6 +296,70 @@ async def update_patient(
         return {"status": "updated", "patient_id": patient_id, "updated_fields": list(update_data.keys())}
 
 
+@router.post("/bulk-delete")
+async def bulk_delete_patients(
+    req: BulkDeleteRequest,
+    current_user: Tenant = Depends(auth_service.get_current_user),
+):
+    """
+    Delete multiple patients and all their related data (appointments,
+    waitlist entries, SMS messages). Matches related data by phone number.
+    Requires explicit patient_ids list from the doctor.
+    """
+    if not req.patient_ids:
+        raise HTTPException(status_code=400, detail="No patient IDs provided.")
+    if len(req.patient_ids) > 100:
+        raise HTTPException(status_code=400, detail="Maximum 100 patients per bulk delete.")
+
+    logger.warning(
+        "[Patients] Bulk delete requested for %d patients by tenant=%s",
+        len(req.patient_ids), current_user.slug,
+    )
+
+    async with async_session() as session:
+        # Look up all requested patients (scoped to tenant)
+        result = await session.execute(
+            select(Patient).where(
+                and_(
+                    Patient.tenant_id == current_user.id,
+                    Patient.id.in_(req.patient_ids),
+                )
+            )
+        )
+        patients = result.scalars().all()
+
+        if not patients:
+            raise HTTPException(status_code=404, detail="No matching patients found.")
+
+        # Cascade delete related data by phone number
+        totals = {"patients": 0, "appointments": 0, "waitlist_entries": 0, "sms_messages": 0}
+        deleted_names = []
+
+        for patient in patients:
+            counts = await _cascade_delete_patient(session, patient, current_user.id)
+            totals["patients"] += 1
+            totals["appointments"] += counts["appointments"]
+            totals["waitlist_entries"] += counts["waitlist_entries"]
+            totals["sms_messages"] += counts["sms_messages"]
+            deleted_names.append(patient.name or patient.phone)
+
+        await session.commit()
+
+    total = sum(totals.values())
+    logger.warning(
+        "[Patients] Bulk deleted %d patients (%s) + %d appts + %d waitlist + %d sms for tenant=%s",
+        totals["patients"], ", ".join(deleted_names),
+        totals["appointments"], totals["waitlist_entries"], totals["sms_messages"],
+        current_user.slug,
+    )
+    return {
+        "status": "deleted",
+        "deleted": totals,
+        "total": total,
+        "deleted_names": deleted_names,
+    }
+
+
 @router.delete("/test-data")
 async def clear_test_data(
     current_user: Tenant = Depends(auth_service.get_current_user),
@@ -299,8 +370,6 @@ async def clear_test_data(
     """
     logger.info("[Patients] Clearing test data for tenant=%s", current_user.slug)
     async with async_session() as session:
-        from sqlalchemy import delete
-
         # Delete in order to respect FK constraints
         sms_count = (await session.execute(
             delete(SMSMessage).where(
@@ -342,4 +411,100 @@ async def clear_test_data(
             "sms_messages": sms_count,
         },
         "total": total,
+    }
+
+
+@router.delete("/{patient_id}")
+async def delete_patient(
+    patient_id: str,
+    current_user: Tenant = Depends(auth_service.get_current_user),
+):
+    """
+    Delete a single patient and all related data (appointments, waitlist
+    entries, SMS messages). Matches related data by phone number.
+    """
+    logger.warning("[Patients] Delete requested for patient %s by tenant=%s", patient_id, current_user.slug)
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(Patient).where(
+                and_(Patient.id == patient_id, Patient.tenant_id == current_user.id)
+            )
+        )
+        patient = result.scalar_one_or_none()
+        if not patient:
+            raise HTTPException(status_code=404, detail="Patient not found.")
+
+        counts = await _cascade_delete_patient(session, patient, current_user.id)
+        patient_name = patient.name or patient.phone
+        await session.commit()
+
+    logger.warning(
+        "[Patients] Deleted patient '%s' + %d appts + %d waitlist + %d sms for tenant=%s",
+        patient_name, counts["appointments"], counts["waitlist_entries"],
+        counts["sms_messages"], current_user.slug,
+    )
+    return {
+        "status": "deleted",
+        "patient_name": patient_name,
+        "deleted": {
+            "patients": 1,
+            **counts,
+        },
+        "total": 1 + sum(counts.values()),
+    }
+
+
+# -- Helpers -------------------------------------------------------------------
+
+
+async def _cascade_delete_patient(
+    session: AsyncSession, patient: Patient, tenant_id
+) -> dict:
+    """
+    Delete a patient and all related records (SMS, waitlist, appointments)
+    matched by phone number suffix. Returns counts of deleted related records.
+    Must be called within an active session — caller is responsible for commit.
+    """
+    phone_tail = _phone_digits_tail(patient.phone)
+
+    # Delete related SMS messages
+    sms_count = (await session.execute(
+        delete(SMSMessage).where(
+            and_(
+                SMSMessage.tenant_id == tenant_id,
+                _phone_col_clean(SMSMessage.patient_phone).endswith(phone_tail),
+            )
+        )
+    )).rowcount
+
+    # Delete related waitlist entries
+    waitlist_count = (await session.execute(
+        delete(WaitlistEntry).where(
+            and_(
+                WaitlistEntry.tenant_id == tenant_id,
+                _phone_col_clean(WaitlistEntry.patient_phone).endswith(phone_tail),
+            )
+        )
+    )).rowcount
+
+    # Delete related appointments
+    appt_count = (await session.execute(
+        delete(Appointment).where(
+            and_(
+                Appointment.tenant_id == tenant_id,
+                _phone_col_clean(Appointment.patient_phone).endswith(phone_tail),
+            )
+        )
+    )).rowcount
+
+    # Delete the patient record itself
+    await session.execute(
+        delete(Patient).where(Patient.id == patient.id)
+    )
+
+    return {
+        "appointments": appt_count,
+        "waitlist_entries": waitlist_count,
+        "sms_messages": sms_count,
     }

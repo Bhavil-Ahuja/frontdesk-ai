@@ -23,6 +23,7 @@ import {
   Hash,
   RefreshCw,
   SortAsc,
+  Trash2,
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
@@ -50,6 +51,7 @@ const STATUS_LABELS = {
 
 export default function PatientCRM() {
   const { user } = useAuth();
+  const { confirm, prompt, toast } = useModal();
   const tz = user?.timezone || 'America/Chicago';
   const [patients, setPatients] = useState([]);
   const [selectedPatientId, setSelectedPatientId] = useState(null);
@@ -58,6 +60,8 @@ export default function PatientCRM() {
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState('recent');
   const [showTestData, setShowTestData] = useState(false);
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [deleting, setDeleting] = useState(false);
   const searchTimeout = useRef(null);
 
   const fetchPatients = useCallback(async () => {
@@ -84,6 +88,76 @@ export default function PatientCRM() {
     searchTimeout.current = setTimeout(() => fetchPatients(), 300);
     return () => clearTimeout(searchTimeout.current);
   }, [fetchPatients]);
+
+  // Clear selections when patient list changes
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [patients]);
+
+  function toggleSelect(id) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    if (selectedIds.size === patients.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(patients.map((p) => p.id)));
+    }
+  }
+
+  async function handleBulkDelete() {
+    const count = selectedIds.size;
+    if (count === 0) return;
+
+    const names = patients
+      .filter((p) => selectedIds.has(p.id))
+      .map((p) => p.name || p.phone);
+
+    // Step 1: First confirmation
+    const confirmed = await confirm({
+      title: `Delete ${count} patient${count > 1 ? 's' : ''}?`,
+      message: `This will permanently delete ${count > 3 ? `${count} patients` : names.join(', ')} and all their appointments, waitlist entries, and SMS messages. This cannot be undone.`,
+      confirmText: 'Continue',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
+
+    // Step 2: Type DELETE to confirm
+    const typed = await prompt({
+      title: 'Final confirmation',
+      message: `Type DELETE to permanently remove ${count} patient${count > 1 ? 's' : ''} and all related data.`,
+      placeholder: 'Type DELETE',
+      confirmText: 'Delete permanently',
+      variant: 'danger',
+    });
+    if (typed !== 'DELETE') {
+      if (typed !== null) toast.warning('Deletion cancelled — you must type DELETE exactly.');
+      return;
+    }
+
+    setDeleting(true);
+    try {
+      const result = await apiFetch('/api/patients/bulk-delete', {
+        method: 'POST',
+        body: { patient_ids: [...selectedIds] },
+      });
+      toast.success(
+        `Deleted ${result.deleted.patients} patient${result.deleted.patients > 1 ? 's' : ''} and ${result.total - result.deleted.patients} related records.`
+      );
+      setSelectedIds(new Set());
+      await fetchPatients();
+    } catch (err) {
+      toast.error(err.message || 'Failed to delete patients');
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   if (selectedPatientId) {
     return (
@@ -138,6 +212,31 @@ export default function PatientCRM() {
         </div>
       </div>
 
+      {/* Bulk delete toolbar — shows when patients are selected */}
+      {selectedIds.size > 0 && (
+        <div className="flex items-center justify-between bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl px-4 py-3">
+          <span className="text-sm font-medium text-red-700 dark:text-red-400">
+            {selectedIds.size} patient{selectedIds.size > 1 ? 's' : ''} selected
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setSelectedIds(new Set())}
+              className="px-3 py-1.5 text-xs font-medium text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+            >
+              Clear
+            </button>
+            <button
+              onClick={handleBulkDelete}
+              disabled={deleting}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-red-500 text-white rounded-lg text-xs font-medium hover:bg-red-600 disabled:opacity-50 transition-colors"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              {deleting ? 'Deleting...' : `Delete ${selectedIds.size}`}
+            </button>
+          </div>
+        </div>
+      )}
+
       {error && (
         <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-xl p-4 flex items-start gap-3">
           <AlertCircle className="w-5 h-5 text-red-500 mt-0.5 shrink-0" />
@@ -164,29 +263,119 @@ export default function PatientCRM() {
       ) : (
         <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
           {/* Table header — desktop only */}
-          <div className="hidden md:grid grid-cols-12 gap-3 px-4 py-3 bg-gray-50 dark:bg-gray-700/50 border-b border-gray-200 dark:border-gray-700 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
-            <div className="col-span-4">Patient</div>
-            <div className="col-span-2">Contact</div>
-            <div className="col-span-2 text-center">Visits</div>
-            <div className="col-span-2">Last Seen</div>
-            <div className="col-span-2 text-center">Upcoming</div>
+          <div className="hidden md:flex items-center gap-3 px-4 py-3 bg-gray-50 dark:bg-gray-700/50 border-b border-gray-200 dark:border-gray-700 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+            <div className="shrink-0 w-5">
+              <input
+                type="checkbox"
+                checked={selectedIds.size === patients.length && patients.length > 0}
+                onChange={toggleSelectAll}
+                className="w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-primary-500 focus:ring-primary-500 cursor-pointer"
+              />
+            </div>
+            <div className="grid grid-cols-12 gap-3 flex-1">
+              <div className="col-span-4">Patient</div>
+              <div className="col-span-2">Contact</div>
+              <div className="col-span-2 text-center">Visits</div>
+              <div className="col-span-2">Last Seen</div>
+              <div className="col-span-2 text-center">Upcoming</div>
+            </div>
           </div>
 
           {/* Rows — desktop table / mobile card */}
           {patients.map((p, idx) => (
-            <button
+            <div
               key={p.id}
-              onClick={() => setSelectedPatientId(p.id)}
-              className={`w-full text-left hover:bg-primary-50/50 dark:hover:bg-primary-900/20 transition-colors ${
+              className={`w-full hover:bg-primary-50/50 dark:hover:bg-primary-900/20 transition-colors ${
                 idx > 0 ? 'border-t border-gray-100 dark:border-gray-700' : ''
-              }`}
+              } ${selectedIds.has(p.id) ? 'bg-red-50/50 dark:bg-red-900/10' : ''}`}
             >
               {/* Desktop row */}
-              <div className="hidden md:grid grid-cols-12 gap-3 px-4 py-3.5 items-center">
-                {/* Name + type */}
-                <div className="col-span-4 flex items-center gap-3 min-w-0">
+              <div className="hidden md:flex items-center gap-3 px-4 py-3.5">
+                <div className="shrink-0 w-5" onClick={(e) => e.stopPropagation()}>
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.has(p.id)}
+                    onChange={() => toggleSelect(p.id)}
+                    className="w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-primary-500 focus:ring-primary-500 cursor-pointer"
+                  />
+                </div>
+                <button
+                  onClick={() => setSelectedPatientId(p.id)}
+                  className="grid grid-cols-12 gap-3 flex-1 items-center text-left"
+                >
+                  {/* Name + type */}
+                  <div className="col-span-4 flex items-center gap-3 min-w-0">
+                    <div
+                      className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-semibold shrink-0 ${
+                        p.is_new_patient
+                          ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400'
+                          : 'bg-primary-100 text-primary-700 dark:bg-primary-900/50 dark:text-primary-400'
+                      }`}
+                    >
+                      {(p.name || '?').charAt(0).toUpperCase()}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-gray-900 dark:text-white truncate flex items-center gap-1.5">
+                        {p.name}
+                        {p.is_test && <TestBadge />}
+                      </p>
+                      <div className="flex items-center gap-1.5">
+                        {p.is_new_patient && (
+                          <span className="text-xs text-amber-600 font-medium">New</span>
+                        )}
+                        {p.preferred_appointment_type && (
+                          <span className="text-xs text-gray-400 truncate">
+                            {p.preferred_appointment_type.replace(/_/g, ' ')}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="col-span-2 text-xs text-gray-500 dark:text-gray-400 space-y-0.5 min-w-0">
+                    <p className="truncate">{p.phone}</p>
+                    {p.email && <p className="truncate text-gray-400">{p.email}</p>}
+                  </div>
+                  <div className="col-span-2 text-center">
+                    <span className="text-sm font-semibold text-gray-900 dark:text-white">{p.visit_count}</span>
+                    {p.no_show_count > 0 && (
+                      <span className="ml-1 text-xs text-red-400">({p.no_show_count} NS)</span>
+                    )}
+                  </div>
+                  <div className="col-span-2 text-xs text-gray-500 dark:text-gray-400">
+                    {p.last_appointment_at
+                      ? fmtRelative(p.last_appointment_at, tz)
+                      : <span className="text-gray-300">Never</span>}
+                  </div>
+                  <div className="col-span-2 flex items-center justify-center gap-1">
+                    {p.upcoming_count > 0 ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-full text-xs font-medium">
+                        <Calendar className="w-3 h-3" />
+                        {p.upcoming_count}
+                      </span>
+                    ) : (
+                      <span className="text-xs text-gray-300">—</span>
+                    )}
+                    <ChevronRight className="w-4 h-4 text-gray-300" />
+                  </div>
+                </button>
+              </div>
+
+              {/* Mobile card */}
+              <div className="md:hidden px-4 py-3.5 flex items-center gap-3">
+                <div onClick={(e) => e.stopPropagation()} className="shrink-0">
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.has(p.id)}
+                    onChange={() => toggleSelect(p.id)}
+                    className="w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-primary-500 focus:ring-primary-500 cursor-pointer"
+                  />
+                </div>
+                <button
+                  onClick={() => setSelectedPatientId(p.id)}
+                  className="flex-1 flex items-center gap-3 text-left min-w-0"
+                >
                   <div
-                    className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-semibold shrink-0 ${
+                    className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold shrink-0 ${
                       p.is_new_patient
                         ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400'
                         : 'bg-primary-100 text-primary-700 dark:bg-primary-900/50 dark:text-primary-400'
@@ -194,84 +383,29 @@ export default function PatientCRM() {
                   >
                     {(p.name || '?').charAt(0).toUpperCase()}
                   </div>
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold text-gray-900 dark:text-white truncate flex items-center gap-1.5">
-                      {p.name}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">{p.name}</p>
                       {p.is_test && <TestBadge />}
-                    </p>
-                    <div className="flex items-center gap-1.5">
                       {p.is_new_patient && (
-                        <span className="text-xs text-amber-600 font-medium">New</span>
+                        <span className="text-[10px] bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-400 px-1.5 py-0.5 rounded-full font-medium shrink-0">New</span>
                       )}
-                      {p.preferred_appointment_type && (
-                        <span className="text-xs text-gray-400 truncate">
-                          {p.preferred_appointment_type.replace(/_/g, ' ')}
-                        </span>
+                    </div>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5">{p.phone}</p>
+                    <div className="flex items-center gap-3 mt-1 text-xs text-gray-400">
+                      <span>{p.visit_count} visit{p.visit_count !== 1 ? 's' : ''}</span>
+                      {p.upcoming_count > 0 && (
+                        <span className="text-green-600 dark:text-green-400 font-medium">{p.upcoming_count} upcoming</span>
+                      )}
+                      {p.last_appointment_at && (
+                        <span>{fmtRelative(p.last_appointment_at, tz)}</span>
                       )}
                     </div>
                   </div>
-                </div>
-                <div className="col-span-2 text-xs text-gray-500 dark:text-gray-400 space-y-0.5 min-w-0">
-                  <p className="truncate">{p.phone}</p>
-                  {p.email && <p className="truncate text-gray-400">{p.email}</p>}
-                </div>
-                <div className="col-span-2 text-center">
-                  <span className="text-sm font-semibold text-gray-900 dark:text-white">{p.visit_count}</span>
-                  {p.no_show_count > 0 && (
-                    <span className="ml-1 text-xs text-red-400">({p.no_show_count} NS)</span>
-                  )}
-                </div>
-                <div className="col-span-2 text-xs text-gray-500 dark:text-gray-400">
-                  {p.last_appointment_at
-                    ? fmtRelative(p.last_appointment_at, tz)
-                    : <span className="text-gray-300">Never</span>}
-                </div>
-                <div className="col-span-2 flex items-center justify-center gap-1">
-                  {p.upcoming_count > 0 ? (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-full text-xs font-medium">
-                      <Calendar className="w-3 h-3" />
-                      {p.upcoming_count}
-                    </span>
-                  ) : (
-                    <span className="text-xs text-gray-300">—</span>
-                  )}
-                  <ChevronRight className="w-4 h-4 text-gray-300" />
-                </div>
+                  <ChevronRight className="w-4 h-4 text-gray-300 shrink-0" />
+                </button>
               </div>
-
-              {/* Mobile card */}
-              <div className="md:hidden px-4 py-3.5 flex items-center gap-3">
-                <div
-                  className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold shrink-0 ${
-                    p.is_new_patient
-                      ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400'
-                      : 'bg-primary-100 text-primary-700 dark:bg-primary-900/50 dark:text-primary-400'
-                  }`}
-                >
-                  {(p.name || '?').charAt(0).toUpperCase()}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">{p.name}</p>
-                    {p.is_test && <TestBadge />}
-                    {p.is_new_patient && (
-                      <span className="text-[10px] bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-400 px-1.5 py-0.5 rounded-full font-medium shrink-0">New</span>
-                    )}
-                  </div>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5">{p.phone}</p>
-                  <div className="flex items-center gap-3 mt-1 text-xs text-gray-400">
-                    <span>{p.visit_count} visit{p.visit_count !== 1 ? 's' : ''}</span>
-                    {p.upcoming_count > 0 && (
-                      <span className="text-green-600 dark:text-green-400 font-medium">{p.upcoming_count} upcoming</span>
-                    )}
-                    {p.last_appointment_at && (
-                      <span>{fmtRelative(p.last_appointment_at, tz)}</span>
-                    )}
-                  </div>
-                </div>
-                <ChevronRight className="w-4 h-4 text-gray-300 shrink-0" />
-              </div>
-            </button>
+            </div>
           ))}
         </div>
       )}
@@ -290,7 +424,7 @@ export default function PatientCRM() {
 // ── Patient Profile (detail view) ──────────────────────────────────────────
 
 function PatientProfile({ patientId, tz, onBack }) {
-  const { toast } = useModal();
+  const { toast, confirm, prompt } = useModal();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -299,6 +433,7 @@ function PatientProfile({ patientId, tz, onBack }) {
   const [editForm, setEditForm] = useState({});
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [deletingPatient, setDeletingPatient] = useState(false);
 
   // Status update state (mirrors AppointmentManager.jsx)
   const [updatingStatus, setUpdatingStatus] = useState(false);
@@ -368,6 +503,45 @@ function PatientProfile({ patientId, tz, onBack }) {
       toast.error(err.message || 'Cancel failed');
     } finally {
       setUpdatingStatus(false);
+    }
+  }
+
+  async function handleDeletePatient() {
+    const name = data?.patient?.name || 'this patient';
+
+    // Step 1: First confirmation
+    const confirmed = await confirm({
+      title: `Delete ${name}?`,
+      message: `This will permanently delete ${name} and all their appointments, waitlist entries, and SMS messages. This action cannot be undone.`,
+      confirmText: 'Continue',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
+
+    // Step 2: Type DELETE to confirm
+    const typed = await prompt({
+      title: 'Final confirmation',
+      message: `Type DELETE to permanently remove ${name} and all related data.`,
+      placeholder: 'Type DELETE',
+      confirmText: 'Delete permanently',
+      variant: 'danger',
+    });
+    if (typed !== 'DELETE') {
+      if (typed !== null) toast.warning('Deletion cancelled — you must type DELETE exactly.');
+      return;
+    }
+
+    setDeletingPatient(true);
+    try {
+      const result = await apiFetch(`/api/patients/${patientId}`, { method: 'DELETE' });
+      toast.success(
+        `Deleted ${result.patient_name} and ${result.total - 1} related records.`
+      );
+      onBack(); // Return to patient list
+    } catch (err) {
+      toast.error(err.message || 'Failed to delete patient');
+    } finally {
+      setDeletingPatient(false);
     }
   }
 
@@ -503,19 +677,30 @@ function PatientProfile({ patientId, tz, onBack }) {
             </div>
           </div>
 
-          {/* Edit button */}
-          <button
-            onClick={() => {
-              setEditing(!editing);
-              setEditForm({
-                allergies: p.allergies || '',
-                notes: p.notes || '',
-              });
-            }}
-            className="px-3 py-2 text-sm font-medium text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors shrink-0"
-          >
-            {editing ? 'Cancel' : 'Edit Notes'}
-          </button>
+          {/* Actions */}
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => {
+                setEditing(!editing);
+                setEditForm({
+                  allergies: p.allergies || '',
+                  notes: p.notes || '',
+                });
+              }}
+              className="px-3 py-2 text-sm font-medium text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
+            >
+              {editing ? 'Cancel' : 'Edit Notes'}
+            </button>
+            <button
+              onClick={handleDeletePatient}
+              disabled={deletingPatient}
+              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-red-600 dark:text-red-400 border border-red-200 dark:border-red-800 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50 transition-colors"
+              title="Delete patient and all related data"
+            >
+              <Trash2 className="w-4 h-4" />
+              {deletingPatient ? 'Deleting...' : 'Delete'}
+            </button>
+          </div>
         </div>
 
         {/* Edit form */}
