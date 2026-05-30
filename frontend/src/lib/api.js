@@ -5,6 +5,11 @@
 
 const TOKEN_KEY = 'scheduler_ai_token';
 
+// In production, VITE_API_BASE_URL points to the Render backend
+// (e.g. https://scheduler-ai-api.onrender.com).
+// In dev, it's empty so requests go to the Vite proxy (localhost:8000).
+export const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
+
 export function getToken() {
   return localStorage.getItem(TOKEN_KEY);
 }
@@ -60,7 +65,7 @@ export async function apiFetch(path, options = {}) {
     if (!headers['Content-Type']) headers['Content-Type'] = 'application/json';
   }
 
-  const res = await fetch(path, { ...options, headers, body });
+  const res = await fetch(`${API_BASE}${path}`, { ...options, headers, body });
 
   // 401 → token expired/invalid, clear and let UI handle redirect
   if (res.status === 401) {

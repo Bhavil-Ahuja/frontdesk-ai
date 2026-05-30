@@ -262,6 +262,10 @@ _cors_origins: list[str] = [
 ]
 if settings.SERVER_BASE_URL and settings.SERVER_BASE_URL not in _cors_origins:
     _cors_origins.append(settings.SERVER_BASE_URL)
+# Production frontend on Vercel (or any separate domain)
+_frontend_url = os.getenv("FRONTEND_URL", "")
+if _frontend_url and _frontend_url not in _cors_origins:
+    _cors_origins.append(_frontend_url)
 
 app.add_middleware(
     CORSMiddleware,

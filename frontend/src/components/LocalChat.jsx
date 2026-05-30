@@ -8,7 +8,7 @@
  */
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { Send, RotateCcw, Bot, User as UserIcon, MessageSquare, Phone, Plus, Trash2, ChevronDown, Download } from 'lucide-react';
-import { getToken } from '../lib/api';
+import { getToken, API_BASE } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 
 // ── Per-user, per-caller storage keys ────────────────────────────────────────
@@ -162,7 +162,7 @@ export default function LocalChat() {
   // Fetch test callers from config
   const fetchConfig = useCallback(() => {
     const token = getToken();
-    fetch('/api/config', {
+    fetch(`${API_BASE}/api/config`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     })
       .then((r) => (r.ok ? r.json() : {}))
@@ -205,7 +205,7 @@ export default function LocalChat() {
     setAddingCaller(true);
     try {
       const token = getToken();
-      const resp = await fetch('/api/config/test-callers', {
+      const resp = await fetch(`${API_BASE}/api/config/test-callers`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify({ name }),
@@ -341,7 +341,7 @@ export default function LocalChat() {
     backgroundStream.start(null, controller, chatScope);
 
     try {
-      const res = await fetch('/api/chat/stream', {
+      const res = await fetch(`${API_BASE}/api/chat/stream`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -471,7 +471,7 @@ export default function LocalChat() {
     // Tell the backend to drop the session
     const token = getToken();
     try {
-      await fetch('/api/chat/reset', {
+      await fetch(`${API_BASE}/api/chat/reset`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
