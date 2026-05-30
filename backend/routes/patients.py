@@ -25,8 +25,10 @@ from backend.models.call import Call
 from backend.models.sms_message import SMSMessage, SMSDirection
 from backend.models.provider import Provider
 from backend.models.waitlist import WaitlistEntry
+from backend.models.status_history import AppointmentStatusHistory
 from backend.services import auth_service
 from backend.services.patient_service import _phone_digits_tail, _phone_col_clean
+from backend.defaults import slugify_appointment_type
 
 logger = logging.getLogger(__name__)
 
@@ -209,6 +211,27 @@ async def get_patient_profile(
         )
         sms_messages = sms_result.scalars().all()
 
+        # ── Status history for all appointments ─────────────────────────
+        appt_ids = [a.id for a in appointments]
+        history_map: dict[str, list] = {str(aid): [] for aid in appt_ids}
+        if appt_ids:
+            history_result = await session.execute(
+                select(AppointmentStatusHistory)
+                .where(AppointmentStatusHistory.appointment_id.in_(appt_ids))
+                .order_by(AppointmentStatusHistory.created_at.asc())
+            )
+            for h in history_result.scalars().all():
+                history_map.setdefault(str(h.appointment_id), []).append(h)
+
+    # Build slug → display name map from tenant config
+    type_display_map: dict[str, str] = {}
+    tenant_types = current_user.appointment_types or []
+    for at in tenant_types:
+        code = slugify_appointment_type(at.get("code", ""))
+        name = at.get("name", "")
+        if code and name:
+            type_display_map[code] = name
+
     # ── Assemble response ────────────────────────────────────────────────
     return {
         "patient": {
@@ -230,6 +253,10 @@ async def get_patient_profile(
             {
                 "id": str(a.id),
                 "appointment_type": a.appointment_type,
+                "appointment_type_display": type_display_map.get(
+                    slugify_appointment_type(a.appointment_type or ""),
+                    a.appointment_type,
+                ),
                 "scheduled_at": a.scheduled_at.isoformat() if a.scheduled_at else None,
                 "duration_minutes": a.duration_minutes,
                 "status": a.status.value if a.status else None,
@@ -240,6 +267,16 @@ async def get_patient_profile(
                 "reminder_sent_at": a.reminder_sent_at.isoformat() if a.reminder_sent_at else None,
                 "notes": a.notes,
                 "created_at": a.created_at.isoformat() if a.created_at else None,
+                "status_history": [
+                    {
+                        "old_status": h.old_status,
+                        "new_status": h.new_status,
+                        "changed_by": h.changed_by,
+                        "note": h.note,
+                        "created_at": h.created_at.isoformat() if h.created_at else None,
+                    }
+                    for h in history_map.get(str(a.id), [])
+                ],
             }
             for a in appointments
         ],

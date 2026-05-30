@@ -391,6 +391,10 @@ ALL_TOOLS = [
                         "type": "string",
                         "description": "Required. UUID of the provider from get_providers, or '__auto__' if the patient has no preference — the system will auto-assign the best available provider.",
                     },
+                    "notes": {
+                        "type": "string",
+                        "description": "Important details the patient mentioned — pain, symptoms, special requests, concerns, or reason for visit. Capture anything clinically or operationally relevant. Leave empty if nothing notable was said.",
+                    },
                 },
                 "required": ["patient_name", "phone", "appointment_type", "slot_time", "provider_id"],
             },
@@ -2147,6 +2151,7 @@ async def _execute_tool(
                 logger.warning("[Call %s] Slot matching failed: %s — using original",
                                call_id, match_exc)
 
+            booking_notes = args.get("notes", "").strip() or None
             result = await calendar_service.book_appointment(
                 patient_info=patient_info,
                 start_time=slot_time,
@@ -2154,6 +2159,7 @@ async def _execute_tool(
                 appointment_type_key=appt_type,
                 provider_id=provider_id,
                 is_test=is_test,
+                notes=booking_notes,
             )
 
             # Race lost — the unique-index fired because someone booked this

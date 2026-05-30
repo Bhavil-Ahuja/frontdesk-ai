@@ -19,9 +19,10 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import async_session, get_db
-from backend.defaults import DEFAULT_APPOINTMENT_DURATION_MINUTES, DEFAULT_TIMEZONE
+from backend.defaults import DEFAULT_APPOINTMENT_DURATION_MINUTES, DEFAULT_TIMEZONE, slugify_appointment_type
 from backend.models.appointment import Appointment, AppointmentStatus, BookedVia
 from backend.models.provider import Provider
+from backend.models.status_history import AppointmentStatusHistory
 from backend.models.tenant import Tenant
 from backend.services import sms_service, auth_service, tenant_service, calendar_service
 from backend.services import google_calendar as gcal
@@ -42,6 +43,7 @@ class AppointmentOut(BaseModel):
     patient_email: Optional[str]
     date_of_birth: Optional[str]
     appointment_type: str
+    appointment_type_display: Optional[str] = None
     scheduled_at: datetime
     duration_minutes: int
     status: str
@@ -128,6 +130,15 @@ async def list_appointments(
         for p in prov_result.scalars().all():
             provider_map[p.id] = p.name
 
+    # Build slug → display name map from tenant's appointment_types config
+    type_display_map: dict[str, str] = {}
+    tenant_types = current_user.appointment_types or []
+    for at in tenant_types:
+        code = slugify_appointment_type(at.get("code", ""))
+        name = at.get("name", "")
+        if code and name:
+            type_display_map[code] = name
+
     return [
         AppointmentOut(
             id=str(a.id),
@@ -137,6 +148,10 @@ async def list_appointments(
             patient_email=a.patient_email,
             date_of_birth=a.date_of_birth,
             appointment_type=a.appointment_type,
+            appointment_type_display=type_display_map.get(
+                slugify_appointment_type(a.appointment_type or ""),
+                a.appointment_type,
+            ),
             scheduled_at=a.scheduled_at,
             duration_minutes=a.duration_minutes,
             status=a.status.value,
@@ -173,7 +188,18 @@ async def cancel_appointment(
     if apt.status == AppointmentStatus.CANCELLED:
         raise HTTPException(status_code=400, detail="Appointment is already cancelled.")
 
+    old_status = apt.status
     apt.status = AppointmentStatus.CANCELLED
+
+    # Record in audit trail
+    history_entry = AppointmentStatusHistory(
+        appointment_id=apt.id,
+        old_status=old_status.value,
+        new_status=AppointmentStatus.CANCELLED.value,
+        changed_by=current_user.owner_email or "dashboard",
+        note="Manually cancelled from dashboard",
+    )
+    db.add(history_entry)
     await db.flush()
 
     # Send cancellation SMS with tenant context for correct Twilio credentials
@@ -279,6 +305,15 @@ async def update_appointment(
         apt.status = new_status
         updated.append(f"status: {old_status.value} → {new_status.value}")
 
+        # ── Record in audit trail ────────────────────────────────────
+        history_entry = AppointmentStatusHistory(
+            appointment_id=apt.id,
+            old_status=old_status.value,
+            new_status=new_status.value,
+            changed_by=current_user.owner_email or "dashboard",
+        )
+        db.add(history_entry)
+
         # Side effects: update patient record based on outcome
         try:
             from backend.models.patient import Patient
@@ -347,6 +382,48 @@ async def update_appointment(
         "current_status": apt.status.value,
         "notes": apt.notes,
     }
+
+
+# ── Appointment status history ────────────────────────────────────────────────
+
+
+@router.get("/{appointment_id}/history")
+async def get_appointment_history(
+    appointment_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: Tenant = Depends(auth_service.get_current_user),
+):
+    """Return the full status change history for an appointment."""
+    try:
+        uid = uuid.UUID(appointment_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid appointment ID format.")
+
+    result = await db.execute(select(Appointment).where(Appointment.id == uid))
+    apt = result.scalar_one_or_none()
+    if apt is None:
+        raise HTTPException(status_code=404, detail="Appointment not found.")
+    if not current_user.is_admin and apt.tenant_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied.")
+
+    history_result = await db.execute(
+        select(AppointmentStatusHistory)
+        .where(AppointmentStatusHistory.appointment_id == uid)
+        .order_by(AppointmentStatusHistory.created_at.asc())
+    )
+    entries = history_result.scalars().all()
+
+    return [
+        {
+            "id": str(e.id),
+            "old_status": e.old_status,
+            "new_status": e.new_status,
+            "changed_by": e.changed_by,
+            "note": e.note,
+            "created_at": e.created_at.isoformat() if e.created_at else None,
+        }
+        for e in entries
+    ]
 
 
 # ── Google Calendar bidirectional sync ────────────────────────────────────────

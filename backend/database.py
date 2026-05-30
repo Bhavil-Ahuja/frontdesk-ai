@@ -202,6 +202,18 @@ _MIGRATIONS: list[str] = [
 
     # ── tenants table — owner-toggleable agent on/off (separate from status)
     "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS agent_active BOOLEAN NOT NULL DEFAULT true",
+
+    # ── appointment_status_history — audit trail for status changes ──
+    """CREATE TABLE IF NOT EXISTS appointment_status_history (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        appointment_id UUID NOT NULL REFERENCES appointments(id) ON DELETE CASCADE,
+        old_status VARCHAR(20),
+        new_status VARCHAR(20) NOT NULL,
+        changed_by VARCHAR(100) NOT NULL DEFAULT 'system',
+        note TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )""",
+    "CREATE INDEX IF NOT EXISTS ix_status_history_appt ON appointment_status_history (appointment_id, created_at)",
 ]
 
 
@@ -212,7 +224,7 @@ async def init_db() -> None:
     logger.info("Connecting to database: %s", settings.DATABASE_URL.split("@")[-1])  # Log host only, not creds
     async with engine.begin() as conn:
         # Import models so they register with Base.metadata
-        from backend.models import tenant, call, appointment, patient, provider, waitlist, sms_message, profile_change_log, support_ticket  # noqa: F401
+        from backend.models import tenant, call, appointment, patient, provider, waitlist, sms_message, profile_change_log, support_ticket, status_history  # noqa: F401
         await conn.run_sync(Base.metadata.create_all)
 
     # Apply column-level migrations (idempotent — safe to re-run)

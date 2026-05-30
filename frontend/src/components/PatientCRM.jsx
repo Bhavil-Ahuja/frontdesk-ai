@@ -971,22 +971,24 @@ function AppointmentRow({
   const hasCancel = appt.status === 'CONFIRMED' && !isPast;
   const hasAnyActions =
     hasPastPendingActions || hasCorrectAttended || hasCorrectNoShow || hasCancel;
+  const hasHistory = appt.status_history && appt.status_history.length > 0;
+  const isExpandable = hasAnyActions || hasHistory;
 
   return (
     <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
       <button
         type="button"
-        onClick={() => hasAnyActions && setExpandedApptId(isExpanded ? null : appt.id)}
-        disabled={!hasAnyActions}
+        onClick={() => isExpandable && setExpandedApptId(isExpanded ? null : appt.id)}
+        disabled={!isExpandable}
         className={`w-full p-3 flex items-center gap-4 text-left transition-colors ${
-          hasAnyActions ? 'hover:bg-gray-50 dark:hover:bg-gray-700/40 cursor-pointer' : 'cursor-default'
+          isExpandable ? 'hover:bg-gray-50 dark:hover:bg-gray-700/40 cursor-pointer' : 'cursor-default'
         }`}
       >
         <div className={`w-2 h-2 rounded-full ${status.dot} shrink-0`}></div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-sm font-medium text-gray-900 dark:text-white">
-              {appt.appointment_type?.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
+              {appt.appointment_type_display || appt.appointment_type?.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
             </span>
             <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${status.bg} ${status.text}`}>
               {STATUS_LABELS[appt.status] || appt.status}
@@ -1010,7 +1012,7 @@ function AppointmentRow({
             )}
           </p>
         </div>
-        {hasAnyActions && (
+        {isExpandable && (
           <ChevronRight
             className={`w-4 h-4 text-gray-300 shrink-0 transition-transform ${
               isExpanded ? 'rotate-90' : ''
@@ -1019,9 +1021,58 @@ function AppointmentRow({
         )}
       </button>
 
-      {/* Expanded actions */}
-      {isExpanded && hasAnyActions && (
-        <div className="border-t border-gray-100 dark:border-gray-700 p-3 bg-gray-50 dark:bg-gray-700/30 space-y-2">
+      {/* Expanded section — history + actions */}
+      {isExpanded && isExpandable && (
+        <div className="border-t border-gray-100 dark:border-gray-700 p-3 bg-gray-50 dark:bg-gray-700/30 space-y-3">
+          {/* Status History Timeline */}
+          {hasHistory && (
+            <div>
+              <p className="text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide mb-2">
+                History
+              </p>
+              <div className="relative pl-4 space-y-2">
+                <div className="absolute left-[5px] top-0.5 bottom-0.5 w-px bg-gray-200 dark:bg-gray-600" />
+                {appt.status_history.map((entry, idx) => {
+                  const isCreation = !entry.old_status;
+                  const label = STATUS_LABELS[entry.new_status] || entry.new_status;
+                  return (
+                    <div key={idx} className="relative flex items-start gap-2">
+                      <div className={`absolute -left-4 top-0.5 w-2 h-2 rounded-full border-2 border-white dark:border-gray-700 ${
+                        entry.new_status === 'CONFIRMED' ? 'bg-green-400' :
+                        entry.new_status === 'COMPLETED' ? 'bg-emerald-500' :
+                        entry.new_status === 'CANCELLED' ? 'bg-red-400' :
+                        entry.new_status === 'NO_SHOW' ? 'bg-amber-400' :
+                        'bg-blue-400'
+                      }`} />
+                      <div className="min-w-0">
+                        <p className="text-[11px] text-gray-600 dark:text-gray-400">
+                          {isCreation ? (
+                            <span className="text-green-600 dark:text-green-400">Booked</span>
+                          ) : (
+                            <>{STATUS_LABELS[entry.old_status] || entry.old_status} → <span className={
+                              entry.new_status === 'COMPLETED' ? 'text-emerald-600 dark:text-emerald-400' :
+                              entry.new_status === 'CANCELLED' ? 'text-red-600 dark:text-red-400' :
+                              entry.new_status === 'NO_SHOW' ? 'text-amber-600 dark:text-amber-400' :
+                              'text-blue-600 dark:text-blue-400'
+                            }>{label}</span></>
+                          )}
+                          {entry.created_at && (
+                            <span className="text-gray-400 dark:text-gray-500 ml-1">
+                              · {fmtRelative(entry.created_at, tz)}
+                            </span>
+                          )}
+                        </p>
+                        {entry.note && (
+                          <p className="text-[10px] text-gray-400 dark:text-gray-500 italic mt-0.5">{entry.note}</p>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {hasPastPendingActions && (
             <>
               <p className="text-xs text-amber-600 dark:text-amber-400 font-medium">

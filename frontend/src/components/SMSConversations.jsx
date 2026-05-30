@@ -10,6 +10,8 @@ import {
   ArrowUp,
   Clock,
   Inbox,
+  Search,
+  User,
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
@@ -22,18 +24,22 @@ export default function SMSConversations() {
   const [conversations, setConversations] = useState([]);
   const [messages, setMessages] = useState([]);
   const [selectedPhone, setSelectedPhone] = useState(null);
+  const [selectedName, setSelectedName] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [error, setError] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const [showTestData, setShowTestData] = useState(false);
+  const [search, setSearch] = useState('');
   const messagesEndRef = useRef(null);
+  const searchTimeout = useRef(null);
 
   const fetchConversations = useCallback(async (showRefresh = false) => {
     if (showRefresh) setRefreshing(true);
     try {
       const params = new URLSearchParams();
       if (showTestData) params.set('include_test', 'true');
+      if (search.trim()) params.set('search', search.trim());
       const url = `/api/sms/conversations${params.toString() ? '?' + params.toString() : ''}`;
       const data = await apiFetch(url);
       setConversations(data || []);
@@ -44,7 +50,7 @@ export default function SMSConversations() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [showTestData]);
+  }, [showTestData, search]);
 
   const fetchMessages = useCallback(async (phone) => {
     setLoadingMessages(true);
@@ -64,20 +70,25 @@ export default function SMSConversations() {
   }, [showTestData]);
 
   useEffect(() => {
-    fetchConversations();
+    setLoading(true);
+    if (searchTimeout.current) clearTimeout(searchTimeout.current);
+    searchTimeout.current = setTimeout(() => fetchConversations(), 300);
+    return () => clearTimeout(searchTimeout.current);
   }, [fetchConversations]);
 
-  function selectConversation(phone) {
+  function selectConversation(phone, name) {
     setSelectedPhone(phone);
+    setSelectedName(name || null);
     fetchMessages(phone);
   }
 
   function goBack() {
     setSelectedPhone(null);
+    setSelectedName(null);
     setMessages([]);
   }
 
-  if (loading) {
+  if (loading && !conversations.length) {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500"></div>
@@ -102,11 +113,18 @@ export default function SMSConversations() {
             <h2 className="text-xl md:text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
               <MessageSquare className="w-6 md:w-7 h-6 md:h-7 text-primary-500 shrink-0" />
               {selectedPhone ? (
-                <span className="truncate text-base md:text-2xl">{selectedPhone}</span>
+                <span className="truncate text-base md:text-2xl">
+                  {selectedName || selectedPhone}
+                </span>
               ) : (
                 'SMS'
               )}
             </h2>
+            {selectedPhone && selectedName && (
+              <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5 ml-8 md:ml-9">
+                {selectedPhone}
+              </p>
+            )}
             {!selectedPhone && (
               <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
                 Two-way SMS between patients and the AI agent.
@@ -133,6 +151,20 @@ export default function SMSConversations() {
         </div>
       </div>
 
+      {/* Search bar — only on conversation list */}
+      {!selectedPhone && (
+        <div className="relative mb-4">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search by name or phone..."
+            className="w-full pl-10 pr-4 py-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 dark:bg-gray-700 dark:text-white"
+          />
+        </div>
+      )}
+
       {error && (
         <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-xl p-4 flex items-start gap-3 mb-6">
           <AlertCircle className="w-5 h-5 text-red-500 mt-0.5 shrink-0" />
@@ -146,10 +178,13 @@ export default function SMSConversations() {
         conversations.length === 0 ? (
           <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-12 text-center">
             <Inbox className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-1">No conversations yet</h3>
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-1">
+              {search ? 'No conversations match your search' : 'No conversations yet'}
+            </h3>
             <p className="text-sm text-gray-500 dark:text-gray-400">
-              SMS conversations will appear here when patients text your Twilio number or receive
-              reminders and reply back.
+              {search
+                ? 'Try a different name or phone number.'
+                : 'SMS conversations will appear here when patients text your Twilio number or receive reminders and reply back.'}
             </p>
           </div>
         ) : (
@@ -157,23 +192,40 @@ export default function SMSConversations() {
             {conversations.map((conv, idx) => (
               <button
                 key={conv.patient_phone}
-                onClick={() => selectConversation(conv.patient_phone)}
+                onClick={() => selectConversation(conv.patient_phone, conv.patient_name)}
                 className={`w-full flex items-center gap-4 p-4 text-left hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors ${
                   idx > 0 ? 'border-t border-gray-100 dark:border-gray-700' : ''
                 }`}
               >
                 {/* Avatar */}
                 <div className="w-10 h-10 rounded-full bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-400 flex items-center justify-center text-sm font-semibold shrink-0">
-                  <Phone className="w-4 h-4" />
+                  {conv.patient_name ? (
+                    conv.patient_name.charAt(0).toUpperCase()
+                  ) : (
+                    <Phone className="w-4 h-4" />
+                  )}
                 </div>
 
                 {/* Content */}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between">
-                    <span className="font-semibold text-gray-900 dark:text-white text-sm">
-                      {conv.patient_phone}
-                    </span>
-                    <span className="text-xs text-gray-400 shrink-0">
+                    <div className="min-w-0">
+                      {conv.patient_name ? (
+                        <>
+                          <span className="font-semibold text-gray-900 dark:text-white text-sm truncate block">
+                            {conv.patient_name}
+                          </span>
+                          <span className="text-xs text-gray-400 dark:text-gray-500">
+                            {conv.patient_phone}
+                          </span>
+                        </>
+                      ) : (
+                        <span className="font-semibold text-gray-900 dark:text-white text-sm">
+                          {conv.patient_phone}
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-xs text-gray-400 shrink-0 ml-2">
                       {conv.last_message_at
                         ? fmtRelative(conv.last_message_at, tz)
                         : ''}

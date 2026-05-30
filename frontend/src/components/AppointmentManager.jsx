@@ -18,6 +18,7 @@ import {
   FileText,
   Save,
   Check,
+  History,
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import { useModal } from '../contexts/ModalContext';
@@ -91,6 +92,10 @@ export default function AppointmentManager() {
   // Status update state
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [confirmAction, setConfirmAction] = useState(null); // { action: 'attended'|'no-show'|'cancel', id: number }
+
+  // Status history timeline
+  const [statusHistory, setStatusHistory] = useState([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
 
   // Close detail drawer / confirmation modal on Escape key
   useEffect(() => {
@@ -207,11 +212,26 @@ export default function AppointmentManager() {
       setSelectedApt((prev) => prev ? { ...prev, status: result.current_status, notes: result.notes } : null);
       setConfirmAction(null);
       fetchAppointments();
+      // Refresh timeline
+      if (id) fetchHistory(id);
     } catch (err) {
       console.error('Status update failed:', err);
       toast.error(err.message || 'Status update failed');
     } finally {
       setUpdatingStatus(false);
+    }
+  }
+
+  async function fetchHistory(id) {
+    setLoadingHistory(true);
+    try {
+      const data = await apiFetch(`/api/appointments/${id}/history`);
+      setStatusHistory(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error('Failed to fetch history:', err);
+      setStatusHistory([]);
+    } finally {
+      setLoadingHistory(false);
     }
   }
 
@@ -509,13 +529,15 @@ export default function AppointmentManager() {
                         const isUpcoming = aptTime >= now && apt.status === 'CONFIRMED';
 
                         // Color coding: green=upcoming, red=cancelled, muted=past
+                        const typeDisplay = apt.appointment_type_display || apt.appointment_type;
+                        const typeColor = TYPE_COLORS[typeDisplay] || TYPE_COLORS[apt.appointment_type] || 'border-l-gray-400';
                         const pillBg = isCancelled
                           ? 'bg-red-50 dark:bg-red-900/20 border-l-red-400'
                           : isUpcoming
                           ? 'bg-green-50 dark:bg-green-900/20 border-l-green-400'
                           : isPastApt
-                          ? 'bg-gray-50 dark:bg-gray-700/50 ' + (TYPE_COLORS[apt.appointment_type] || 'border-l-gray-400')
-                          : 'bg-gray-50 dark:bg-gray-700/50 ' + (TYPE_COLORS[apt.appointment_type] || 'border-l-gray-400');
+                          ? 'bg-gray-50 dark:bg-gray-700/50 ' + typeColor
+                          : 'bg-gray-50 dark:bg-gray-700/50 ' + typeColor;
 
                         return (
                           <button
@@ -524,6 +546,7 @@ export default function AppointmentManager() {
                               setSelectedApt(apt);
                               setEditingNotes(false);
                               setNotesText(apt.notes || '');
+                              fetchHistory(apt.id);
                             }}
                             className={`w-full text-left px-1.5 py-0.5 rounded border-l-2 text-[11px] leading-tight hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors truncate ${pillBg} ${
                               isCancelled ? 'line-through opacity-60' : ''
@@ -631,7 +654,7 @@ export default function AppointmentManager() {
               <DetailRow icon={User} label="Patient" value={selectedApt.patient_name} />
               <DetailRow icon={PhoneIcon} label="Phone" value={selectedApt.patient_phone} />
               <DetailRow icon={Mail} label="Email" value={selectedApt.patient_email || '—'} />
-              <DetailRow icon={CalendarDays} label="Type" value={selectedApt.appointment_type} />
+              <DetailRow icon={CalendarDays} label="Type" value={selectedApt.appointment_type_display || selectedApt.appointment_type} />
               <DetailRow icon={UserCog} label="Doctor" value={selectedApt.provider_name || '—'} />
               <DetailRow
                 icon={Clock}
@@ -702,6 +725,65 @@ export default function AppointmentManager() {
                   <p className="text-sm text-gray-700 dark:text-gray-300">
                     {selectedApt.notes || <span className="text-gray-400 dark:text-gray-500 italic">No notes yet</span>}
                   </p>
+                )}
+              </div>
+
+              {/* Status History Timeline */}
+              <div className="p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
+                <p className="text-xs font-medium text-gray-500 dark:text-gray-400 flex items-center gap-1 mb-3">
+                  <History className="w-3 h-3" />
+                  Status History
+                </p>
+                {loadingHistory ? (
+                  <div className="flex justify-center py-2">
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary-500"></div>
+                  </div>
+                ) : statusHistory.length === 0 ? (
+                  <p className="text-xs text-gray-400 dark:text-gray-500 italic">No history recorded yet.</p>
+                ) : (
+                  <div className="relative pl-4 space-y-3">
+                    {/* Vertical line */}
+                    <div className="absolute left-[5px] top-1 bottom-1 w-px bg-gray-200 dark:bg-gray-600" />
+                    {statusHistory.map((entry) => {
+                      const isCreation = !entry.old_status;
+                      const statusLabel = STATUS_LABELS[entry.new_status] || entry.new_status;
+                      return (
+                        <div key={entry.id} className="relative flex items-start gap-2">
+                          {/* Dot */}
+                          <div className={`absolute -left-4 top-1 w-2.5 h-2.5 rounded-full border-2 border-white dark:border-gray-700 ${
+                            entry.new_status === 'CONFIRMED' ? 'bg-green-400' :
+                            entry.new_status === 'COMPLETED' ? 'bg-emerald-500' :
+                            entry.new_status === 'CANCELLED' ? 'bg-red-400' :
+                            entry.new_status === 'NO_SHOW' ? 'bg-amber-400' :
+                            'bg-blue-400'
+                          }`} />
+                          <div className="min-w-0">
+                            <p className="text-xs font-medium text-gray-700 dark:text-gray-300">
+                              {isCreation ? (
+                                <>Booked — <span className="text-green-600 dark:text-green-400">{statusLabel}</span></>
+                              ) : (
+                                <>{STATUS_LABELS[entry.old_status] || entry.old_status} → <span className={
+                                  entry.new_status === 'COMPLETED' ? 'text-emerald-600 dark:text-emerald-400' :
+                                  entry.new_status === 'CANCELLED' ? 'text-red-600 dark:text-red-400' :
+                                  entry.new_status === 'NO_SHOW' ? 'text-amber-600 dark:text-amber-400' :
+                                  'text-blue-600 dark:text-blue-400'
+                                }>{statusLabel}</span></>
+                              )}
+                            </p>
+                            <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-0.5">
+                              {entry.created_at ? formatDateTime(entry.created_at, tz) : ''}
+                              {entry.changed_by && entry.changed_by !== 'system' && (
+                                <span className="ml-1">· {entry.changed_by}</span>
+                              )}
+                            </p>
+                            {entry.note && (
+                              <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5 italic">{entry.note}</p>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 )}
               </div>
 

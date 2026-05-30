@@ -1700,12 +1700,14 @@ async def _execute_tool(
             except Exception as match_exc:
                 logger.warning("[Tool Exec] Slot matching failed: %s — using original", match_exc)
 
+            booking_notes = args.get("notes", "").strip() or None
             result = await calendar_service.book_appointment(
                 patient_info=patient_info,
                 start_time=slot_time,
                 tenant_ctx=tenant_ctx,
                 appointment_type_key=appt_type,
                 provider_id=provider_id,
+                notes=booking_notes,
             )
 
             if result:

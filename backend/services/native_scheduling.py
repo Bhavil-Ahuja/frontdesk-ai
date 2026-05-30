@@ -469,6 +469,7 @@ async def create_native_booking(
     duration_minutes: int = DEFAULT_APPOINTMENT_DURATION_MINUTES,
     provider_id: uuid.UUID | None = None,
     is_test: bool = False,
+    notes: str | None = None,
 ) -> dict[str, Any] | None:
     """
     Create a booking directly in the Appointment table.
@@ -530,8 +531,21 @@ async def create_native_booking(
                 booked_via=BookedVia.AI,
                 provider_id=provider_id,
                 is_test=is_test,
+                notes=notes,
             )
             session.add(appt)
+            await session.flush()
+
+            # Record initial status in audit trail
+            from backend.models.status_history import AppointmentStatusHistory
+            history_entry = AppointmentStatusHistory(
+                appointment_id=appt.id,
+                old_status=None,
+                new_status=AppointmentStatus.CONFIRMED.value,
+                changed_by="ai_agent",
+                note="Booked via AI",
+            )
+            session.add(history_entry)
             await session.commit()
             await session.refresh(appt)
     except IntegrityError as exc:
