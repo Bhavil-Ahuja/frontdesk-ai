@@ -49,7 +49,9 @@ export default function SMSConversations() {
   const fetchMessages = useCallback(async (phone) => {
     setLoadingMessages(true);
     try {
-      const data = await apiFetch(`/api/sms/messages?patient_phone=${encodeURIComponent(phone)}`);
+      const params = new URLSearchParams({ patient_phone: phone });
+      if (showTestData) params.set('include_test', 'true');
+      const data = await apiFetch(`/api/sms/messages?${params.toString()}`);
       setMessages(data || []);
       setError(null);
       // Scroll to bottom after render
@@ -59,7 +61,7 @@ export default function SMSConversations() {
     } finally {
       setLoadingMessages(false);
     }
-  }, []);
+  }, [showTestData]);
 
   useEffect(() => {
     fetchConversations();

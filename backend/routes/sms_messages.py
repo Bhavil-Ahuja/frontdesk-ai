@@ -54,15 +54,16 @@ async def list_conversations(
 
         conversations = []
         for row in rows:
-            # Fetch the last message for preview
+            # Fetch the last message for preview (respecting test filter)
+            preview_filters = [
+                SMSMessage.tenant_id == current_user.id,
+                SMSMessage.patient_phone == row.patient_phone,
+            ]
+            if not include_test:
+                preview_filters.append(SMSMessage.is_test == False)  # noqa: E712
             last_msg_stmt = (
                 select(SMSMessage)
-                .where(
-                    and_(
-                        SMSMessage.tenant_id == current_user.id,
-                        SMSMessage.patient_phone == row.patient_phone,
-                    )
-                )
+                .where(and_(*preview_filters))
                 .order_by(desc(SMSMessage.created_at))
                 .limit(1)
             )
@@ -83,20 +84,23 @@ async def list_conversations(
 @router.get("/messages")
 async def list_messages(
     patient_phone: str = Query(..., description="Patient phone number to filter by"),
+    include_test: bool = Query(False, description="Include test/demo SMS data"),
     limit: int = Query(100, ge=1, le=500),
     current_user: Tenant = Depends(auth_service.get_current_user),
 ):
     """List SMS messages for a specific patient phone, ordered oldest first."""
-    logger.info("[SMS] Listing messages for tenant=%s patient=%s", current_user.slug, patient_phone)
+    logger.info("[SMS] Listing messages for tenant=%s patient=%s include_test=%s", current_user.slug, patient_phone, include_test)
     async with async_session() as session:
+        msg_filters = [
+            SMSMessage.tenant_id == current_user.id,
+            SMSMessage.patient_phone == patient_phone,
+        ]
+        if not include_test:
+            msg_filters.append(SMSMessage.is_test == False)  # noqa: E712
+
         stmt = (
             select(SMSMessage)
-            .where(
-                and_(
-                    SMSMessage.tenant_id == current_user.id,
-                    SMSMessage.patient_phone == patient_phone,
-                )
-            )
+            .where(and_(*msg_filters))
             .order_by(SMSMessage.created_at.asc())
             .limit(limit)
         )
