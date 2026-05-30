@@ -22,6 +22,7 @@ import { useModal } from '../contexts/ModalContext';
 import { useAuth } from '../contexts/AuthContext';
 import { formatDate, formatTime } from '../lib/timezone';
 import ThemedDateTimePicker from './ui/ThemedDateTimePicker';
+import TestDataToggle, { TestBadge } from './ui/TestDataToggle';
 
 const STATUS_CONFIG = {
   WAITING: {
@@ -79,6 +80,7 @@ export default function WaitlistView() {
   const [promoteTime, setPromoteTime] = useState('');
   const [promoteSubmitting, setPromoteSubmitting] = useState(false);
   const [promoteError, setPromoteError] = useState(null);
+  const [showTestData, setShowTestData] = useState(false);
   // Conflict-confirmation state: shown when the backend reports existing
   // appointments at the requested provider/slot.
   const [conflicts, setConflicts] = useState([]);
@@ -89,6 +91,7 @@ export default function WaitlistView() {
     try {
       const params = new URLSearchParams();
       if (filterStatus) params.set('status', filterStatus);
+      if (showTestData) params.set('include_test', 'true');
       const url = `/api/waitlist${params.toString() ? '?' + params.toString() : ''}`;
       const data = await apiFetch(url);
       setEntries(data || []);
@@ -99,7 +102,7 @@ export default function WaitlistView() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [filterStatus]);
+  }, [filterStatus, showTestData]);
 
   useEffect(() => {
     setLoading(true);
@@ -233,14 +236,17 @@ export default function WaitlistView() {
             matches their preferences.
           </p>
         </div>
-        <button
-          onClick={() => fetchEntries(true)}
-          disabled={refreshing}
-          className="flex items-center gap-2 px-4 py-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 rounded-lg text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-700/50 disabled:opacity-50 transition-colors"
-        >
-          <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <TestDataToggle enabled={showTestData} onChange={setShowTestData} />
+          <button
+            onClick={() => fetchEntries(true)}
+            disabled={refreshing}
+            className="flex items-center gap-2 px-4 py-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 rounded-lg text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-700/50 disabled:opacity-50 transition-colors"
+          >
+            <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {error && (

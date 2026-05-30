@@ -29,6 +29,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useModal } from '../contexts/ModalContext';
 import { formatDateTime, formatDate, formatRelativeTime as fmtRelative } from '../lib/timezone';
 import ThemedSelect from './ui/ThemedSelect';
+import TestDataToggle, { TestBadge } from './ui/TestDataToggle';
 
 // ── Status badge colors ────────────────────────────────────────────────────
 const STATUS_COLORS = {
@@ -56,6 +57,7 @@ export default function PatientCRM() {
   const [error, setError] = useState(null);
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState('recent');
+  const [showTestData, setShowTestData] = useState(false);
   const searchTimeout = useRef(null);
 
   const fetchPatients = useCallback(async () => {
@@ -63,6 +65,7 @@ export default function PatientCRM() {
       const params = new URLSearchParams();
       if (search.trim()) params.set('search', search.trim());
       params.set('sort', sort);
+      if (showTestData) params.set('include_test', 'true');
       const url = `/api/patients${params.toString() ? '?' + params.toString() : ''}`;
       const data = await apiFetch(url);
       setPatients(data || []);
@@ -72,7 +75,7 @@ export default function PatientCRM() {
     } finally {
       setLoading(false);
     }
-  }, [search, sort]);
+  }, [search, sort, showTestData]);
 
   useEffect(() => {
     setLoading(true);
@@ -120,16 +123,19 @@ export default function PatientCRM() {
             className="w-full pl-10 pr-4 py-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 dark:bg-gray-700 dark:text-white"
           />
         </div>
-        <ThemedSelect
-          value={sort}
-          onChange={setSort}
-          options={[
-            { value: 'recent', label: 'Most Recent' },
-            { value: 'name', label: 'Name A-Z' },
-            { value: 'visits', label: 'Most Visits' },
-          ]}
-          className="w-44"
-        />
+        <div className="flex items-center gap-2">
+          <TestDataToggle enabled={showTestData} onChange={setShowTestData} />
+          <ThemedSelect
+            value={sort}
+            onChange={setSort}
+            options={[
+              { value: 'recent', label: 'Most Recent' },
+              { value: 'name', label: 'Name A-Z' },
+              { value: 'visits', label: 'Most Visits' },
+            ]}
+            className="w-44"
+          />
+        </div>
       </div>
 
       {error && (
@@ -189,7 +195,10 @@ export default function PatientCRM() {
                     {(p.name || '?').charAt(0).toUpperCase()}
                   </div>
                   <div className="min-w-0">
-                    <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">{p.name}</p>
+                    <p className="text-sm font-semibold text-gray-900 dark:text-white truncate flex items-center gap-1.5">
+                      {p.name}
+                      {p.is_test && <TestBadge />}
+                    </p>
                     <div className="flex items-center gap-1.5">
                       {p.is_new_patient && (
                         <span className="text-xs text-amber-600 font-medium">New</span>
@@ -244,6 +253,7 @@ export default function PatientCRM() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">{p.name}</p>
+                    {p.is_test && <TestBadge />}
                     {p.is_new_patient && (
                       <span className="text-[10px] bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-400 px-1.5 py-0.5 rounded-full font-medium shrink-0">New</span>
                     )}

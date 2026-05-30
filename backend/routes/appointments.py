@@ -50,6 +50,7 @@ class AppointmentOut(BaseModel):
     created_at: Optional[datetime]
     provider_id: Optional[str] = None
     provider_name: Optional[str] = None
+    is_test: bool = False
 
     class Config:
         from_attributes = True
@@ -66,14 +67,19 @@ async def list_appointments(
     appointment_type: Optional[str] = None,
     provider_id: Optional[str] = Query(None, description="Filter by provider UUID"),
     tenant_id: Optional[str] = Query(None, description="Filter by tenant UUID (admin-only)"),
+    include_test: bool = Query(False, description="Include test/demo appointment data"),
     db: AsyncSession = Depends(get_db),
     current_user: Tenant = Depends(auth_service.get_current_user),
 ):
     """List all appointments with optional filters. Auto-scoped to current tenant."""
-    logger.info("Listing appointments for user=%s admin=%s status=%s type=%s",
-                current_user.owner_email, current_user.is_admin, status, appointment_type)
+    logger.info("Listing appointments for user=%s admin=%s status=%s type=%s include_test=%s",
+                current_user.owner_email, current_user.is_admin, status, appointment_type, include_test)
 
     query = select(Appointment)
+
+    # Exclude test data by default
+    if not include_test:
+        query = query.where(Appointment.is_test == False)  # noqa: E712
 
     # Tenant scoping: non-admins only see their own
     if not current_user.is_admin:
@@ -139,6 +145,7 @@ async def list_appointments(
             created_at=a.created_at,
             provider_id=str(a.provider_id) if a.provider_id else None,
             provider_name=provider_map.get(a.provider_id) if a.provider_id else None,
+            is_test=a.is_test or False,
         )
         for a in appointments
     ]

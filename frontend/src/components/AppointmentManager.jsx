@@ -24,6 +24,7 @@ import { useModal } from '../contexts/ModalContext';
 import { useAuth } from '../contexts/AuthContext';
 import { formatDateTime, formatTime, isSameDay } from '../lib/timezone';
 import ThemedDatePicker from './ui/ThemedDatePicker';
+import TestDataToggle, { TestBadge } from './ui/TestDataToggle';
 
 const STATUS_STYLES = {
   CONFIRMED: 'bg-green-100 text-green-700 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800',
@@ -66,6 +67,7 @@ export default function AppointmentManager() {
   const [error, setError] = useState(null);
   const [providers, setProviders] = useState([]);
   const [selectedProvider, setSelectedProvider] = useState(null);
+  const [showTestData, setShowTestData] = useState(false);
   // When set, the grid highlights this exact day inside the visible month.
   // Used by the calendar date picker so admins can jump to a date and have
   // it stand out in the month grid.
@@ -114,7 +116,7 @@ export default function AppointmentManager() {
     // Auto-refresh every 60s so new bookings flow in live
     const interval = setInterval(fetchAppointments, 60000);
     return () => clearInterval(interval);
-  }, []);
+  }, [showTestData]);
 
   // Tick every 60s to keep the current-time indicator bar moving
   useEffect(() => {
@@ -145,8 +147,10 @@ export default function AppointmentManager() {
     setError(null);
     if (forceSync) setRefreshing(true);
     try {
-      // ?sync=1 -> backend pulls latest from Google Calendar before returning
-      const path = forceSync ? '/api/appointments?sync=1' : '/api/appointments';
+      const params = new URLSearchParams();
+      if (forceSync) params.set('sync', '1');
+      if (showTestData) params.set('include_test', 'true');
+      const path = `/api/appointments${params.toString() ? '?' + params.toString() : ''}`;
       const data = await apiFetch(path);
       setAppointments(Array.isArray(data) ? data : data.items || []);
     } catch (err) {
@@ -309,6 +313,8 @@ export default function AppointmentManager() {
           </p>
         </div>
         <div className="flex items-center gap-2 md:gap-3 flex-wrap">
+          <TestDataToggle enabled={showTestData} onChange={setShowTestData} />
+
           {/* Polished provider dropdown — replaces the basic <select> */}
           <ProviderPicker
             providers={providers}

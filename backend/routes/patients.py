@@ -22,6 +22,7 @@ from backend.models.appointment import Appointment, AppointmentStatus
 from backend.models.call import Call
 from backend.models.sms_message import SMSMessage, SMSDirection
 from backend.models.provider import Provider
+from backend.models.waitlist import WaitlistEntry
 from backend.services import auth_service
 from backend.services.patient_service import _phone_digits_tail, _phone_col_clean
 
@@ -50,6 +51,7 @@ class PatientUpdateRequest(BaseModel):
 async def list_patients(
     search: Optional[str] = Query(None, description="Search by name or phone"),
     sort: str = Query("recent", description="Sort: recent, name, visits"),
+    include_test: bool = Query(False, description="Include test/demo patient data"),
     current_user: Tenant = Depends(auth_service.get_current_user),
 ):
     """
@@ -57,10 +59,14 @@ async def list_patients(
     Returns: id, name, phone, email, visit_count, is_new_patient,
     last_appointment_at, upcoming_count.
     """
-    logger.info("[Patients] Listing patients for tenant=%s search=%s", current_user.slug, search)
+    logger.info("[Patients] Listing patients for tenant=%s search=%s include_test=%s", current_user.slug, search, include_test)
     async with async_session() as session:
         # Base query
         filters = [Patient.tenant_id == current_user.id]
+
+        # Exclude test data by default
+        if not include_test:
+            filters.append(Patient.is_test == False)  # noqa: E712
 
         if search:
             search_term = f"%{search.strip()}%"
@@ -111,6 +117,7 @@ async def list_patients(
                 "first_seen_at": p.first_seen_at.isoformat() if p.first_seen_at else None,
                 "upcoming_count": upcoming_count,
                 "preferred_appointment_type": p.preferred_appointment_type,
+                "is_test": p.is_test or False,
             })
 
         return patient_list
@@ -280,3 +287,59 @@ async def update_patient(
 
         await session.commit()
         return {"status": "updated", "patient_id": patient_id, "updated_fields": list(update_data.keys())}
+
+
+@router.delete("/test-data")
+async def clear_test_data(
+    current_user: Tenant = Depends(auth_service.get_current_user),
+):
+    """
+    Delete all test/demo data (patients, appointments, waitlist entries, SMS)
+    for the authenticated tenant. Only removes records where is_test=True.
+    """
+    logger.info("[Patients] Clearing test data for tenant=%s", current_user.slug)
+    async with async_session() as session:
+        from sqlalchemy import delete
+
+        # Delete in order to respect FK constraints
+        sms_count = (await session.execute(
+            delete(SMSMessage).where(
+                and_(SMSMessage.tenant_id == current_user.id, SMSMessage.is_test == True)  # noqa: E712
+            )
+        )).rowcount
+
+        waitlist_count = (await session.execute(
+            delete(WaitlistEntry).where(
+                and_(WaitlistEntry.tenant_id == current_user.id, WaitlistEntry.is_test == True)  # noqa: E712
+            )
+        )).rowcount
+
+        appt_count = (await session.execute(
+            delete(Appointment).where(
+                and_(Appointment.tenant_id == current_user.id, Appointment.is_test == True)  # noqa: E712
+            )
+        )).rowcount
+
+        patient_count = (await session.execute(
+            delete(Patient).where(
+                and_(Patient.tenant_id == current_user.id, Patient.is_test == True)  # noqa: E712
+            )
+        )).rowcount
+
+        await session.commit()
+
+    total = patient_count + appt_count + waitlist_count + sms_count
+    logger.info(
+        "[Patients] Cleared test data: %d patients, %d appointments, %d waitlist, %d sms",
+        patient_count, appt_count, waitlist_count, sms_count,
+    )
+    return {
+        "status": "cleared",
+        "deleted": {
+            "patients": patient_count,
+            "appointments": appt_count,
+            "waitlist_entries": waitlist_count,
+            "sms_messages": sms_count,
+        },
+        "total": total,
+    }

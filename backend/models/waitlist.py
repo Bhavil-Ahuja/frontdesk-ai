@@ -13,7 +13,7 @@ import enum
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, Enum, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Enum, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -50,6 +50,9 @@ class WaitlistEntry(Base):
 
     # Priority: lower = higher priority (1 = highest). Default uses insertion order.
     priority = Column(Integer, nullable=False, default=100)
+
+    # Test data flag
+    is_test = Column(Boolean, nullable=False, default=False)  # True = created via Test Agent chat
 
     # Lifecycle
     status = Column(Enum(WaitlistStatus), nullable=False, default=WaitlistStatus.WAITING)

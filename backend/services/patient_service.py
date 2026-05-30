@@ -380,6 +380,7 @@ async def upsert_patient(
     email: str = "",
     appointment_type: str = "",
     tenant_id: _uuid.UUID | None = None,
+    is_test: bool = False,
 ) -> Patient:
     """
     Create a new patient or update an existing one, scoped to a tenant.
@@ -447,6 +448,7 @@ async def upsert_patient(
                 is_new_patient=True,
                 visit_count=1,
                 last_appointment_at=datetime.now(timezone.utc),
+                is_test=is_test,
             )
             session.add(patient)
             logger.info("[PatientSvc] Created new patient: %s (%s) tenant=%s",

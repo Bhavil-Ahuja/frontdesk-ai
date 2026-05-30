@@ -755,12 +755,18 @@ def create_session(
     caller_number: str = "",
     tenant_ctx: Any | None = None,
     patient_context: dict | None = None,
+    is_test: bool = False,
 ) -> dict[str, Any]:
     """Initialise a new conversation session for a call.
 
     If ``patient_context`` is supplied (from patient_service.get_patient_history),
     it is woven into the system prompt so the agent recognises returning callers,
     greets them by name, and already knows their upcoming appointments.
+
+    Args:
+        is_test: When True, all data created during this session (patients,
+            appointments, waitlist entries, SMS logs) will be flagged as test
+            data so it can be filtered out of production views.
     """
     session = {
         "messages": [
@@ -778,6 +784,7 @@ def create_session(
         "call_start_time": time.time(),
         "caller_number": caller_number,
         "tenant_ctx": tenant_ctx,  # stored so _execute_tool can use it
+        "is_test": is_test,        # True for Test Agent chat sessions
     }
     # Housekeeping: clean up any abandoned sessions before adding a new one.
     # Cheap check — only runs the sweep when session count grows beyond 50.
@@ -1572,9 +1579,10 @@ async def _execute_tool(
             settings (legacy single-tenant mode).
     """
     session = get_session(call_id)
-    logger.info("[Call %s] Executing tool: %s with args: %s (tenant=%s)",
+    is_test = session.get("is_test", False) if session else False
+    logger.info("[Call %s] Executing tool: %s with args: %s (tenant=%s, is_test=%s)",
                 call_id, name, json.dumps(args)[:300],
-                tenant_ctx.slug if tenant_ctx else "global")
+                tenant_ctx.slug if tenant_ctx else "global", is_test)
     t0 = time.time()
 
     try:
@@ -1935,6 +1943,7 @@ async def _execute_tool(
                 tenant_ctx=tenant_ctx,
                 appointment_type_key=appt_type,
                 provider_id=provider_id,
+                is_test=is_test,
             )
 
             # Race lost — the unique-index fired because someone booked this
@@ -2255,6 +2264,7 @@ async def _execute_tool(
                 preferred_time_end=args.get("preferred_time_end") or None,
                 provider_id=wl_provider_uuid,
                 tenant_ctx=tenant_ctx,
+                is_test=is_test,
             )
             elapsed = (time.time() - t0) * 1000
             logger.info("[Call %s] add_to_waitlist → %s in %.0fms", call_id, result.get("status"), elapsed)

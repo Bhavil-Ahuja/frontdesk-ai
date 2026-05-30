@@ -184,6 +184,7 @@ async def chat_stream(
             caller_number=caller_phone,
             tenant_ctx=tenant_ctx,
             patient_context=patient_context,
+            is_test=True,  # Test Agent chat — flag all created data as test
         )
         logger.info("[Chat] Pre-created session with test_caller_phone=%s patient=%s",
                     caller_phone,

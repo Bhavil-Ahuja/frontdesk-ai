@@ -14,6 +14,7 @@ import {
 import { apiFetch } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 import { formatDateTime, formatRelativeTime as fmtRelative } from '../lib/timezone';
+import TestDataToggle from './ui/TestDataToggle';
 
 export default function SMSConversations() {
   const { user } = useAuth();
@@ -25,12 +26,16 @@ export default function SMSConversations() {
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [error, setError] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [showTestData, setShowTestData] = useState(false);
   const messagesEndRef = useRef(null);
 
   const fetchConversations = useCallback(async (showRefresh = false) => {
     if (showRefresh) setRefreshing(true);
     try {
-      const data = await apiFetch('/api/sms/conversations');
+      const params = new URLSearchParams();
+      if (showTestData) params.set('include_test', 'true');
+      const url = `/api/sms/conversations${params.toString() ? '?' + params.toString() : ''}`;
+      const data = await apiFetch(url);
       setConversations(data || []);
       setError(null);
     } catch (err) {
@@ -39,7 +44,7 @@ export default function SMSConversations() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [showTestData]);
 
   const fetchMessages = useCallback(async (phone) => {
     setLoadingMessages(true);
@@ -107,18 +112,23 @@ export default function SMSConversations() {
             )}
           </div>
         </div>
-        <button
-          onClick={() =>
-            selectedPhone ? fetchMessages(selectedPhone) : fetchConversations(true)
-          }
-          disabled={refreshing || loadingMessages}
-          className="flex items-center gap-2 px-4 py-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 rounded-lg text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-700/50 disabled:opacity-50 transition-colors"
-        >
-          <RefreshCw
-            className={`w-4 h-4 ${refreshing || loadingMessages ? 'animate-spin' : ''}`}
-          />
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          {!selectedPhone && (
+            <TestDataToggle enabled={showTestData} onChange={setShowTestData} />
+          )}
+          <button
+            onClick={() =>
+              selectedPhone ? fetchMessages(selectedPhone) : fetchConversations(true)
+            }
+            disabled={refreshing || loadingMessages}
+            className="flex items-center gap-2 px-4 py-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 rounded-lg text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-700/50 disabled:opacity-50 transition-colors"
+          >
+            <RefreshCw
+              className={`w-4 h-4 ${refreshing || loadingMessages ? 'animate-spin' : ''}`}
+            />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {error && (

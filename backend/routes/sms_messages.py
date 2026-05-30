@@ -24,14 +24,20 @@ router = APIRouter(prefix="/api/sms", tags=["SMS"])
 
 @router.get("/conversations")
 async def list_conversations(
+    include_test: bool = Query(False, description="Include test/demo SMS data"),
     current_user: Tenant = Depends(auth_service.get_current_user),
 ):
     """
     List unique SMS conversations grouped by patient phone number.
     Returns: patient_phone, message_count, last_message_at, last_message_body, last_direction
     """
-    logger.info("[SMS] Listing conversations for tenant=%s", current_user.slug)
+    logger.info("[SMS] Listing conversations for tenant=%s include_test=%s", current_user.slug, include_test)
     async with async_session() as session:
+        # Build base filters
+        sms_filters = [SMSMessage.tenant_id == current_user.id]
+        if not include_test:
+            sms_filters.append(SMSMessage.is_test == False)  # noqa: E712
+
         # Subquery to get per-phone aggregates
         stmt = (
             select(
@@ -39,7 +45,7 @@ async def list_conversations(
                 func.count(SMSMessage.id).label("message_count"),
                 func.max(SMSMessage.created_at).label("last_message_at"),
             )
-            .where(SMSMessage.tenant_id == current_user.id)
+            .where(and_(*sms_filters))
             .group_by(SMSMessage.patient_phone)
             .order_by(desc(func.max(SMSMessage.created_at)))
         )

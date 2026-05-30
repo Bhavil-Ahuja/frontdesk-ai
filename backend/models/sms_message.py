@@ -12,7 +12,7 @@ import enum
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, Enum, ForeignKey, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Enum, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -37,6 +37,9 @@ class SMSMessage(Base):
 
     # Twilio message SID for delivery tracking
     twilio_sid = Column(String(50), nullable=True)
+
+    # Test data flag
+    is_test = Column(Boolean, nullable=False, default=False)  # True = created via Test Agent chat
 
     # For threading: group messages by patient phone number
     patient_phone = Column(String(20), nullable=False, index=True)

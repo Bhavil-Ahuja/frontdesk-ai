@@ -202,6 +202,7 @@ async def _async_log_outbound_sms(
     body: str,
     patient_phone: str,
     from_number: str = "",
+    is_test: bool = False,
 ) -> None:
     """Persist an outbound SMS record for conversation threading / audit.
 
@@ -222,6 +223,7 @@ async def _async_log_outbound_sms(
                 to_number=to_number,
                 body=body,
                 patient_phone=patient_phone,
+                is_test=is_test,
             )
             session.add(msg)
             await session.commit()

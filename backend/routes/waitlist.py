@@ -56,14 +56,15 @@ class ConflictCheckRequest(BaseModel):
 async def list_waitlist_entries(
     status: Optional[str] = Query(None, description="Filter by waitlist entry status"),
     date: Optional[str] = Query(None, description="Filter by date (YYYY-MM-DD)"),
+    include_test: bool = Query(False, description="Include test/demo waitlist data"),
     current_user: Tenant = Depends(auth_service.get_current_user),
 ):
     """List waitlist entries for the authenticated tenant, with optional filters."""
-    logger.info("[Waitlist] Listing entries for tenant=%s status=%s date=%s",
-                current_user.slug, status, date)
+    logger.info("[Waitlist] Listing entries for tenant=%s status=%s date=%s include_test=%s",
+                current_user.slug, status, date, include_test)
     try:
         entries = await waitlist_service.get_waitlist_entries(
-            current_user.id, status=status, date=date,
+            current_user.id, status=status, date=date, include_test=include_test,
         )
         return entries
     except Exception as exc:

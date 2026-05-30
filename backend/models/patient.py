@@ -36,6 +36,9 @@ class Patient(Base):
     allergies = Column(Text, nullable=True)                          # free text
     notes = Column(Text, nullable=True)                              # receptionist notes
 
+    # ── Test data flag ───────────────────────────────────────────────────
+    is_test = Column(Boolean, nullable=False, default=False)  # True = created via Test Agent chat
+
     # ── State tracking ───────────────────────────────────────────────────
     is_new_patient = Column(Boolean, default=True)
     visit_count = Column(Integer, default=0)                         # total completed visits

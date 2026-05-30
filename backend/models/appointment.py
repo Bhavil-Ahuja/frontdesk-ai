@@ -47,6 +47,7 @@ class Appointment(Base):
     call_id = Column(UUID(as_uuid=True), ForeignKey("calls.id"), nullable=True)
     provider_id = Column(UUID(as_uuid=True), ForeignKey("providers.id"), nullable=True)
     notes = Column(Text, nullable=True)
+    is_test = Column(Boolean, nullable=False, default=False)  # True = created via Test Agent chat
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     # ── Reminder / follow-up tracking ────────────────────────────────────

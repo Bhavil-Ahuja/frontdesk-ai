@@ -185,6 +185,12 @@ _MIGRATIONS: list[str] = [
         RAISE NOTICE 'Provider backfill skipped: %', SQLERRM;
     END $$;""",
 
+    # ── is_test flag — separate test/demo data from real patient data ──
+    "ALTER TABLE patients ADD COLUMN IF NOT EXISTS is_test BOOLEAN NOT NULL DEFAULT false",
+    "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS is_test BOOLEAN NOT NULL DEFAULT false",
+    "ALTER TABLE waitlist_entries ADD COLUMN IF NOT EXISTS is_test BOOLEAN NOT NULL DEFAULT false",
+    "ALTER TABLE sms_messages ADD COLUMN IF NOT EXISTS is_test BOOLEAN NOT NULL DEFAULT false",
+
     # ── phone normalisation — strip dashes, spaces, parentheses ────────
     #    Historic data may contain "635-241-8405" or "(512) 555-1234" which
     #    breaks suffix-match queries.  Strip all non-digit / non-plus chars

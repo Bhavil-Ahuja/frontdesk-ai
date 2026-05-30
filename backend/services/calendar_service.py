@@ -234,6 +234,7 @@ async def book_appointment(
     provider_id: Any | None = None,
     *,
     event_type_id: str = "",  # deprecated, kept for call-site compat
+    is_test: bool = False,
 ) -> dict[str, Any] | None:
     """
     Create a booking.
@@ -291,6 +292,7 @@ async def book_appointment(
             start_time=start_time,
             duration_minutes=duration,
             provider_id=provider_uuid,
+            is_test=is_test,
         )
 
         # ── Google Calendar sync (fire-and-forget, non-blocking) ────────

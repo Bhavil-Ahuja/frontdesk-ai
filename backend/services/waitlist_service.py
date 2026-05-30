@@ -41,6 +41,7 @@ async def add_to_waitlist(
     preferred_time_end: str | None = None,
     provider_id: uuid.UUID | None = None,
     tenant_ctx: Any | None = None,
+    is_test: bool = False,
 ) -> dict:
     """
     Add a patient to the waitlist for a specific date and appointment type.
@@ -166,6 +167,7 @@ async def add_to_waitlist(
         provider_id=provider_id,
         status=WaitlistStatus.WAITING,
         expires_at=expires_at,
+        is_test=is_test,
     )
 
     async with async_session() as session:
@@ -210,6 +212,7 @@ async def get_waitlist_entries(
     tenant_id: uuid.UUID,
     status: WaitlistStatus | None = None,
     date: str | None = None,
+    include_test: bool = False,
 ) -> list[dict]:
     """
     Retrieve waitlist entries for a tenant, optionally filtered by status
@@ -219,11 +222,16 @@ async def get_waitlist_entries(
         tenant_id: Tenant to scope the query to.
         status: Optional WaitlistStatus filter (e.g. WAITING, NOTIFIED).
         date: Optional preferred_date filter in YYYY-MM-DD format.
+        include_test: If False (default), exclude test/demo data.
 
     Returns:
         List of dicts, each containing full entry details.
     """
     filters = [WaitlistEntry.tenant_id == tenant_id]
+
+    # Exclude test data by default
+    if not include_test:
+        filters.append(WaitlistEntry.is_test == False)  # noqa: E712
 
     if status is not None:
         filters.append(WaitlistEntry.status == status)
@@ -264,6 +272,7 @@ async def get_waitlist_entries(
             "booked_at": e.booked_at.isoformat() if e.booked_at else None,
             "expires_at": e.expires_at.isoformat() if e.expires_at else None,
             "created_at": e.created_at.isoformat() if e.created_at else None,
+            "is_test": e.is_test or False,
         }
         for e in entries
     ]

@@ -437,6 +437,7 @@ async def create_native_booking(
     start_time: str,
     duration_minutes: int = DEFAULT_APPOINTMENT_DURATION_MINUTES,
     provider_id: uuid.UUID | None = None,
+    is_test: bool = False,
 ) -> dict[str, Any] | None:
     """
     Create a booking directly in the Appointment table.
@@ -472,6 +473,7 @@ async def create_native_booking(
         email=patient_info.get("email", ""),
         appointment_type=appointment_type,
         tenant_id=tenant_id,
+        is_test=is_test,
     )
 
     # Local import to avoid a hard dependency on SQLAlchemy at import time
@@ -492,6 +494,7 @@ async def create_native_booking(
                 status=AppointmentStatus.CONFIRMED,
                 booked_via=BookedVia.AI,
                 provider_id=provider_id,
+                is_test=is_test,
             )
             session.add(appt)
             await session.commit()
