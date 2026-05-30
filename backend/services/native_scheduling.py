@@ -243,6 +243,7 @@ async def get_provider_aware_slots(
     tenant_id: uuid.UUID | None = None,
     business_hours: dict[str, Any] | None = None,
     tz_name: str = DEFAULT_TIMEZONE,
+    max_concurrent: int = 1,
     provider_id: uuid.UUID | None = None,
     holidays: list[dict[str, Any]] | None = None,
     exclude_booking_uid: str | None = None,
@@ -367,10 +368,10 @@ async def get_provider_aware_slots(
 
     if not providers:
         # No providers configured — fall back to global slot availability
-        logger.info("[NativeSched] No providers found, using global availability")
+        logger.info("[NativeSched] No providers found, using global availability (max_concurrent=%d)", max_concurrent)
         simple_slots = await get_native_slots(
             date_str, duration_minutes, tenant_id, business_hours, tz_name,
-            max_concurrent=1, exclude_booking_uid=exclude_booking_uid,
+            max_concurrent=max_concurrent, exclude_booking_uid=exclude_booking_uid,
             appointment_type=appointment_type,
         )
         return {

@@ -207,6 +207,7 @@ async def get_available_slots(
             tenant_id=tenant_ctx.tenant_id,
             business_hours=effective_hours,
             tz_name=tz,
+            max_concurrent=max_conc,
             provider_id=provider_uuid,
             exclude_booking_uid=exclude_booking_uid,
             appointment_type=appointment_type_key,

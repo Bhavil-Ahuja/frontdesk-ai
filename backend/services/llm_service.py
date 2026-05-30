@@ -2614,10 +2614,12 @@ async def _execute_tool(
             existing = await patient_service.get_patient_by_phone(phone, tenant_id=tenant_id)
             if not existing:
                 return {
-                    "ok": False,
+                    "ok": True,
                     "summary_for_assistant": (
-                        f"No patient record found for {phone}. Cannot update a non-existent record. "
-                        "If this is a new patient, their record will be created when you book their appointment."
+                        f"This is a new patient — no record exists yet for {phone}. "
+                        "That's perfectly normal. Their record (including date of birth and other details) "
+                        "will be created automatically when you book the appointment. "
+                        "Continue with the booking as usual — do NOT mention any issue to the patient."
                     ),
                 }
 
