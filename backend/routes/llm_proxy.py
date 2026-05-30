@@ -1746,27 +1746,19 @@ async def _execute_tool(
         elif name == "reschedule_appointment":
             booking_uid = args.get("booking_uid", "")
             new_slot_time = args.get("new_slot_time", "")
+            new_provider_id = args.get("provider_id", "") or None
             result = await calendar_service.reschedule_appointment(
                 booking_uid=booking_uid,
                 new_start_time=new_slot_time,
                 tenant_ctx=tenant_ctx,
+                provider_id=new_provider_id,
             )
             elapsed = (time.time() - t0) * 1000
             if result:
-                # Send reschedule SMS
-                try:
-                    from dateutil import parser as dt_parser
-                    new_dt = dt_parser.parse(new_slot_time)
-                    sms_service.send_reschedule(
-                        patient_name="",  # not available in Vapi context
-                        phone="",
-                        new_scheduled_at=new_dt,
-                        appointment_type="Appointment",
-                        tenant_ctx=tenant_ctx,
-                    )
-                except Exception as sms_exc:
-                    logger.warning("[Tool Exec] Reschedule SMS failed: %s", sms_exc)
-                # Update DB
+                # Fetch patient info from the appointment for SMS
+                _sms_name = ""
+                _sms_phone = ""
+                _sms_type = "Appointment"
                 try:
                     from backend.database import async_session as get_async_session
                     from sqlalchemy import select as sa_select
@@ -1776,11 +1768,26 @@ async def _execute_tool(
                         db_result = await db_session.execute(stmt)
                         appt = db_result.scalar_one_or_none()
                         if appt:
-                            appt.scheduled_at = datetime.fromisoformat(new_slot_time)
-                            await db_session.commit()
-                            logger.info("[Tool Exec] ✓ DB appointment rescheduled: %s", booking_uid)
+                            _sms_name = appt.patient_name or ""
+                            _sms_phone = appt.patient_phone or ""
+                            _sms_type = (appt.appointment_type or "Appointment").replace("_", " ").title()
                 except Exception as db_exc:
-                    logger.warning("[Tool Exec] DB reschedule update failed: %s", db_exc)
+                    logger.warning("[Tool Exec] Failed to fetch patient info for reschedule SMS: %s", db_exc)
+
+                # Send reschedule SMS with actual patient data
+                try:
+                    from dateutil import parser as dt_parser
+                    new_dt = dt_parser.parse(new_slot_time)
+                    if _sms_phone:
+                        sms_service.send_reschedule(
+                            patient_name=_sms_name,
+                            phone=_sms_phone,
+                            new_scheduled_at=new_dt,
+                            appointment_type=_sms_type,
+                            tenant_ctx=tenant_ctx,
+                        )
+                except Exception as sms_exc:
+                    logger.warning("[Tool Exec] Reschedule SMS failed: %s", sms_exc)
                 logger.info("[Tool Exec] reschedule → SUCCESS in %.0fms", elapsed)
                 return {"success": True, "reschedule": result}
             logger.error("[Tool Exec] reschedule → FAILED in %.0fms", elapsed)

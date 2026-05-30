@@ -435,7 +435,11 @@ async def get_provider_aware_slots(
                 if slot_utc < booked_end and slot_end_utc > booked_start:
                     overlap_count += 1
 
-            max_conc = provider.max_concurrent or 1
+            # Use the stricter of provider's own limit and the appointment
+            # type's global limit. This ensures a provider can't exceed the
+            # type-level concurrency even if their personal limit is higher.
+            provider_limit = provider.max_concurrent or 1
+            max_conc = min(provider_limit, max_concurrent) if max_concurrent > 0 else provider_limit
             if overlap_count < max_conc:
                 available_providers.append({
                     "id": str(provider.id),
@@ -512,6 +516,57 @@ async def create_native_booking(
         tenant_id=tenant_id,
         is_test=is_test,
     )
+
+    # ── Pre-booking concurrency check ─────────────────────────────────────
+    # Verify that the slot hasn't filled up since get_available_slots was
+    # called. This closes the race window between slot-check and insert.
+    from backend.services.calendar_service import _resolve_appointment_config
+
+    # Resolve max_concurrent from tenant config
+    _max_conc = 1
+    if tenant_id:
+        from backend.models.tenant import Tenant as _Tenant
+        async with async_session() as _check_session:
+            _t_result = await _check_session.execute(
+                select(_Tenant).where(_Tenant.id == tenant_id)
+            )
+            _tenant = _t_result.scalar_one_or_none()
+            if _tenant:
+                _, _max_conc = _resolve_appointment_config(appointment_type, _tenant)
+
+            # Count overlapping confirmed appointments of the same type
+            booking_end = scheduled_at + timedelta(minutes=duration_minutes)
+            _overlap_q = select(Appointment).where(
+                and_(
+                    Appointment.status == AppointmentStatus.CONFIRMED,
+                    Appointment.scheduled_at < booking_end,
+                )
+            )
+            if tenant_id:
+                _overlap_q = _overlap_q.where(Appointment.tenant_id == tenant_id)
+            if appointment_type:
+                _overlap_q = _overlap_q.where(
+                    func.lower(Appointment.appointment_type) == slugify_appointment_type(appointment_type)
+                )
+            _overlap_result = await _check_session.execute(_overlap_q)
+            _existing = _overlap_result.scalars().all()
+
+            _overlap_count = 0
+            for _ex in _existing:
+                _ex_start = _ex.scheduled_at
+                if _ex_start.tzinfo is None:
+                    _ex_start = _ex_start.replace(tzinfo=timezone.utc)
+                _ex_end = _ex_start + timedelta(minutes=_ex.duration_minutes or duration_minutes)
+                if _ex_start < booking_end and _ex_end > scheduled_at:
+                    _overlap_count += 1
+
+            if _overlap_count >= _max_conc:
+                logger.warning(
+                    "[NativeSched] Pre-booking check FAILED — slot at %s is full "
+                    "(%d/%d concurrent for type=%s)",
+                    start_time, _overlap_count, _max_conc, appointment_type,
+                )
+                return {"status": "CONFLICT", "reason": "slot_taken"}
 
     # Local import to avoid a hard dependency on SQLAlchemy at import time
     from sqlalchemy.exc import IntegrityError
@@ -616,7 +671,10 @@ async def reschedule_native_booking(
     provider_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Reschedule an appointment to a new time, optionally changing the provider.
-    Returns result dict or None."""
+
+    Validates that the new time slot is available before committing.
+    Returns result dict, {"status": "CONFLICT"} if slot is full, or None on error.
+    """
     try:
         new_dt = datetime.fromisoformat(new_start_time)
         # Convert to UTC for storage — handles both tz-aware and naive inputs
@@ -637,14 +695,73 @@ async def reschedule_native_booking(
             logger.warning("[NativeSched] Reschedule failed — no booking with uid=%s", booking_uid)
             return None
 
+        # ── Verify the new time slot is available ────────────────────────
+        # Count confirmed appointments at the new time (excluding this one)
+        # to enforce max_concurrent. Resolve config from tenant.
+        from backend.services.calendar_service import _resolve_appointment_config
+        from backend.models.tenant import Tenant
+
+        tenant = None
+        max_conc = 1
+        duration = appt.duration_minutes or DEFAULT_APPOINTMENT_DURATION_MINUTES
+        if appt.tenant_id:
+            tenant_result = await session.execute(
+                select(Tenant).where(Tenant.id == appt.tenant_id)
+            )
+            tenant = tenant_result.scalar_one_or_none()
+            if tenant:
+                duration, max_conc = _resolve_appointment_config(
+                    appt.appointment_type or "", tenant
+                )
+
+        new_end = new_dt + timedelta(minutes=duration)
+        # Fetch confirmed appointments that could overlap with the new time.
+        # We fetch rows and check overlap in Python to avoid Postgres-specific
+        # interval arithmetic on the duration_minutes column.
+        overlap_query = select(Appointment).where(
+            and_(
+                Appointment.status == AppointmentStatus.CONFIRMED,
+                Appointment.scheduled_at < new_end,
+                Appointment.cal_booking_uid != booking_uid,  # exclude self
+            )
+        )
+        if appt.tenant_id:
+            overlap_query = overlap_query.where(Appointment.tenant_id == appt.tenant_id)
+        if appt.appointment_type:
+            overlap_query = overlap_query.where(
+                func.lower(Appointment.appointment_type) == slugify_appointment_type(appt.appointment_type)
+            )
+
+        overlap_result = await session.execute(overlap_query)
+        overlap_appointments = overlap_result.scalars().all()
+
+        # Count actual overlaps: an existing appointment overlaps if its
+        # time range (scheduled_at .. scheduled_at + duration) intersects
+        # with the new range (new_dt .. new_end).
+        overlap_count = 0
+        for existing in overlap_appointments:
+            ex_start = existing.scheduled_at
+            if ex_start.tzinfo is None:
+                ex_start = ex_start.replace(tzinfo=timezone.utc)
+            ex_end = ex_start + timedelta(minutes=existing.duration_minutes or duration)
+            if ex_start < new_end and ex_end > new_dt:
+                overlap_count += 1
+
+        if overlap_count >= max_conc:
+            logger.warning(
+                "[NativeSched] Reschedule blocked — new time %s is full "
+                "(%d/%d concurrent for type=%s)",
+                new_start_time, overlap_count, max_conc, appt.appointment_type,
+            )
+            return {"status": "CONFLICT", "reason": "slot_full"}
+
         old_time = appt.scheduled_at.isoformat() if appt.scheduled_at else "unknown"
         old_status = appt.status
 
         # Update provider if a new one was requested
         if provider_id:
-            from uuid import UUID
             try:
-                appt.provider_id = UUID(provider_id)
+                appt.provider_id = uuid.UUID(provider_id) if isinstance(provider_id, str) else provider_id
                 logger.info("[NativeSched] Provider changed to %s for %s", provider_id, booking_uid)
             except (ValueError, AttributeError) as exc:
                 logger.warning("[NativeSched] Invalid provider_id=%s — %s", provider_id, exc)

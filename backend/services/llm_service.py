@@ -1818,11 +1818,12 @@ async def _execute_tool(
             # the patient's own appointment from the overlap calculation.
             exclude_uid = args.get("booking_uid", "") or None
 
-            # Get duration from tenant's appointment type config (source of truth).
-            # Falls back to first configured type if no exact match, then to
-            # DEFAULT_APPOINTMENT_DURATION_MINUTES only if no tenant context.
+            # Get duration and max_concurrent from tenant's appointment type config
+            # (source of truth). Falls back to first configured type if no exact
+            # match, then to DEFAULT_APPOINTMENT_DURATION_MINUTES only if no
+            # tenant context.
             from backend.services.calendar_service import _resolve_appointment_config
-            duration, _ = _resolve_appointment_config(appt_type, tenant_ctx)
+            duration, max_conc = _resolve_appointment_config(appt_type, tenant_ctx)
 
             # Use provider-aware scheduling to check per-provider concurrency
             office_tz_name = tenant_ctx.timezone if tenant_ctx else DEFAULT_TIMEZONE
@@ -1832,6 +1833,7 @@ async def _execute_tool(
                 tenant_id=tenant_ctx.tenant_id if tenant_ctx else None,
                 business_hours=tenant_ctx.business_hours if tenant_ctx else None,
                 tz_name=office_tz_name,
+                max_concurrent=max_conc,
                 provider_id=provider_uuid,
                 holidays=(tenant_ctx.holidays if tenant_ctx and getattr(tenant_ctx, "holidays", None) else None),
                 exclude_booking_uid=exclude_uid,
