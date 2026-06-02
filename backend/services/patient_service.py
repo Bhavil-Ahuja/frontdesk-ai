@@ -229,8 +229,8 @@ async def get_patient_history(
     Shape:
     {
         "patient": {name, phone, dob, is_new, visit_count, ...},
-        "upcoming_appointments": [{type, date, time, booking_uid}, ...],
-        "past_appointments": [{type, date, status}, ...],
+        "upcoming_appointments": [{type, date, time, duration_minutes, provider_name, provider_title, booking_uid}, ...],
+        "past_appointments": [{type, date, status, provider_name}, ...],
         "last_visit": {type, date} or None,
         "months_since_last_visit": int or None,
     }
@@ -354,7 +354,12 @@ async def get_patient_history(
                 "date": _to_local(a.scheduled_at).strftime("%A, %B %d, %Y"),
                 "relative": _relative_date_label(a.scheduled_at),  # "TODAY", "TOMORROW", etc.
                 "time": _to_local(a.scheduled_at).strftime("%I:%M %p").lstrip("0"),
+                "duration_minutes": a.duration_minutes,
+                "provider_name": a.provider.name if a.provider else None,
+                "provider_title": a.provider.title if a.provider else None,
                 "booking_uid": a.cal_booking_uid or "",
+                "status": a.status.value if a.status else "CONFIRMED",
+                **({"notes": a.notes} if a.notes else {}),
             }
             for a in upcoming
         ],
@@ -363,6 +368,7 @@ async def get_patient_history(
                 "type": a.appointment_type.replace("_", " ").title(),
                 "date": _to_local(a.scheduled_at).strftime("%B %d, %Y"),
                 "status": a.status.value if a.status else "UNKNOWN",
+                "provider_name": a.provider.name if a.provider else None,
                 **({"notes": a.notes} if a.notes else {}),
             }
             for a in past[:5]  # limit context size

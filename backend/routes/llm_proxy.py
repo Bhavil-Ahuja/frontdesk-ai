@@ -1712,6 +1712,7 @@ async def _execute_tool(
 
             if result:
                 # Send SMS confirmation
+                sms_sent = False
                 try:
                     scheduled_dt = datetime.fromisoformat(args.get("slot_time", ""))
                     sms_service.send_confirmation(
@@ -1721,6 +1722,7 @@ async def _execute_tool(
                         scheduled_at=scheduled_dt,
                         tenant_ctx=tenant_ctx,
                     )
+                    sms_sent = True
                 except Exception as sms_exc:
                     logger.warning("[Tool Exec] SMS failed: %s", sms_exc)
 
@@ -1730,18 +1732,41 @@ async def _execute_tool(
 
                 elapsed = (time.time() - t0) * 1000
                 logger.info("[Tool Exec] book_appointment → SUCCESS in %.0fms: %s", elapsed, result)
+
+                # Format confirmation for the LLM
+                try:
+                    booked_dt = datetime.fromisoformat(slot_time)
+                    time_str = booked_dt.strftime("%I:%M %p").lstrip("0")
+                    date_str = booked_dt.strftime("%A, %B %d")
+                except Exception:
+                    time_str = slot_time
+                    date_str = "the requested date"
+
+                provider_msg = f" with {provider_name}" if provider_name else ""
+                sms_note = "They'll receive an SMS confirmation shortly." if sms_sent else ""
+
                 response = {"success": True, "booking": result}
                 if auto_assigned and provider_name:
                     response["auto_assigned_provider"] = provider_name
-                    response["summary_for_assistant"] = (
-                        f"Appointment booked successfully! The patient has been assigned to {provider_name}. "
-                        "Let them know who their doctor will be."
-                    )
+                response["summary_for_assistant"] = (
+                    f"Booking confirmed for {time_str} on {date_str}{provider_msg}. "
+                    f"Tell the patient their appointment is booked. {sms_note} "
+                    f"Do NOT make up any details not provided. "
+                    f"Just confirm the time, date{', and provider' if provider_name else ''}, wish them well, and ask if there's anything else."
+                )
                 return response
 
             elapsed = (time.time() - t0) * 1000
             logger.error("[Tool Exec] book_appointment → FAILED in %.0fms", elapsed)
-            return {"success": False, "error": "Failed to create booking."}
+            return {
+                "success": False,
+                "error": "Failed to create booking.",
+                "summary_for_assistant": (
+                    "The booking could not be completed due to a technical issue. "
+                    "Apologize to the patient and offer to try again or check a different time. "
+                    "Do NOT make up reasons for the failure."
+                ),
+            }
 
         elif name == "reschedule_appointment":
             booking_uid = args.get("booking_uid", "")
@@ -1889,16 +1914,23 @@ async def _execute_tool(
                     "upcoming": [],
                 }
 
-            appt_lines = []
-            for a in upcoming:
-                appt_lines.append(f"{a['type']} on {a['date']} at {a['time']}")
+            def _appt_line(a):
+                line = f"{a['type']} on {a['date']} at {a['time']}"
+                if a.get("provider_name"):
+                    title = f" ({a['provider_title']})" if a.get("provider_title") else ""
+                    line += f" with {a['provider_name']}{title}"
+                if a.get("duration_minutes"):
+                    line += f" ({a['duration_minutes']} min)"
+                return line
+
+            appt_lines = [_appt_line(a) for a in upcoming]
 
             return {
                 "ok": True,
                 "summary_for_assistant": (
                     f"{patient_name} has {len(upcoming)} upcoming appointment(s): "
                     + "; ".join(appt_lines) + ". "
-                    "Tell the patient about their appointment(s) naturally. "
+                    "Tell the patient about their appointment(s) naturally — include the doctor's name and appointment details. "
                     "If they want to reschedule, use the booking_uid with reschedule_appointment."
                 ),
                 "patient_name": patient_name,
@@ -1916,6 +1948,29 @@ async def _execute_tool(
             )
             elapsed = (time.time() - t0) * 1000
             logger.info("[Tool Exec] add_to_waitlist → %s in %.0fms", result.get("status"), elapsed)
+            return result
+
+        elif name == "check_waitlist_status":
+            from backend.services import waitlist_service
+
+            phone = args.get("phone", "")
+            if not phone:
+                return {
+                    "ok": False,
+                    "summary_for_assistant": "I need the patient's phone number to check their waitlist status.",
+                }
+
+            tenant_id = tenant_ctx.tenant_id if tenant_ctx else None
+            if not tenant_id:
+                return {"ok": False, "summary_for_assistant": "Unable to check waitlist — no tenant context."}
+
+            result = await waitlist_service.check_waitlist_status(
+                patient_phone=phone,
+                tenant_id=tenant_id,
+            )
+            elapsed = (time.time() - t0) * 1000
+            logger.info("[Tool Exec] check_waitlist_status → %d entries in %.0fms",
+                        len(result.get("entries", [])), elapsed)
             return result
 
         elif name == "lookup_patient":
@@ -2002,7 +2057,13 @@ async def _execute_tool(
                 summary_parts.append(f"Last visit: {last_visit['type']} on {last_visit['date']}{ago}.")
 
             if upcoming:
-                appt_lines = [f"{a['type']} on {a['date']} at {a['time']}" for a in upcoming]
+                def _appt_summary(a):
+                    line = f"{a['type']} on {a['date']} at {a['time']}"
+                    if a.get("provider_name"):
+                        title = f" ({a['provider_title']})" if a.get("provider_title") else ""
+                        line += f" with {a['provider_name']}{title}"
+                    return line
+                appt_lines = [_appt_summary(a) for a in upcoming]
                 summary_parts.append(f"Upcoming appointments: {'; '.join(appt_lines)}.")
             else:
                 summary_parts.append("No upcoming appointments.")
@@ -2119,10 +2180,19 @@ async def _execute_tool(
                 providers = []
 
             if not providers:
-                summary = "This practice doesn't have individual provider profiles configured. Any available provider can see the patient."
+                summary = "This practice doesn't have individual provider profiles configured. Any available provider can see the patient. Do not pass a provider_id when booking."
             else:
-                names = ", ".join(f"{p['name']} ({p.get('title', '')})" for p in providers)
-                summary = f"Available providers: {names}. Ask the patient if they have a preference, or offer the first available."
+                def _fmt_provider(p):
+                    name = p['name']
+                    title = p.get('title')
+                    return f"{name} ({title})" if title else name
+                names = ", ".join(_fmt_provider(p) for p in providers)
+                summary = (
+                    f"Available providers: {names}. "
+                    f"Tell the patient which doctors are available and ask if they have a preference. "
+                    f"When they choose, use that provider's 'id' from the providers list below in get_available_slots and book_appointment. "
+                    f"If they say 'anyone is fine', pass '__auto__' as the provider_id to auto-assign the best available provider."
+                )
 
             elapsed = (time.time() - t0) * 1000
             logger.info("[Tool Exec] get_providers → %d providers in %.0fms", len(providers), elapsed)

@@ -552,6 +552,23 @@ ALL_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "check_waitlist_status",
+            "description": "Check a patient's waitlist status — their position in queue, whether a slot opened, etc. Call this when a patient asks about their waitlist status or position. Use the caller's phone from caller-ID.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "phone": {
+                        "type": "string",
+                        "description": "Patient's phone number from caller-ID.",
+                    },
+                },
+                "required": ["phone"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_providers",
             "description": "Get the list of available providers at this practice. Call this when a patient asks to see a specific provider or when you need to offer provider choices.",
             "parameters": {
@@ -2184,6 +2201,7 @@ async def _execute_tool(
                 }
             if result:
                 # Send SMS confirmation (uses tenant's Twilio — will no-op if unconfigured)
+                sms_sent = False
                 try:
                     scheduled_dt = datetime.fromisoformat(args.get("slot_time", slot_time))
                     sms_service.send_confirmation(
@@ -2193,6 +2211,7 @@ async def _execute_tool(
                         scheduled_at=scheduled_dt,
                         tenant_ctx=tenant_ctx,
                     )
+                    sms_sent = True
                 except Exception as sms_exc:
                     logger.warning("[Call %s] SMS confirmation failed: %s", call_id, sms_exc)
 
@@ -2241,13 +2260,14 @@ async def _execute_tool(
 
                 # Build confirmation message with provider if specified
                 provider_msg = f" with {provider_name}" if provider_name else ""
+                sms_note = "They'll receive an SMS confirmation shortly." if sms_sent else ""
                 return {
                     "success": True,
                     "booking": result,
                     "provider_name": provider_name,
                     "summary_for_assistant": (
                         f"Booking confirmed for {time_str} on {date_str}{provider_msg}. "
-                        f"Tell the patient their appointment is booked and they'll receive an SMS confirmation. "
+                        f"Tell the patient their appointment is booked. {sms_note} "
                         f"Do NOT make up any details not provided. "
                         f"Just confirm the time, date{', and provider' if provider_name else ''}, wish them well, and ask if there's anything else."
                     ),
@@ -2443,13 +2463,22 @@ async def _execute_tool(
                     "patient_name": patient_name,
                     "upcoming": [],
                 }
-            appt_lines = [f"{a['type']} on {a['date']} at {a['time']}" for a in upcoming]
+            def _appt_line(a):
+                line = f"{a['type']} on {a['date']} at {a['time']}"
+                if a.get("provider_name"):
+                    title = f" ({a['provider_title']})" if a.get("provider_title") else ""
+                    line += f" with {a['provider_name']}{title}"
+                if a.get("duration_minutes"):
+                    line += f" ({a['duration_minutes']} min)"
+                return line
+
+            appt_lines = [_appt_line(a) for a in upcoming]
             return {
                 "ok": True,
                 "summary_for_assistant": (
                     f"{patient_name} has {len(upcoming)} upcoming appointment(s): "
                     + "; ".join(appt_lines) + ". "
-                    "Tell the patient about their appointment(s) naturally. "
+                    "Tell the patient about their appointment(s) naturally — include the doctor's name and appointment details. "
                     "If they want to reschedule, use the booking_uid with reschedule_appointment."
                 ),
                 "patient_name": patient_name,
@@ -2486,6 +2515,29 @@ async def _execute_tool(
             )
             elapsed = (time.time() - t0) * 1000
             logger.info("[Call %s] add_to_waitlist → %s in %.0fms", call_id, result.get("status"), elapsed)
+            return result
+
+        elif name == "check_waitlist_status":
+            from backend.services import waitlist_service
+
+            phone = _enforce_caller_phone(args.get("phone", ""), session)
+            if not phone:
+                return {
+                    "ok": False,
+                    "summary_for_assistant": "I need the patient's phone number to check their waitlist status.",
+                }
+
+            tenant_id = tenant_ctx.tenant_id if tenant_ctx else None
+            if not tenant_id:
+                return {"ok": False, "summary_for_assistant": "Unable to check waitlist — no tenant context."}
+
+            result = await waitlist_service.check_waitlist_status(
+                patient_phone=phone,
+                tenant_id=tenant_id,
+            )
+            elapsed = (time.time() - t0) * 1000
+            logger.info("[Call %s] check_waitlist_status → %d entries in %.0fms",
+                        call_id, len(result.get("entries", [])), elapsed)
             return result
 
         elif name == "lookup_patient":
@@ -2574,7 +2626,13 @@ async def _execute_tool(
                 summary_parts.append(f"Last visit: {last_visit['type']} on {last_visit['date']}{ago}.")
 
             if upcoming:
-                appt_lines = [f"{a['type']} on {a['date']} at {a['time']}" for a in upcoming]
+                def _appt_summary(a):
+                    line = f"{a['type']} on {a['date']} at {a['time']}"
+                    if a.get("provider_name"):
+                        title = f" ({a['provider_title']})" if a.get("provider_title") else ""
+                        line += f" with {a['provider_name']}{title}"
+                    return line
+                appt_lines = [_appt_summary(a) for a in upcoming]
                 summary_parts.append(f"Upcoming appointments: {'; '.join(appt_lines)}.")
             else:
                 summary_parts.append("No upcoming appointments.")
@@ -2696,12 +2754,16 @@ async def _execute_tool(
             if not providers:
                 summary = "This practice doesn't have individual provider profiles configured. Any available provider can see the patient. Do not pass a provider_id when booking."
             else:
-                provider_list = ", ".join(f"{p['name']} ({p.get('title', '')})" for p in providers)
+                def _fmt_provider(p):
+                    name = p['name']
+                    title = p.get('title')
+                    return f"{name} ({title})" if title else name
+                provider_list = ", ".join(_fmt_provider(p) for p in providers)
                 summary = (
                     f"Available providers: {provider_list}. "
-                    f"Ask the patient if they have a preference. "
+                    f"Tell the patient which doctors are available and ask if they have a preference. "
                     f"When they choose, use that provider's 'id' from the providers list below in get_available_slots and book_appointment. "
-                    f"If they say 'anyone is fine', proceed without a provider_id."
+                    f"If they say 'anyone is fine', pass '__auto__' as the provider_id to auto-assign the best available provider."
                 )
 
             elapsed = (time.time() - t0) * 1000
@@ -2828,10 +2890,20 @@ def _build_office_info(topic: str, tenant_ctx: Any | None) -> dict[str, Any]:
             svc_lines = ["Here are our services and approximate pricing:"]
             for svc in services:
                 name = svc.get("name", "Service")
-                low = svc.get("price_min", "?")
-                high = svc.get("price_max", "?")
-                svc_lines.append(f"  - {name}: ${low} to ${high}")
+                low = svc.get("price_min")
+                high = svc.get("price_max")
+                if low and high:
+                    svc_lines.append(f"  - {name}: ${low} to ${high}")
+                elif low:
+                    svc_lines.append(f"  - {name}: from ${low}")
+                elif high:
+                    svc_lines.append(f"  - {name}: up to ${high}")
+                else:
+                    svc_lines.append(f"  - {name}: pricing available upon request")
             parts.append("\n".join(svc_lines))
+        else:
+            if topic == "services":
+                parts.append("Service and pricing information is not available right now. The patient can call during business hours for details.")
 
     # ── FAQs ─────────────────────────────────────────────────────────────
     if topic in ("faqs", "all"):

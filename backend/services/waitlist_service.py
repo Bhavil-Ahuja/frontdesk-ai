@@ -16,7 +16,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import select, and_, update
+from sqlalchemy import select, and_, update, func
 
 from backend.database import async_session
 from backend.defaults import DEFAULT_TIMEZONE, slugify_appointment_type
@@ -157,6 +157,40 @@ async def add_to_waitlist(
     # Canonicalize so waitlist matching uses the same slug as booking
     appointment_type = slugify_appointment_type(appointment_type)
 
+    # ── Duplicate guard ───────────────────────────────────────────────
+    norm_tail = _phone_digits_tail(norm_phone or patient_phone)
+    async with async_session() as session:
+        dup_result = await session.execute(
+            select(WaitlistEntry)
+            .where(
+                and_(
+                    _phone_col_clean(WaitlistEntry.patient_phone).endswith(norm_tail),
+                    WaitlistEntry.tenant_id == tenant_id,
+                    WaitlistEntry.appointment_type == appointment_type,
+                    WaitlistEntry.preferred_date == preferred_date,
+                    WaitlistEntry.status == WaitlistStatus.WAITING,
+                )
+            )
+            .limit(1)
+        )
+        existing = dup_result.scalars().first()
+        if existing:
+            friendly_date = target_date.strftime("%A, %B %d")
+            friendly_type = appointment_type.replace("_", " ").title()
+            logger.info(
+                "[Waitlist] Duplicate detected: %s already on waitlist for %s on %s",
+                patient_name, appointment_type, preferred_date,
+            )
+            return {
+                "ok": False,
+                "error": "duplicate",
+                "summary_for_assistant": (
+                    f"{patient_name} is already on the waitlist for {friendly_type} on {friendly_date}. "
+                    f"Let the patient know they're already on the list — no need to add them again. "
+                    f"If they want to check their position, use the check_waitlist_status tool."
+                ),
+            }
+
     entry = WaitlistEntry(
         id=uuid.uuid4(),
         tenant_id=tenant_id,
@@ -206,6 +240,104 @@ async def add_to_waitlist(
         "appointment_type": appointment_type,
         "message": f"{patient_name} has been added to the waitlist for {appointment_type} on {preferred_date}.",
     }
+
+
+# ── Check waitlist status (patient-facing) ─────────────────────────────────
+
+
+async def check_waitlist_status(
+    patient_phone: str,
+    tenant_id: uuid.UUID,
+) -> dict:
+    """
+    Check a patient's waitlist entries — called by LLM when patient asks
+    about their waitlist status.
+    """
+    phone_tail = _phone_digits_tail(patient_phone)
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(WaitlistEntry)
+            .where(
+                and_(
+                    _phone_col_clean(WaitlistEntry.patient_phone).endswith(phone_tail),
+                    WaitlistEntry.tenant_id == tenant_id,
+                    WaitlistEntry.status.notin_([WaitlistStatus.EXPIRED, WaitlistStatus.CANCELLED]),
+                )
+            )
+            .order_by(WaitlistEntry.created_at.desc())
+            .limit(10)
+        )
+        entries = result.scalars().all()
+
+        if not entries:
+            return {
+                "ok": True,
+                "entries": [],
+                "summary_for_assistant": (
+                    "This patient has no active waitlist entries. "
+                    "If they'd like to be added to the waitlist for a specific date, offer to do so."
+                ),
+            }
+
+        # Calculate position for WAITING entries
+        entry_dicts = []
+        for e in entries:
+            d = {
+                "appointment_type": e.appointment_type.replace("_", " ").title(),
+                "preferred_date": e.preferred_date,
+                "preferred_time_start": e.preferred_time_start,
+                "preferred_time_end": e.preferred_time_end,
+                "status": e.status.value if e.status else "UNKNOWN",
+                "created_at": e.created_at.isoformat() if e.created_at else None,
+            }
+
+            if e.status == WaitlistStatus.WAITING:
+                # Count how many WAITING entries are ahead
+                pos_result = await session.execute(
+                    select(func.count())
+                    .select_from(WaitlistEntry)
+                    .where(
+                        and_(
+                            WaitlistEntry.tenant_id == tenant_id,
+                            WaitlistEntry.appointment_type == e.appointment_type,
+                            WaitlistEntry.preferred_date == e.preferred_date,
+                            WaitlistEntry.status == WaitlistStatus.WAITING,
+                            WaitlistEntry.created_at < e.created_at,
+                        )
+                    )
+                )
+                ahead = pos_result.scalar() or 0
+                d["position"] = ahead + 1  # 1-based
+            elif e.status == WaitlistStatus.NOTIFIED:
+                d["status_detail"] = "A slot opened up — check your SMS to confirm"
+            elif e.status == WaitlistStatus.BOOKED:
+                d["status_detail"] = "Successfully booked from waitlist"
+
+            entry_dicts.append(d)
+
+        # Build summary
+        lines = []
+        for d in entry_dicts:
+            line = f"{d['appointment_type']} on {d['preferred_date']}"
+            if d["status"] == "WAITING":
+                line += f" — position #{d.get('position', '?')} in queue"
+            elif d["status"] == "NOTIFIED":
+                line += " — a slot opened! Check SMS to confirm"
+            elif d["status"] == "BOOKED":
+                line += " — booked from waitlist"
+            lines.append(line)
+
+        return {
+            "ok": True,
+            "entries": entry_dicts,
+            "summary_for_assistant": (
+                f"Patient has {len(entry_dicts)} active waitlist entry/entries: "
+                + "; ".join(lines) + ". "
+                "Tell the patient their waitlist status naturally. "
+                "If they've been NOTIFIED, remind them to check their SMS and reply YES to confirm."
+            ),
+        }
 
 
 # ── Query waitlist entries ──────────────────────────────────────────────────
