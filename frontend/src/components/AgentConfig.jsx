@@ -30,7 +30,7 @@ import {
   CalendarX,
   FlaskConical,
 } from 'lucide-react';
-import { apiFetch } from '../lib/api';
+import { apiFetch, API_BASE } from '../lib/api';
 import { getToken } from '../lib/api';
 import { useModal } from '../contexts/ModalContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -110,7 +110,7 @@ export default function AgentConfig() {
     try {
       // Try the backend ElevenLabs endpoint first
       const token = getToken();
-      const resp = await fetch(`/api/voice-preview/${voiceId}`, {
+      const resp = await fetch(`${API_BASE}/api/voice-preview/${voiceId}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
 

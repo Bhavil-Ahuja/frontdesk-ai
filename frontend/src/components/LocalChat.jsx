@@ -234,7 +234,7 @@ export default function LocalChat() {
     setDeletingCaller(phone);
     try {
       const token = getToken();
-      const resp = await fetch(`/api/config/test-callers/${encodeURIComponent(phone)}`, {
+      const resp = await fetch(`${API_BASE}/api/config/test-callers/${encodeURIComponent(phone)}`, {
         method: 'DELETE',
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
