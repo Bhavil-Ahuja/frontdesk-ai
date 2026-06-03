@@ -7,7 +7,7 @@
  * they stream in — so the UX matches Vapi's transcript stream.
  */
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { Send, RotateCcw, Bot, User as UserIcon, MessageSquare, Phone, Plus, Trash2, ChevronDown, Download, AlertTriangle } from 'lucide-react';
+import { Send, RotateCcw, Bot, User as UserIcon, MessageSquare, Phone, Plus, ChevronDown, Download, AlertTriangle } from 'lucide-react';
 import { getToken, API_BASE } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -138,7 +138,6 @@ export default function LocalChat() {
   const [callerDropdownOpen, setCallerDropdownOpen] = useState(false);
   const [addingCaller, setAddingCaller] = useState(false);
   const [newCallerName, setNewCallerName] = useState('');
-  const [deletingCaller, setDeletingCaller] = useState(null);
   const callerDropdownRef = useRef(null);
 
   // Scope = userId + callerPhone — each test caller gets independent chat history.
@@ -226,33 +225,6 @@ export default function LocalChat() {
       setError(err.message || 'Failed to add test caller.');
     } finally {
       setAddingCaller(false);
-    }
-  }
-
-  // Delete a test caller
-  async function handleDeleteCaller(phone) {
-    setDeletingCaller(phone);
-    try {
-      const token = getToken();
-      const resp = await fetch(`${API_BASE}/api/config/test-callers/${encodeURIComponent(phone)}`, {
-        method: 'DELETE',
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      if (!resp.ok) {
-        const j = await resp.json().catch(() => ({}));
-        throw new Error(j.detail || `Failed (${resp.status})`);
-      }
-      const data = await resp.json();
-      const remaining = data.test_callers || [];
-      setTestCallers(remaining);
-      // If we deleted the selected caller, switch to first remaining
-      if (selectedCaller?.phone === phone) {
-        setSelectedCaller(remaining[0] || null);
-      }
-    } catch (err) {
-      setError(err.message || 'Failed to delete test caller.');
-    } finally {
-      setDeletingCaller(null);
     }
   }
 
@@ -634,17 +606,7 @@ export default function LocalChat() {
                             <span className="text-[10px] bg-teal-100 dark:bg-teal-900/50 text-teal-600 dark:text-teal-400 px-1.5 py-0.5 rounded-full font-medium ml-2">active</span>
                           )}
                         </button>
-                        {testCallers.length > 1 && (
-                          <button
-                            type="button"
-                            onClick={(e) => { e.stopPropagation(); handleDeleteCaller(caller.phone); }}
-                            disabled={deletingCaller === caller.phone}
-                            className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded transition-colors disabled:opacity-50"
-                            title="Delete this test caller"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        )}
+                        {/* Delete button removed — use Agent Config or Patients section to delete test callers (cascades all related data) */}
                       </div>
                     ))}
                   </div>
