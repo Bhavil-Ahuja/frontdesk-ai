@@ -7,7 +7,7 @@
  * they stream in — so the UX matches Vapi's transcript stream.
  */
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { Send, RotateCcw, Bot, User as UserIcon, MessageSquare, Phone, Plus, ChevronDown, Download, AlertTriangle } from 'lucide-react';
+import { Send, RotateCcw, Bot, User as UserIcon, MessageSquare, Phone, Plus, ChevronDown, Download, AlertTriangle, Mic, MicOff, Volume2, VolumeX, Play, Check, Square, ArrowLeft, Search, Trash2, X } from 'lucide-react';
 import { getToken, API_BASE } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -135,10 +135,24 @@ export default function LocalChat() {
   const [testCallers, setTestCallers] = useState([]);
   const [selectedCaller, setSelectedCaller] = useState(null); // {phone, name}
   const [agentActive, setAgentActive] = useState(true);
-  const [callerDropdownOpen, setCallerDropdownOpen] = useState(false);
   const [addingCaller, setAddingCaller] = useState(false);
   const [newCallerName, setNewCallerName] = useState('');
-  const callerDropdownRef = useRef(null);
+  const [mobileShowChat, setMobileShowChat] = useState(false); // Mobile: show chat or contacts
+  const [callerSearch, setCallerSearch] = useState(''); // Search filter for callers
+  const [deleteConfirmCaller, setDeleteConfirmCaller] = useState(null); // Caller pending delete confirmation
+
+  // ── Voice mode state (speech-to-text & text-to-speech) ─────────────────────
+  const [voiceMode, setVoiceMode] = useState(false); // true = voice enabled
+  const [isListening, setIsListening] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [availableVoices, setAvailableVoices] = useState([]);
+  const [selectedVoice, setSelectedVoice] = useState(''); // voice name
+  const [voiceDropdownOpen, setVoiceDropdownOpen] = useState(false);
+  const [previewingVoice, setPreviewingVoice] = useState(null); // voice being previewed
+  const recognitionRef = useRef(null);
+  const synthRef = useRef(window.speechSynthesis);
+  const lastSpokenRef = useRef(''); // Prevent duplicate speech
+  const voiceDropdownRef = useRef(null);
 
   // Scope = userId + callerPhone — each test caller gets independent chat history.
   const chatScope = useMemo(
@@ -183,13 +197,11 @@ export default function LocalChat() {
 
   useEffect(() => { fetchConfig(); }, [fetchConfig]);
 
-  // Close dropdown on outside click
+  // Close dropdowns on outside click
   useEffect(() => {
     function handleClick(e) {
-      if (callerDropdownRef.current && !callerDropdownRef.current.contains(e.target)) {
-        setCallerDropdownOpen(false);
-        setAddingCaller(false);
-        setNewCallerName('');
+      if (voiceDropdownRef.current && !voiceDropdownRef.current.contains(e.target)) {
+        setVoiceDropdownOpen(false);
       }
     }
     document.addEventListener('mousedown', handleClick);
@@ -225,6 +237,48 @@ export default function LocalChat() {
       setError(err.message || 'Failed to add test caller.');
     } finally {
       setAddingCaller(false);
+    }
+  }
+
+  // Show delete confirmation modal
+  function promptDeleteCaller(caller) {
+    if (!caller?.phone) return;
+    setDeleteConfirmCaller(caller);
+  }
+
+  // Actually delete a test caller (called from confirmation modal)
+  async function confirmDeleteCaller() {
+    const caller = deleteConfirmCaller;
+    if (!caller?.phone) return;
+    setDeleteConfirmCaller(null); // Close modal
+
+    try {
+      const token = getToken();
+      const resp = await fetch(`${API_BASE}/api/config/test-callers/${encodeURIComponent(caller.phone)}`, {
+        method: 'DELETE',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!resp.ok) {
+        const j = await resp.json().catch(() => ({}));
+        throw new Error(j.detail || `Failed (${resp.status})`);
+      }
+      const data = await resp.json();
+      setTestCallers(data.test_callers || []);
+
+      // Clear sessionStorage for this caller
+      const scope = makeScopeId(userId, caller.phone);
+      sessionStorage.removeItem(storageKey(scope, 'msgs'));
+      sessionStorage.removeItem(storageKey(scope, 'conv'));
+      sessionStorage.removeItem(storageKey(scope, 'stream'));
+
+      // If we deleted the selected caller, switch to another
+      if (selectedCaller?.phone === caller.phone) {
+        const remaining = data.test_callers || [];
+        setSelectedCaller(remaining[0] || null);
+        setMobileShowChat(false); // Go back to contacts on mobile
+      }
+    } catch (err) {
+      setError(err.message || 'Failed to delete test caller.');
     }
   }
 
@@ -269,6 +323,10 @@ export default function LocalChat() {
           }
           return next;
         });
+        // Real-time TTS: detect sentences and speak immediately (bypasses React batching)
+        if (detectAndSpeakRef.current) {
+          detectAndSpeakRef.current(token);
+        }
       }
     };
 
@@ -302,6 +360,358 @@ export default function LocalChat() {
     prevStreaming.current = streaming;
   }, [streaming]);
 
+  // ── Load available TTS voices ───────────────────────────────────────────────
+  useEffect(() => {
+    const loadVoices = () => {
+      const voices = synthRef.current.getVoices();
+      // Filter to English voices only for cleaner list
+      const englishVoices = voices.filter((v) => v.lang.startsWith('en'));
+      setAvailableVoices(englishVoices.length > 0 ? englishVoices : voices);
+
+      // Auto-select a good default voice if not already selected
+      // Prefer "UK English Male" specifically
+      if (!selectedVoice && voices.length > 0) {
+        const defaultVoice =
+          // Exact match for "UK English Male"
+          voices.find((v) => v.name === 'UK English Male') ||
+          voices.find((v) => v.name.toLowerCase() === 'uk english male') ||
+          // Partial match
+          voices.find((v) => v.name.toLowerCase().includes('uk english male')) ||
+          // Any UK English voice
+          englishVoices.find((v) => v.lang === 'en-GB') ||
+          // Fallback to any English voice
+          englishVoices.find((v) => v.lang === 'en-US') ||
+          englishVoices[0] ||
+          voices[0];
+        if (defaultVoice) setSelectedVoice(defaultVoice.name);
+      }
+    };
+
+    loadVoices();
+    // Chrome loads voices async
+    if (synthRef.current.onvoiceschanged !== undefined) {
+      synthRef.current.onvoiceschanged = loadVoices;
+    }
+
+    return () => {
+      if (synthRef.current.onvoiceschanged !== undefined) {
+        synthRef.current.onvoiceschanged = null;
+      }
+    };
+  }, [selectedVoice]);
+
+  // ── Speech Recognition setup (speech-to-text) ──────────────────────────────
+  useEffect(() => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      console.warn('[LocalChat] SpeechRecognition not supported in this browser');
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.continuous = false; // Stop after one phrase
+    recognition.interimResults = true;
+    recognition.lang = 'en-US';
+
+    recognition.onresult = (event) => {
+      const transcript = Array.from(event.results)
+        .map((result) => result[0].transcript)
+        .join('');
+      setInput(transcript);
+    };
+
+    recognition.onend = () => {
+      setIsListening(false);
+      // Auto-send if we have content and voice mode is on
+      if (voiceMode && inputRef.current?.value?.trim()) {
+        // Small delay to ensure state is updated
+        setTimeout(() => {
+          const form = inputRef.current?.closest('form');
+          if (form) form.requestSubmit();
+        }, 100);
+      }
+    };
+
+    recognition.onerror = (event) => {
+      console.error('[LocalChat] Speech recognition error:', event.error);
+      setIsListening(false);
+      if (event.error === 'not-allowed') {
+        setError('Microphone access denied. Please allow microphone access in your browser settings.');
+      }
+    };
+
+    recognitionRef.current = recognition;
+
+    return () => {
+      recognition.abort();
+    };
+  }, [voiceMode]);
+
+  // Track message count when voice mode was enabled (to avoid replaying old messages)
+  const voiceModeEnabledAtRef = useRef(messages.length);
+  const spokenLengthRef = useRef(0); // How much of the current message we've already spoken
+  const speakQueueRef = useRef([]); // Queue of sentences to speak
+  const isSpeakingQueueRef = useRef(false);
+
+  // When voice mode turns ON, mark current position so we don't replay old messages
+  useEffect(() => {
+    if (voiceMode) {
+      voiceModeEnabledAtRef.current = messages.length;
+      spokenLengthRef.current = 0;
+      speakQueueRef.current = [];
+      // Mark the last message as "spoken" so it won't replay
+      const lastMsg = messages[messages.length - 1];
+      if (lastMsg?.content) {
+        lastSpokenRef.current = lastMsg.content;
+        spokenLengthRef.current = lastMsg.content.length;
+        // Sync streaming content ref to current content to avoid replay
+        streamingContentRef.current = lastMsg.content;
+      }
+    }
+  }, [voiceMode]); // Only run when voiceMode changes
+
+  // Refs to track current state for callbacks (avoids stale closures)
+  const voiceModeRef = useRef(voiceMode);
+  const streamingRef = useRef(streaming);
+  const streamingContentRef = useRef(''); // Accumulated content for real-time TTS
+  const detectAndSpeakRef = useRef(null); // Ref to real-time TTS function
+  useEffect(() => { voiceModeRef.current = voiceMode; }, [voiceMode]);
+  useEffect(() => { streamingRef.current = streaming; }, [streaming]);
+
+  // Real-time sentence detection for streaming TTS
+  // Called directly from token handler to avoid React batching delays
+  const detectAndSpeakSentences = useCallback((newToken) => {
+    if (!voiceModeRef.current) return;
+
+    streamingContentRef.current += newToken;
+    const content = streamingContentRef.current;
+    const alreadySpoken = spokenLengthRef.current;
+
+    // Find complete sentences in new content (end with . ! ? or newline)
+    const sentencePattern = /[^.!?\n]*[.!?\n]+/g;
+    const searchText = content.slice(alreadySpoken);
+    let match;
+    const sentences = [];
+    let lastEnd = alreadySpoken;
+
+    while ((match = sentencePattern.exec(searchText)) !== null) {
+      sentences.push(match[0].trim());
+      lastEnd = alreadySpoken + match.index + match[0].length;
+    }
+
+    // Queue new sentences for speaking
+    if (sentences.length > 0) {
+      spokenLengthRef.current = lastEnd;
+      sentences.forEach((s) => {
+        if (s.trim()) {
+          speakQueueRef.current.push(s);
+        }
+      });
+
+      // Start speaking if not already
+      if (!isSpeakingQueueRef.current && speakQueueRef.current.length > 0) {
+        isSpeakingQueueRef.current = true;
+        const first = speakQueueRef.current.shift();
+        // Use setTimeout to avoid calling speakSentence before it's defined
+        setTimeout(() => {
+          const utterance = new SpeechSynthesisUtterance(first);
+          utterance.rate = 1.0;
+          utterance.pitch = 1.0;
+          utterance.volume = 1.0;
+
+          const voices = synthRef.current.getVoices();
+          if (voices.length > 0 && selectedVoice) {
+            const voice = voices.find((v) => v.name === selectedVoice);
+            if (voice) utterance.voice = voice;
+          }
+
+          const processQueue = () => {
+            if (speakQueueRef.current.length > 0) {
+              const next = speakQueueRef.current.shift();
+              const nextUtterance = new SpeechSynthesisUtterance(next);
+              nextUtterance.rate = 1.0;
+              nextUtterance.pitch = 1.0;
+              nextUtterance.volume = 1.0;
+              if (voices.length > 0 && selectedVoice) {
+                const voice = voices.find((v) => v.name === selectedVoice);
+                if (voice) nextUtterance.voice = voice;
+              }
+              nextUtterance.onend = processQueue;
+              nextUtterance.onerror = () => {
+                isSpeakingQueueRef.current = false;
+                setIsSpeaking(false);
+              };
+              synthRef.current.speak(nextUtterance);
+            } else {
+              isSpeakingQueueRef.current = false;
+              setIsSpeaking(false);
+              // Auto-start listening after speaking (use refs for current state)
+              if (voiceModeRef.current && recognitionRef.current && !streamingRef.current) {
+                setTimeout(() => startListening(), 500);
+              }
+            }
+          };
+
+          utterance.onstart = () => setIsSpeaking(true);
+          utterance.onend = processQueue;
+          utterance.onerror = () => {
+            isSpeakingQueueRef.current = false;
+            setIsSpeaking(false);
+          };
+
+          synthRef.current.speak(utterance);
+        }, 0);
+      }
+    }
+  }, [selectedVoice]);
+
+  // Keep ref updated so backgroundStream.onUpdate can call it
+  useEffect(() => {
+    detectAndSpeakRef.current = detectAndSpeakSentences;
+  }, [detectAndSpeakSentences]);
+
+  // Speak a single sentence and process queue
+  const speakSentence = useCallback((sentence) => {
+    if (!sentence.trim()) return;
+
+    const utterance = new SpeechSynthesisUtterance(sentence);
+    utterance.rate = 1.0;
+    utterance.pitch = 1.0;
+    utterance.volume = 1.0;
+
+    const voices = synthRef.current.getVoices();
+    if (voices.length > 0 && selectedVoice) {
+      const voice = voices.find((v) => v.name === selectedVoice);
+      if (voice) utterance.voice = voice;
+    }
+
+    utterance.onstart = () => setIsSpeaking(true);
+    utterance.onend = () => {
+      // Process next sentence in queue
+      if (speakQueueRef.current.length > 0) {
+        const next = speakQueueRef.current.shift();
+        speakSentence(next);
+      } else {
+        isSpeakingQueueRef.current = false;
+        setIsSpeaking(false);
+        // Auto-start listening after all sentences spoken (use refs for current state)
+        if (voiceModeRef.current && recognitionRef.current && !streamingRef.current) {
+          setTimeout(() => startListening(), 500);
+        }
+      }
+    };
+    utterance.onerror = () => {
+      isSpeakingQueueRef.current = false;
+      setIsSpeaking(false);
+    };
+
+    synthRef.current.speak(utterance);
+  }, [selectedVoice]);
+
+  // Handle remaining text when message completes (real-time TTS is handled by token handler)
+  useEffect(() => {
+    if (!voiceMode) return;
+    if (messages.length <= voiceModeEnabledAtRef.current) return;
+
+    const lastMsg = messages[messages.length - 1];
+    if (!lastMsg || lastMsg.role !== 'assistant' || !lastMsg.content) return;
+
+    // Only handle completion case — streaming TTS is done in detectAndSpeakSentences
+    if (!lastMsg.pending) {
+      const content = lastMsg.content;
+      // Speak any remaining text that didn't end with . ! ? \n
+      if (spokenLengthRef.current < content.length) {
+        const remaining = content.slice(spokenLengthRef.current).trim();
+        if (remaining) {
+          speakQueueRef.current.push(remaining);
+          spokenLengthRef.current = content.length;
+
+          if (!isSpeakingQueueRef.current && speakQueueRef.current.length > 0) {
+            isSpeakingQueueRef.current = true;
+            const first = speakQueueRef.current.shift();
+            speakSentence(first);
+          }
+        }
+      }
+      lastSpokenRef.current = content;
+    }
+  }, [messages, voiceMode, speakSentence]);
+
+  // ── Voice control functions ────────────────────────────────────────────────
+  function startListening() {
+    if (!recognitionRef.current || isListening || streaming || isSpeaking) return;
+
+    // Stop any ongoing speech
+    synthRef.current.cancel();
+    setIsSpeaking(false);
+
+    setInput('');
+    setIsListening(true);
+    try {
+      recognitionRef.current.start();
+    } catch (err) {
+      console.error('[LocalChat] Failed to start recognition:', err);
+      setIsListening(false);
+    }
+  }
+
+  function stopListening() {
+    if (recognitionRef.current && isListening) {
+      recognitionRef.current.stop();
+    }
+  }
+
+  function toggleVoiceMode() {
+    const newMode = !voiceMode;
+    setVoiceMode(newMode);
+
+    if (!newMode) {
+      // Turning off voice mode — stop everything
+      stopListening();
+      synthRef.current.cancel();
+      setIsSpeaking(false);
+    }
+    // When turning ON, don't auto-speak old messages — only speak NEW messages
+  }
+
+  function stopSpeaking() {
+    synthRef.current.cancel();
+    speakQueueRef.current = []; // Clear sentence queue
+    isSpeakingQueueRef.current = false;
+    setIsSpeaking(false);
+    setPreviewingVoice(null);
+  }
+
+  // Preview a voice with a sample phrase
+  function previewVoice(voiceName) {
+    synthRef.current.cancel();
+    setPreviewingVoice(voiceName);
+
+    const utterance = new SpeechSynthesisUtterance(
+      "Hi! I'm your AI receptionist. How can I help you today?"
+    );
+    utterance.rate = 1.0;
+    utterance.pitch = 1.0;
+    utterance.volume = 1.0;
+
+    const voices = synthRef.current.getVoices();
+    const voice = voices.find((v) => v.name === voiceName);
+    if (voice) utterance.voice = voice;
+
+    utterance.onend = () => setPreviewingVoice(null);
+    utterance.onerror = () => setPreviewingVoice(null);
+
+    synthRef.current.speak(utterance);
+  }
+
+  // Apply a voice (close dropdown and set as selected)
+  function applyVoice(voiceName) {
+    synthRef.current.cancel();
+    setPreviewingVoice(null);
+    setSelectedVoice(voiceName);
+    setVoiceDropdownOpen(false);
+  }
+
   async function sendMessage(e) {
     e?.preventDefault?.();
     const text = input.trim();
@@ -309,6 +719,15 @@ export default function LocalChat() {
 
     setError(null);
     setInput('');
+    // Reset textarea height
+    if (inputRef.current) {
+      inputRef.current.style.height = 'auto';
+    }
+
+    // Reset voice streaming state for new message
+    spokenLengthRef.current = 0;
+    speakQueueRef.current = [];
+    streamingContentRef.current = '';
 
     // Add user message and pending assistant bubble
     const newMessages = [
@@ -487,6 +906,35 @@ export default function LocalChat() {
     setError(null);
   }
 
+  // Get last message preview for a caller (for sidebar)
+  function getLastMessagePreview(caller) {
+    try {
+      const scope = makeScopeId(userId, caller?.phone);
+      const raw = sessionStorage.getItem(storageKey(scope, 'msgs'));
+      if (raw) {
+        const msgs = JSON.parse(raw);
+        if (Array.isArray(msgs) && msgs.length > 0) {
+          const last = msgs[msgs.length - 1];
+          const content = last?.content || '';
+          return content.length > 40 ? content.slice(0, 40) + '...' : content;
+        }
+      }
+    } catch (_) { /* ignore */ }
+    return 'No messages yet';
+  }
+
+  // Select a caller and show chat on mobile
+  function selectCaller(caller) {
+    setSelectedCaller(caller);
+    setMobileShowChat(true);
+  }
+
+  // Filter callers by search
+  const filteredCallers = testCallers.filter((c) =>
+    c.name.toLowerCase().includes(callerSearch.toLowerCase()) ||
+    c.phone.includes(callerSearch)
+  );
+
   function exportChat() {
     const exportData = {
       exported_at: new Date().toISOString(),
@@ -507,212 +955,430 @@ export default function LocalChat() {
   }
 
   return (
-    <div className="flex flex-col h-full overflow-hidden">
-      {/* Header */}
-      <div className="px-4 md:px-8 py-3 md:py-6 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 space-y-3 shrink-0">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 md:gap-3 min-w-0">
-            <div className="w-9 h-9 md:w-10 md:h-10 bg-primary-100 dark:bg-primary-900/50 rounded-xl flex items-center justify-center shrink-0">
-              <MessageSquare className="w-4 h-4 md:w-5 md:h-5 text-primary-600" />
+    <div className="flex h-full overflow-hidden bg-gray-100 dark:bg-gray-900">
+      {/* ═══════════════════════════════════════════════════════════════════════
+          LEFT SIDEBAR — Contacts List (WhatsApp style)
+          ═══════════════════════════════════════════════════════════════════════ */}
+      <div className={`${mobileShowChat ? 'hidden md:flex' : 'flex'} flex-col w-full md:w-80 lg:w-96 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 shrink-0`}>
+        {/* Sidebar Header */}
+        <div className="px-4 py-3 bg-teal-600 dark:bg-teal-700">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center">
+                <Bot className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <h1 className="text-white font-semibold">Test Agent</h1>
+                <p className="text-teal-100 text-xs">Test your AI receptionist</p>
+              </div>
             </div>
-            <div className="min-w-0">
-              <h1 className="text-base md:text-xl font-bold text-gray-900 dark:text-white truncate">Test Agent</h1>
-              <p className="text-xs md:text-sm text-gray-500 dark:text-gray-400 hidden sm:block">
-                Same LLM + tools as the voice agent — chat to test before going live.
+            <button
+              onClick={() => setAddingCaller(true)}
+              className="p-2 hover:bg-white/10 rounded-full transition-colors"
+              title="Add new test caller"
+            >
+              <Plus className="w-5 h-5 text-white" />
+            </button>
+          </div>
+        </div>
+
+        {/* Search Bar */}
+        <div className="px-4 py-2 bg-white dark:bg-gray-800 border-b border-gray-100 dark:border-gray-700">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+            <input
+              type="text"
+              value={callerSearch}
+              onChange={(e) => setCallerSearch(e.target.value)}
+              placeholder="Search or start new chat"
+              className="w-full pl-10 pr-4 py-2.5 bg-gray-100 dark:bg-gray-700 rounded-lg text-sm text-gray-900 dark:text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-teal-500"
+            />
+          </div>
+        </div>
+
+        {/* Add New Caller Form (inline) */}
+        {addingCaller && (
+          <div className="px-4 py-3 bg-teal-50 dark:bg-teal-900/30 border-b border-teal-100 dark:border-teal-800">
+            <p className="text-xs font-medium text-teal-700 dark:text-teal-400 mb-2">Add New Test Caller</p>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={newCallerName}
+                onChange={(e) => setNewCallerName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleAddCaller(); } if (e.key === 'Escape') { setAddingCaller(false); setNewCallerName(''); } }}
+                placeholder="Patient name..."
+                className="flex-1 min-w-0 px-3 py-2.5 text-sm border border-teal-200 dark:border-teal-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 dark:bg-gray-700 dark:text-white"
+                autoFocus
+                maxLength={50}
+              />
+              <button
+                onClick={handleAddCaller}
+                disabled={!newCallerName.trim() || testCallers.length >= 10}
+                className="px-4 py-2.5 bg-teal-500 text-white rounded-lg hover:bg-teal-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm font-medium shrink-0"
+              >
+                Add
+              </button>
+              <button
+                onClick={() => { setAddingCaller(false); setNewCallerName(''); }}
+                className="p-2.5 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors shrink-0"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <p className="text-[10px] text-teal-600 dark:text-teal-400 mt-2">{testCallers.length}/10 test callers</p>
+          </div>
+        )}
+
+        {/* Contacts List */}
+        <div className="flex-1 overflow-y-auto">
+          {filteredCallers.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full text-center px-6 py-12">
+              <div className="w-16 h-16 bg-gray-100 dark:bg-gray-700 rounded-full flex items-center justify-center mb-4">
+                <Phone className="w-8 h-8 text-gray-400" />
+              </div>
+              <p className="text-gray-500 dark:text-gray-400 text-sm mb-2">
+                {testCallers.length === 0 ? 'No test callers yet' : 'No matches found'}
+              </p>
+              <button
+                onClick={() => setAddingCaller(true)}
+                className="text-teal-600 dark:text-teal-400 text-sm font-medium hover:underline"
+              >
+                + Add a test caller
+              </button>
+            </div>
+          ) : (
+            filteredCallers.map((caller) => {
+              const isActive = caller.phone === selectedCaller?.phone;
+              const preview = getLastMessagePreview(caller);
+              return (
+                <div
+                  key={caller.phone}
+                  className={`group relative flex items-center gap-3 px-4 py-3.5 hover:bg-gray-50 dark:hover:bg-gray-700/50 active:bg-gray-100 dark:active:bg-gray-700 transition-colors border-b border-gray-100 dark:border-gray-700/50 cursor-pointer ${
+                    isActive ? 'bg-teal-50 dark:bg-teal-900/30' : ''
+                  }`}
+                  onClick={() => selectCaller(caller)}
+                >
+                  {/* Avatar */}
+                  <div className={`w-11 h-11 md:w-12 md:h-12 rounded-full flex items-center justify-center shrink-0 ${
+                    isActive ? 'bg-teal-500 text-white' : 'bg-gray-200 dark:bg-gray-600 text-gray-600 dark:text-gray-300'
+                  }`}>
+                    <UserIcon className="w-5 h-5 md:w-6 md:h-6" />
+                  </div>
+                  {/* Name & Preview */}
+                  <div className="flex-1 min-w-0 pr-8">
+                    <div className="flex items-center gap-2">
+                      <span className={`font-medium truncate text-sm md:text-base ${isActive ? 'text-teal-700 dark:text-teal-400' : 'text-gray-900 dark:text-white'}`}>
+                        {caller.name}
+                      </span>
+                      {isActive && (
+                        <span className="text-[10px] bg-teal-500 text-white px-1.5 py-0.5 rounded-full shrink-0">
+                          active
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5">
+                      {preview}
+                    </p>
+                    <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-0.5">
+                      {caller.phone}
+                    </p>
+                  </div>
+                  {/* Delete button — always visible on mobile, hover on desktop */}
+                  {testCallers.length > 1 && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); promptDeleteCaller(caller); }}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 p-2.5 md:p-2 opacity-60 md:opacity-0 group-hover:opacity-100 hover:bg-red-100 dark:hover:bg-red-900/30 active:bg-red-200 rounded-full transition-all text-gray-400 hover:text-red-500"
+                      title="Delete test caller"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* Agent OFF Warning (in sidebar) */}
+        {!agentActive && (
+          <div className="px-4 py-3 bg-amber-50 dark:bg-amber-900/30 border-t border-amber-200 dark:border-amber-800">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" />
+              <p className="text-xs text-amber-700 dark:text-amber-400">
+                <span className="font-semibold">Agent OFF</span> — Test mode still works
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-1.5 md:gap-2 shrink-0">
-            <button
-              onClick={exportChat}
-              className="flex items-center gap-2 p-2.5 md:px-3 md:py-2 text-sm text-gray-600 dark:text-gray-400 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/50 hover:text-gray-900 dark:hover:text-white border border-gray-200 dark:border-gray-700 transition-colors"
-              title="Export conversation as JSON for debugging"
-            >
-              <Download className="w-4 h-4" />
-              <span className="hidden md:inline">Export</span>
-            </button>
-            <button
-              onClick={resetConversation}
-              className="flex items-center gap-2 p-2.5 md:px-3 md:py-2 text-sm text-gray-600 dark:text-gray-400 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/50 hover:text-gray-900 dark:hover:text-white border border-gray-200 dark:border-gray-700 transition-colors"
-              title="Start a new conversation (clears server-side session)"
-            >
-              <RotateCcw className="w-4 h-4" />
-              <span className="hidden md:inline">New chat</span>
-            </button>
-          </div>
-        </div>
-        {/* Agent OFF warning banner */}
-        {!agentActive && (
-          <div className="flex items-center gap-2 px-3 py-2 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded-lg">
-            <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" />
-            <p className="text-xs text-amber-700 dark:text-amber-400">
-              <span className="font-semibold">Agent is OFF</span> — real calls are being forwarded to your business phone. Test mode still works so you can verify your setup.
-            </p>
-          </div>
         )}
-        {/* ── Unified Test Caller selector dropdown (centered) ─────────── */}
-        {testCallers.length > 0 && (
-          <div className="flex justify-center" ref={callerDropdownRef}>
-            <div className="relative">
+      </div>
+
+      {/* ═══════════════════════════════════════════════════════════════════════
+          RIGHT SIDE — Chat Area
+          ═══════════════════════════════════════════════════════════════════════ */}
+      <div className={`${mobileShowChat ? 'flex' : 'hidden md:flex'} flex-col flex-1 min-w-0`}>
+        {selectedCaller ? (
+          <>
+            {/* Chat Header */}
+            <div className="px-3 md:px-4 py-3 bg-teal-600 dark:bg-teal-700 flex items-center gap-2 md:gap-3 shrink-0">
+              {/* Back button (mobile only) */}
               <button
-                type="button"
-                onClick={() => setCallerDropdownOpen((v) => !v)}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-teal-50 dark:bg-teal-900/30 border border-teal-200 dark:border-teal-800 rounded-lg hover:bg-teal-100 dark:hover:bg-teal-900/50 transition-colors"
+                onClick={() => setMobileShowChat(false)}
+                className="md:hidden p-2 -ml-1 hover:bg-white/10 active:bg-white/20 rounded-full transition-colors"
               >
-                <Phone className="w-3.5 h-3.5 text-teal-600" />
-                <span className="text-xs font-medium text-teal-700 dark:text-teal-400">
-                  {selectedCaller ? `${selectedCaller.phone}` : 'Select caller'}
-                </span>
-                {selectedCaller?.name && (
-                  <span className="text-xs text-teal-600 dark:text-teal-400 bg-teal-100 dark:bg-teal-900/50 px-1.5 py-0.5 rounded-full font-medium">
-                    {selectedCaller.name}
-                  </span>
-                )}
-                <ChevronDown className={`w-3 h-3 text-teal-500 transition-transform ${callerDropdownOpen ? 'rotate-180' : ''}`} />
+                <ArrowLeft className="w-5 h-5 text-white" />
               </button>
-              {callerDropdownOpen && (
-                <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 w-72 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-lg z-50 py-1">
-                  <div className="px-3 py-2 border-b border-gray-100 dark:border-gray-700">
-                    <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Test Callers</p>
-                    <p className="text-[10px] text-gray-400 mt-0.5">Each phone maps to a unique patient</p>
-                  </div>
-                  <div className="max-h-48 overflow-y-auto">
-                    {testCallers.map((caller) => (
-                      <div
-                        key={caller.phone}
-                        className={`flex items-center justify-between px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer ${
-                          caller.phone === selectedCaller?.phone ? 'bg-teal-50 dark:bg-teal-900/30' : ''
-                        }`}
-                      >
-                        <button
-                          type="button"
-                          className="flex items-center gap-2 flex-1 text-left"
-                          onClick={() => {
-                            if (caller.phone !== selectedCaller?.phone) {
-                              setSelectedCaller(caller);
-                            }
-                            setCallerDropdownOpen(false);
-                          }}
-                        >
-                          <div className="flex flex-col">
-                            <span className={`text-sm ${caller.phone === selectedCaller?.phone ? 'font-semibold text-teal-700 dark:text-teal-400' : 'text-gray-700 dark:text-gray-300'}`}>
-                              {caller.name}
-                            </span>
-                            <span className={`text-xs ${caller.phone === selectedCaller?.phone ? 'text-teal-600 dark:text-teal-400' : 'text-gray-400'}`}>
-                              {caller.phone}
-                            </span>
-                          </div>
-                          {caller.phone === selectedCaller?.phone && (
-                            <span className="text-[10px] bg-teal-100 dark:bg-teal-900/50 text-teal-600 dark:text-teal-400 px-1.5 py-0.5 rounded-full font-medium ml-2">active</span>
-                          )}
-                        </button>
-                        {/* Delete button removed — use Agent Config or Patients section to delete test callers (cascades all related data) */}
+              {/* Caller Avatar */}
+              <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center shrink-0">
+                <UserIcon className="w-5 h-5 text-white" />
+              </div>
+              {/* Caller Info */}
+              <div className="flex-1 min-w-0">
+                <h2 className="text-white font-medium truncate text-base">{selectedCaller.name}</h2>
+                <p className="text-teal-100 text-xs truncate">{selectedCaller.phone}</p>
+              </div>
+              {/* Action Buttons */}
+              <div className="flex items-center gap-1">
+                {/* Voice mode toggle */}
+                <div className="relative" ref={voiceDropdownRef}>
+                  <button
+                    onClick={() => voiceMode ? setVoiceDropdownOpen((v) => !v) : toggleVoiceMode()}
+                    className={`p-2 rounded-full transition-colors ${
+                      voiceMode ? 'bg-white/20 text-white' : 'hover:bg-white/10 text-white/80'
+                    }`}
+                    title={voiceMode ? 'Click to change voice' : 'Enable voice mode'}
+                  >
+                    {voiceMode ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />}
+                  </button>
+                  {/* Voice selector dropdown */}
+                  {voiceDropdownOpen && (
+                    <div className="absolute top-full right-0 mt-1 w-64 md:w-72 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-lg z-50 py-1">
+                      <div className="px-3 py-2 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between">
+                        <div>
+                          <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Select Voice</p>
+                          <p className="text-[10px] text-gray-400 mt-0.5">Preview before applying</p>
+                        </div>
+                        <button onClick={toggleVoiceMode} className="text-xs text-red-500 hover:text-red-600 font-medium">Turn Off</button>
                       </div>
-                    ))}
-                  </div>
-                  <div className="border-t border-gray-100 dark:border-gray-700 px-3 py-2">
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="text"
-                        value={newCallerName}
-                        onChange={(e) => setNewCallerName(e.target.value)}
-                        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleAddCaller(); } }}
-                        placeholder="New patient name..."
-                        className="flex-1 px-2 py-1.5 text-sm border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-1 focus:ring-teal-500 focus:border-teal-500 dark:bg-gray-700 dark:text-white"
-                        maxLength={50}
-                      />
-                      <button
-                        type="button"
-                        onClick={handleAddCaller}
-                        disabled={addingCaller || !newCallerName.trim() || testCallers.length >= 10}
-                        className="flex items-center gap-1 px-2 py-1.5 text-sm text-white bg-teal-500 hover:bg-teal-600 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                        title="Add new test caller (phone auto-generated)"
-                      >
-                        <Plus className="w-3.5 h-3.5" />
-                        {addingCaller ? '...' : 'Add'}
-                      </button>
+                      <div className="max-h-48 overflow-y-auto">
+                        {availableVoices.map((voice) => {
+                          const displayName = voice.name.replace(/Microsoft |Google |com\.apple\.speech\.synthesis\.voice\./, '').split('.')[0];
+                          const isSelected = voice.name === selectedVoice;
+                          const isPreviewing = voice.name === previewingVoice;
+                          return (
+                            <div key={voice.name} className={`flex items-center justify-between px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700/50 ${isSelected ? 'bg-teal-50 dark:bg-teal-900/30' : ''}`}>
+                              <div className="flex items-center gap-2 flex-1 min-w-0">
+                                {isSelected && <Check className="w-3.5 h-3.5 text-teal-600 shrink-0" />}
+                                <div className="min-w-0">
+                                  <span className={`text-sm truncate block ${isSelected ? 'font-semibold text-teal-700 dark:text-teal-400' : 'text-gray-700 dark:text-gray-300'}`}>{displayName}</span>
+                                  <span className="text-[10px] text-gray-400">{voice.lang}</span>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                <button type="button" onClick={(e) => { e.stopPropagation(); isPreviewing ? stopSpeaking() : previewVoice(voice.name); }} className={`p-1.5 rounded-lg transition-colors ${isPreviewing ? 'bg-amber-100 dark:bg-amber-900/50 text-amber-600' : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}`} title={isPreviewing ? 'Stop preview' : 'Preview voice'}>
+                                  {isPreviewing ? <Square className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+                                </button>
+                                {!isSelected && (
+                                  <button type="button" onClick={(e) => { e.stopPropagation(); applyVoice(voice.name); }} className="px-2 py-1 text-[10px] font-medium bg-teal-500 text-white rounded-md hover:bg-teal-600 transition-colors">Use</button>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
-                    <p className="text-[10px] text-gray-400 mt-1">Phone number auto-generated • {testCallers.length}/10</p>
-                  </div>
+                  )}
+                </div>
+                {/* Export */}
+                <button onClick={exportChat} className="hidden sm:block p-2 hover:bg-white/10 rounded-full transition-colors text-white/80" title="Export chat">
+                  <Download className="w-5 h-5" />
+                </button>
+                {/* Reset */}
+                <button onClick={resetConversation} className="p-2 hover:bg-white/10 rounded-full transition-colors text-white/80" title="New conversation">
+                  <RotateCcw className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Messages Area */}
+            <div
+              ref={scrollRef}
+              className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain px-3 md:px-4 py-3 md:py-4 space-y-2.5 md:space-y-3"
+              style={{
+                WebkitOverflowScrolling: 'touch',
+                backgroundImage: 'url("data:image/svg+xml,%3Csvg width=\'60\' height=\'60\' viewBox=\'0 0 60 60\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cg fill=\'none\' fill-rule=\'evenodd\'%3E%3Cg fill=\'%239C92AC\' fill-opacity=\'0.05\'%3E%3Cpath d=\'M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z\'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")',
+              }}
+            >
+              {messages.map((m, i) => (
+                <MessageBubble key={i} message={m} isSpeaking={isSpeaking && i === messages.length - 1 && m.role === 'assistant'} />
+              ))}
+              {error && (
+                <div className="max-w-md mx-auto px-4 py-3 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-800 dark:text-red-400 text-sm rounded-lg">
+                  {error}
                 </div>
               )}
             </div>
+
+            {/* Voice Status Bar */}
+            {voiceMode && (isListening || isSpeaking) && (
+              <div className="px-3 md:px-4 py-2.5 bg-teal-50 dark:bg-teal-900/30 border-t border-teal-100 dark:border-teal-800 flex items-center justify-center gap-2">
+                {isListening && (
+                  <span className="flex items-center gap-2 text-sm text-teal-700 dark:text-teal-400">
+                    <span className="w-2.5 h-2.5 bg-teal-500 rounded-full animate-pulse" />
+                    <span className="hidden sm:inline">Listening... speak now</span>
+                    <span className="sm:hidden">Listening...</span>
+                  </span>
+                )}
+                {isSpeaking && (
+                  <span className="flex items-center gap-2 text-sm text-amber-700 dark:text-amber-400">
+                    <span className="w-2.5 h-2.5 bg-amber-500 rounded-full animate-pulse" />
+                    Speaking...
+                    <button onClick={stopSpeaking} className="ml-1 text-xs bg-amber-500 text-white px-2.5 py-1 rounded-full hover:bg-amber-600 active:bg-amber-700">Stop</button>
+                  </span>
+                )}
+              </div>
+            )}
+
+            {/* Composer */}
+            <form onSubmit={sendMessage} className="px-2 md:px-4 py-2 md:py-3 pb-safe bg-gray-100 dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 shrink-0">
+              <div className="flex items-end gap-2">
+                <textarea
+                  ref={inputRef}
+                  value={input}
+                  onChange={(e) => {
+                    setInput(e.target.value);
+                    e.target.style.height = 'auto';
+                    e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
+                  }}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
+                  enterKeyHint="send"
+                  placeholder={isListening ? 'Listening...' : 'Type a message'}
+                  rows={1}
+                  className={`flex-1 min-w-0 resize-none px-3 md:px-4 py-2.5 md:py-3 border rounded-2xl focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent text-base bg-white dark:bg-gray-700 dark:text-white transition-colors ${
+                    isListening ? 'border-teal-400 bg-teal-50 dark:bg-teal-900/20' : 'border-gray-200 dark:border-gray-600'
+                  }`}
+                  style={{ minHeight: '44px', maxHeight: '120px' }}
+                  disabled={streaming || isListening}
+                />
+                {/* Mic button (voice mode) */}
+                {voiceMode && (
+                  <button
+                    type="button"
+                    onClick={isListening ? stopListening : startListening}
+                    disabled={streaming || isSpeaking}
+                    className={`p-2.5 md:p-3 rounded-full transition-all shrink-0 ${
+                      isListening ? 'bg-red-500 text-white animate-pulse' : 'bg-teal-500 text-white disabled:bg-gray-300 dark:disabled:bg-gray-600'
+                    }`}
+                    title={isListening ? 'Stop listening' : 'Start speaking'}
+                  >
+                    {isListening ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+                  </button>
+                )}
+                {/* Send button */}
+                <button
+                  type="submit"
+                  disabled={streaming || !input.trim()}
+                  className="p-2.5 md:p-3 bg-teal-500 text-white rounded-full hover:bg-teal-600 active:bg-teal-700 disabled:bg-gray-300 dark:disabled:bg-gray-600 disabled:cursor-not-allowed transition-colors shrink-0"
+                >
+                  <Send className="w-5 h-5" />
+                </button>
+              </div>
+            </form>
+          </>
+        ) : (
+          /* No caller selected — empty state */
+          <div className="flex-1 flex flex-col items-center justify-center bg-gray-50 dark:bg-gray-900 text-center px-6">
+            <div className="w-24 h-24 bg-gray-200 dark:bg-gray-700 rounded-full flex items-center justify-center mb-6">
+              <MessageSquare className="w-12 h-12 text-gray-400" />
+            </div>
+            <h2 className="text-xl font-semibold text-gray-700 dark:text-gray-300 mb-2">Test Agent Chat</h2>
+            <p className="text-gray-500 dark:text-gray-400 max-w-sm mb-6">
+              Select a test caller from the left to start a conversation with your AI receptionist.
+            </p>
+            <p className="text-xs text-gray-400 dark:text-gray-500">
+              Same LLM + tools as voice calls
+            </p>
           </div>
         )}
       </div>
 
-      {/* Message list — min-h-0 lets flexbox shrink it; overscroll-y-contain
-           prevents scroll-chaining to the parent <main> on mobile */}
-      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain px-4 md:px-8 py-4 md:py-6 space-y-4" style={{ WebkitOverflowScrolling: 'touch' }}>
-        {messages.map((m, i) => (
-          <MessageBubble key={i} message={m} />
-        ))}
-        {error && (
-          <div className="max-w-3xl mx-auto px-4 py-3 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-800 dark:text-red-400 text-sm rounded-lg">
-            {error}
-          </div>
-        )}
-      </div>
-
-      {/* Composer — pb-safe adds padding for notched phones' home indicator */}
-      <form
-        onSubmit={sendMessage}
-        className="px-4 md:px-8 py-3 md:py-4 pb-safe border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shrink-0"
-      >
-        <div className="flex items-end gap-2 md:gap-3 max-w-3xl mx-auto">
-          <textarea
-            ref={inputRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                sendMessage();
-              }
-            }}
-            enterKeyHint="send"
-            placeholder="Type a message..."
-            rows={1}
-            className="flex-1 resize-none px-3 md:px-4 py-2.5 md:py-3 border border-gray-300 dark:border-gray-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent text-base md:text-sm dark:bg-gray-700 dark:text-white"
-            disabled={streaming}
+      {/* ═══════════════════════════════════════════════════════════════════════
+          DELETE CONFIRMATION MODAL (custom themed)
+          ═══════════════════════════════════════════════════════════════════════ */}
+      {deleteConfirmCaller && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          {/* Backdrop */}
+          <div
+            className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+            onClick={() => setDeleteConfirmCaller(null)}
           />
-          <button
-            type="submit"
-            disabled={streaming || !input.trim()}
-            className="px-4 md:px-5 py-2.5 md:py-3 bg-primary-500 text-white rounded-xl font-medium text-sm hover:bg-primary-600 disabled:bg-gray-300 dark:disabled:bg-gray-600 disabled:cursor-not-allowed transition-colors flex items-center gap-2 shrink-0"
-          >
-            <Send className="w-4 h-4" />
-            <span className="hidden sm:inline">{streaming ? 'Streaming…' : 'Send'}</span>
-          </button>
+          {/* Modal */}
+          <div className="relative bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-sm w-full overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            {/* Header */}
+            <div className="px-6 pt-6 pb-4">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 bg-red-100 dark:bg-red-900/30 rounded-full flex items-center justify-center shrink-0">
+                  <Trash2 className="w-6 h-6 text-red-500" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Delete Test Caller</h3>
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">This action cannot be undone</p>
+                </div>
+              </div>
+            </div>
+            {/* Content */}
+            <div className="px-6 pb-4">
+              <p className="text-sm text-gray-600 dark:text-gray-300">
+                Are you sure you want to delete <span className="font-semibold text-gray-900 dark:text-white">{deleteConfirmCaller.name}</span>?
+              </p>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                This will also clear all chat history for this test caller.
+              </p>
+            </div>
+            {/* Actions */}
+            <div className="px-6 py-4 bg-gray-50 dark:bg-gray-900/50 flex gap-3 justify-end">
+              <button
+                onClick={() => setDeleteConfirmCaller(null)}
+                className="px-4 py-2.5 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-600 active:bg-gray-100 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDeleteCaller}
+                className="px-4 py-2.5 text-sm font-medium text-white bg-red-500 rounded-xl hover:bg-red-600 active:bg-red-700 transition-colors"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
         </div>
-        <p className="text-xs text-gray-400 dark:text-gray-500 mt-2 text-center hidden sm:block">
-          Press Enter to send · Shift+Enter for newline
-        </p>
-      </form>
+      )}
     </div>
   );
 }
 
-function MessageBubble({ message }) {
+function MessageBubble({ message, isSpeaking }) {
   const isUser = message.role === 'user';
   return (
-    <div className={`flex gap-3 max-w-3xl mx-auto ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
+    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
       <div
-        className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
-          isUser ? 'bg-gray-200 text-gray-700 dark:bg-gray-600 dark:text-gray-300' : 'bg-primary-100 text-primary-700 dark:bg-primary-900/50 dark:text-primary-400'
-        }`}
-      >
-        {isUser ? <UserIcon className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
-      </div>
-      <div
-        className={`px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap break-words max-w-[85vw] md:max-w-none ${
+        className={`relative px-3 py-2 rounded-lg text-sm leading-relaxed whitespace-pre-wrap break-words overflow-hidden shadow-sm ${
           isUser
-            ? 'bg-primary-500 text-white rounded-tr-sm'
-            : 'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-900 dark:text-gray-100 rounded-tl-sm'
-        }`}
+            ? 'bg-teal-500 text-white rounded-tr-none max-w-[80%]'
+            : 'bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded-tl-none max-w-[80%]'
+        } ${isSpeaking && !isUser ? 'ring-2 ring-amber-400' : ''}`}
+        style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}
       >
-        {message.content || (message.pending ? <TypingDots /> : '')}
-        {message.pending && message.content ? <span className="ml-1 animate-pulse">▍</span> : null}
+        {/* WhatsApp-style tail */}
+        <div className={`absolute top-0 w-3 h-3 ${
+          isUser
+            ? '-right-1.5 border-t-[12px] border-t-teal-500 border-l-[12px] border-l-transparent'
+            : '-left-1.5 border-t-[12px] border-t-white dark:border-t-gray-700 border-r-[12px] border-r-transparent'
+        }`} />
+        {/* Message content */}
+        <div className={isSpeaking && !isUser ? 'animate-pulse' : ''}>
+          {message.content || (message.pending ? <TypingDots /> : '')}
+          {message.pending && message.content ? <span className="ml-1 animate-pulse">▍</span> : null}
+        </div>
       </div>
     </div>
   );
