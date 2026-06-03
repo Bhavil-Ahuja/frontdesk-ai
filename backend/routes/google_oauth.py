@@ -39,6 +39,7 @@ router = APIRouter(prefix="/api/integrations/google", tags=["Google Calendar"])
 @router.get("/connect")
 async def google_connect(
     current_user: Tenant = Depends(auth_service.get_current_user),
+    redirect_uri: str = Query(None, description="Frontend URL to redirect back to after OAuth"),
 ):
     """
     Start the Google OAuth flow. Returns the Google consent URL as JSON
@@ -52,16 +53,20 @@ async def google_connect(
                    "Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env.",
         )
 
+    # Encode tenant ID and frontend redirect URI in state (separated by |)
+    # This ensures we redirect back to the same origin the user came from
     state = str(current_user.id)
+    if redirect_uri:
+        state = f"{current_user.id}|{redirect_uri}"
     auth_url = gcal.build_auth_url(state=state)
-    logger.info("[GoogleOAuth] Generated auth URL for tenant %s", current_user.slug)
+    logger.info("[GoogleOAuth] Generated auth URL for tenant %s (redirect=%s)", current_user.slug, redirect_uri or "default")
     return {"auth_url": auth_url}
 
 
 @router.get("/callback")
 async def google_callback(
     code: str = Query(..., description="Authorization code from Google"),
-    state: str = Query(..., description="Tenant ID passed through OAuth state"),
+    state: str = Query(..., description="Tenant ID (and optional redirect URI) passed through OAuth state"),
 ):
     """
     OAuth callback — Google redirects here after the user grants consent.
@@ -70,9 +75,16 @@ async def google_callback(
     """
     logger.info("[GoogleOAuth] Callback received for state=%s", state)
 
+    # Parse state: "tenant_id" or "tenant_id|redirect_uri"
+    frontend_redirect = None
+    if "|" in state:
+        tenant_id_str, frontend_redirect = state.split("|", 1)
+    else:
+        tenant_id_str = state
+
     # Validate tenant ID
     try:
-        tenant_id = uuid.UUID(state)
+        tenant_id = uuid.UUID(tenant_id_str)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid state parameter.")
 
@@ -122,11 +134,22 @@ async def google_callback(
     tenant_service.invalidate_cache(str(tenant_id))
 
     logger.info("[GoogleOAuth] Connected Google Calendar for tenant %s (email=%s)",
-                state, email)
+                tenant_id_str, email)
 
     # Redirect to the frontend settings page with a success flag.
-    # Use a relative path so it works regardless of whether the user is on
-    # localhost or a tunnel URL — the browser stays on whatever host it came from.
+    # If a frontend_redirect was provided (full URL), use it to ensure we go back
+    # to the same origin the user came from (important for tunnel URLs where
+    # localStorage/JWT is origin-specific).
+    if frontend_redirect:
+        # Ensure it ends with the settings path and has the success param
+        redirect_url = frontend_redirect.rstrip("/")
+        if not redirect_url.endswith("/settings"):
+            redirect_url += "/settings"
+        redirect_url += "?google_connected=true"
+        logger.info("[GoogleOAuth] Redirecting to frontend: %s", redirect_url)
+        return RedirectResponse(url=redirect_url)
+
+    # Fallback: relative path (works when callback and frontend are same origin)
     return RedirectResponse(url="/settings?google_connected=true")
 
 

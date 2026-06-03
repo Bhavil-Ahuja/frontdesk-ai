@@ -1516,7 +1516,9 @@ function GoogleCalendarSection({ config, onUpdate }) {
   async function handleConnect() {
     setConnecting(true);
     try {
-      const data = await apiFetch('/api/integrations/google/connect');
+      // Pass current origin so callback redirects back here (important for tunnel URLs)
+      const currentOrigin = window.location.origin;
+      const data = await apiFetch(`/api/integrations/google/connect?redirect_uri=${encodeURIComponent(currentOrigin)}`);
       // Redirect browser to Google consent screen
       window.location.href = data.auth_url;
     } catch (err) {
