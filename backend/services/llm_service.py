@@ -337,385 +337,33 @@ async def _get_or_create_gemini_cache(
 
 
 # ── Tool definitions (sent to the LLM for function calling) ──────────────────
+#
+# Tool schemas and dispatch logic live in backend/tools/platform.py.
+# ALL_TOOLS and get_tools() are kept here as backward-compat shims so that
+# llm_proxy.py and other importers continue to work without changes.
+#
+# For new code, use get_registry() from backend.tools.registry directly.
 
-# Full list of all tools. Use get_tools(tenant_ctx) to get the filtered
-# subset appropriate for a given tenant's configured integrations.
-ALL_TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "get_available_slots",
-            "description": "Look up available appointment slots for a given date and type. If the patient requested a specific provider, include their ID. IMPORTANT: When checking slots for a RESCHEDULE, pass the booking_uid of the appointment being moved — this ensures the patient's own appointment doesn't block the new time.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "date": {
-                        "type": "string",
-                        "description": "Date to check in YYYY-MM-DD format.",
-                    },
-                    "appointment_type": {
-                        "type": "string",
-                        "description": "Type of appointment.",
-                    },
-                    "provider_id": {
-                        "type": "string",
-                        "description": "Optional. ID of the provider the patient wants to see (from get_providers).",
-                    },
-                    "booking_uid": {
-                        "type": "string",
-                        "description": "Optional. When checking slots for a RESCHEDULE, pass the booking_uid of the appointment being moved. This excludes it from the overlap check so the patient's own booking doesn't block the new time.",
-                    },
-                },
-                "required": ["date", "appointment_type"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "book_appointment",
-            "description": "Book an appointment for the patient. Always include provider_id — use a specific UUID from get_providers, or '__auto__' if the patient has no preference (system will auto-assign the best available provider). IMPORTANT: Always use the caller-ID phone number from your system prompt.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "patient_name": {"type": "string"},
-                    "phone": {"type": "string", "description": "Patient's phone number — MUST be the caller-ID number from your system prompt."},
-                    "email": {"type": "string", "description": "Patient email (optional — system provides default if not given)."},
-                    "dob": {"type": "string", "description": "Date of birth (MM/DD/YYYY)."},
-                    "appointment_type": {
-                        "type": "string",
-                        "description": "Type of appointment.",
-                    },
-                    "slot_time": {"type": "string", "description": "EXACT exact_slot_time string from get_available_slots. Do NOT construct this yourself — always use a value returned by get_available_slots."},
-                    "provider_id": {
-                        "type": "string",
-                        "description": "Required. UUID of the provider from get_providers, or '__auto__' if the patient has no preference — the system will auto-assign the best available provider.",
-                    },
-                    "notes": {
-                        "type": "string",
-                        "description": "Important details the patient mentioned — pain, symptoms, special requests, concerns, or reason for visit. Capture anything clinically or operationally relevant. Leave empty if nothing notable was said.",
-                    },
-                },
-                "required": ["patient_name", "phone", "appointment_type", "slot_time", "provider_id"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "reschedule_appointment",
-            "description": "Reschedule an existing appointment. IMPORTANT: Before calling this, ALWAYS call get_available_slots first to get valid time slots. Use the exact_slot_time from that result as the new_slot_time — do NOT construct times yourself. If the patient wants a different provider, pass the provider_id from the available_providers list.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "booking_uid": {"type": "string", "description": "Booking reference ID from the original booking."},
-                    "new_slot_time": {"type": "string", "description": "EXACT exact_slot_time string from get_available_slots. Do NOT construct this yourself — always use a value returned by get_available_slots."},
-                    "provider_id": {"type": "string", "description": "UUID of the provider to reassign this appointment to. Use the 'id' from the available_providers list returned by get_available_slots. Pass this whenever the patient picks a specific doctor."},
-                },
-                "required": ["booking_uid", "new_slot_time"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "cancel_appointment",
-            "description": "Cancel an existing appointment.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "booking_uid": {"type": "string"},
-                    "reason": {"type": "string"},
-                },
-                "required": ["booking_uid"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "escalate_to_human",
-            "description": "Transfer the call to a human receptionist. ONLY call this for: (1) immediate medical emergencies, severe distress, or explicit human requests — no confirmation needed; (2) office-specific questions you cannot answer, or billing disputes — but ONLY after asking 'Would you like me to connect you with a team member?' and the patient says yes. NEVER call this for general knowledge questions (medical info, health facts, world knowledge) — answer those directly using your training. NEVER call this on greetings or simple chat.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "reason": {
-                        "type": "string",
-                        "description": "Why the call is being escalated.",
-                    },
-                },
-                "required": ["reason"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "send_callback_request",
-            "description": "Request that the office call the patient back.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "patient_name": {"type": "string"},
-                    "phone": {"type": "string"},
-                    "reason": {"type": "string"},
-                },
-                "required": ["patient_name", "phone", "reason"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_office_info",
-            "description": (
-                "Get accurate office information. ALWAYS call this tool when the patient "
-                "asks about: business hours, office location, phone number, services, pricing, "
-                "procedure details, treatment duration, 'how long does X take?', or any factual "
-                "question about the office. "
-                "Do NOT answer from memory or general knowledge — always call this tool and "
-                "read the exact answer from the result. Do not embellish or add information."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "topic": {
-                        "type": "string",
-                        "enum": ["hours", "location", "services", "faqs", "all"],
-                        "description": (
-                            "What info to retrieve: "
-                            "'hours' for business hours, "
-                            "'location' for address/phone, "
-                            "'services' for pricing and costs (use this for 'how much' or 'price of X'), "
-                            "'faqs' for procedure questions like 'how long does X take', "
-                            "'all' to get everything (use when unsure)."
-                        ),
-                    },
-                },
-                "required": ["topic"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "lookup_patient_appointments",
-            "description": (
-                "Look up a patient's upcoming appointments by their phone number. "
-                "Use when a returning patient wants to reschedule, cancel, or check "
-                "on an existing appointment. Returns appointment details including "
-                "booking_uid needed for reschedule/cancel. "
-                "IMPORTANT: Always use the caller's phone number from caller-ID. "
-                "Confirm it verbally first, but always pass the caller-ID number."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "phone": {
-                        "type": "string",
-                        "description": "Patient's phone number — MUST be the caller-ID number from your system prompt.",
-                    },
-                },
-                "required": ["phone"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "add_to_waitlist",
-            "description": "Add a patient to the waitlist when their preferred date/time has no available slots. The patient will be automatically notified by SMS if a slot opens up. CRITICAL: Reuse any patient_name, phone, appointment_type, and preferred_date you already learned in this conversation or from the CALLER INFORMATION section. Do NOT re-ask the patient for fields you already know — that's a failure mode. ALSO include preferred_time_start / preferred_time_end (24h HH:MM format) whenever the patient mentioned a time preference — admins rely on this to match slots and to contact the patient at the right time. If the patient asked for a specific doctor, pass that doctor's id as provider_id so the office can match them when the right doctor has an opening.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "patient_name": {"type": "string", "description": "Patient's full name."},
-                    "phone": {"type": "string", "description": "Patient's phone number."},
-                    "appointment_type": {"type": "string", "description": "Type of appointment."},
-                    "preferred_date": {"type": "string", "description": "Preferred date in YYYY-MM-DD format."},
-                    "preferred_time_start": {
-                        "type": "string",
-                        "description": "Optional start of the patient's preferred time window in 24-hour HH:MM format (e.g. '09:00'). Pass this whenever the patient says they want morning/afternoon/evening or names a time.",
-                    },
-                    "preferred_time_end": {
-                        "type": "string",
-                        "description": "Optional end of the patient's preferred time window in 24-hour HH:MM format (e.g. '12:00').",
-                    },
-                    "provider_id": {
-                        "type": "string",
-                        "description": "Optional UUID of the doctor the patient asked for. Use the id from get_providers. Omit if the patient said 'anyone is fine'.",
-                    },
-                },
-                "required": ["patient_name", "phone", "appointment_type", "preferred_date"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "check_waitlist_status",
-            "description": "Check a patient's waitlist status — their position in queue, whether a slot opened, etc. Call this when a patient asks about their waitlist status or position. Use the caller's phone from caller-ID.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "phone": {
-                        "type": "string",
-                        "description": "Patient's phone number from caller-ID.",
-                    },
-                },
-                "required": ["phone"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_providers",
-            "description": "Get the list of available providers at this practice. Call this when a patient asks to see a specific provider or when you need to offer provider choices.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "appointment_type": {
-                        "type": "string",
-                        "description": "Optional. Filter providers who handle this appointment type.",
-                    },
-                },
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "lookup_patient",
-            "description": (
-                "Look up a patient's full CRM record — personal details, past appointments, "
-                "and upcoming appointments. Use this when you need to verify or retrieve patient "
-                "information mid-conversation (e.g. DOB, allergies, visit history). "
-                "ALWAYS use the caller's phone number (from caller-ID in your system prompt) as the "
-                "primary lookup key. Only use name as a last resort — multiple patients can share a name."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "phone": {
-                        "type": "string",
-                        "description": "Patient's phone number — ALWAYS provide this. You have it from caller-ID.",
-                    },
-                    "name": {
-                        "type": "string",
-                        "description": "Patient's name. Only use as last resort if phone is truly unavailable. May return multiple matches.",
-                    },
-                },
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "update_patient_info",
-            "description": (
-                "Update a patient's personal information in the CRM. Use when a patient "
-                "provides new or corrected details during the conversation — for example, "
-                "their date of birth, allergies, or notes. Use the caller's phone number "
-                "from caller-ID (in your system prompt) to identify them."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "phone": {
-                        "type": "string",
-                        "description": "Patient's phone number (from caller-ID in your system prompt).",
-                    },
-                    "name": {
-                        "type": "string",
-                        "description": "Updated patient name (only if correcting).",
-                    },
-                    "dob": {
-                        "type": "string",
-                        "description": "Date of birth (MM/DD/YYYY).",
-                    },
-                    "email": {
-                        "type": "string",
-                        "description": "Patient's email address.",
-                    },
-                    "allergies": {
-                        "type": "string",
-                        "description": "Patient's allergies (comma-separated).",
-                    },
-                    "notes": {
-                        "type": "string",
-                        "description": "Receptionist notes about the patient.",
-                    },
-                },
-                "required": ["phone"],
-            },
-        },
-    },
-]
+from backend.tools.platform import TOOL_SCHEMAS as ALL_TOOLS  # noqa: E402 (re-export)
+from backend.tools.platform import _build_office_info, _resolve_dow_to_date  # noqa: F401 (re-export)
 
-# Backwards-compat alias (llm_proxy.py imports this symbol)
+# llm_proxy.py also imports TOOLS — forward it
 TOOLS = ALL_TOOLS
 
-
-# ── Tools that require specific integrations ──────────────────────────────────
-# If the tenant hasn't configured the relevant service, these tools are hidden
-# from the LLM so it can't accidentally trigger actions the tenant can't handle.
-
-_TOOLS_REQUIRING_TWILIO = {"escalate_to_human", "send_callback_request"}
-_TOOLS_REQUIRING_SCHEDULING = {
-    "get_available_slots", "book_appointment", "reschedule_appointment", "cancel_appointment",
-    "add_to_waitlist",
-}
 
 
 def get_tools(tenant_ctx: Any | None = None) -> list[dict]:
     """
     Return the tool definitions appropriate for `tenant_ctx`.
 
-    • If tenant_ctx is None (legacy / global mode) → all tools.
-    • Otherwise, hide tools whose backing integration isn't configured,
-      and dynamically inject the tenant's appointment type enum.
+    Backward-compatible shim — delegates to PlatformToolProvider.list_tools_sync().
+    Platform tools only (no custom tools — those require an async call to the registry).
 
-    Calendar tools are available if the tenant has ANY of:
-      - Google Calendar connected (OAuth refresh token), OR
-      - Business hours configured (native scheduling via Postgres)
+    For the full tool list including tenant custom tools, use:
+        await get_registry().get_tools(tenant_ctx)
     """
-    if tenant_ctx is None:
-        return ALL_TOOLS
-
-    has_twilio = bool(tenant_ctx.twilio_account_sid and tenant_ctx.twilio_auth_token and tenant_ctx.feature_twilio_enabled)
-    has_native_scheduling = bool(tenant_ctx.business_hours)
-    has_scheduling = has_native_scheduling  # DB is source of truth for availability
-    has_escalation = bool(tenant_ctx.emergency_guidance)
-
-    # Build dynamic appointment type enum from tenant config
-    appt_keys = None
-    if tenant_ctx.appointment_types:
-        appt_keys = [at.get("code", "consultation") for at in tenant_ctx.appointment_types]
-
-    filtered = []
-    for tool in ALL_TOOLS:
-        import copy
-        name = tool.get("function", {}).get("name") or ""
-        if name in _TOOLS_REQUIRING_TWILIO and not has_twilio:
-            continue
-        if name in _TOOLS_REQUIRING_TWILIO and not has_escalation:
-            continue
-        if name in _TOOLS_REQUIRING_SCHEDULING and not has_scheduling:
-            continue
-
-        # Inject tenant-specific appointment type enum into relevant tools
-        if appt_keys and name in ("get_available_slots", "book_appointment", "add_to_waitlist"):
-            tool = copy.deepcopy(tool)
-            props = tool["function"]["parameters"]["properties"]
-            if "appointment_type" in props:
-                props["appointment_type"]["enum"] = appt_keys
-        filtered.append(tool)
-
-    logger.info("[LLM] Tool filter: twilio=%s scheduling=%s escalation=%s → %d/%d tools available",
-                has_twilio, has_scheduling, has_escalation, len(filtered), len(ALL_TOOLS))
-    return filtered
+    from backend.tools.platform import PlatformToolProvider
+    return PlatformToolProvider().list_tools_sync(tenant_ctx)
 
 
 # ── Simple-chat detection (suppress tools for greetings / small talk) ─────────
@@ -758,11 +406,11 @@ def _looks_like_simple_chat(user_message: str, session_messages: list | None = N
         # Procedure/treatment questions (trigger FAQ lookup)
         "how long", "procedure", "treatment", "duration", "take",
         "rct", "root canal", "filling", "crown", "extraction", "cleaning",
-        # Patient lookup / CRM
+        # Caller lookup / CRM
         "my appointment", "existing", "upcoming", "check on",
         "do i have", "any appointment", "look up", "find my",
         "my record", "my info", "my details", "date of birth", "dob",
-        "allergies", "allergy", "update my",
+        "update my",
     ]
     return not any(kw in text for kw in tool_keywords)
 
@@ -774,17 +422,21 @@ def create_session(
     call_id: str,
     caller_number: str = "",
     tenant_ctx: Any | None = None,
-    patient_context: dict | None = None,
+    caller_context: dict | None = None,  # deprecated — ignored; caller data fetched lazily via lookup_caller
+    caller_name: str = "",
     is_test: bool = False,
 ) -> dict[str, Any]:
     """Initialise a new conversation session for a call.
 
-    If ``patient_context`` is supplied (from patient_service.get_patient_history),
-    it is woven into the system prompt so the agent recognises returning callers,
-    greets them by name, and already knows their upcoming appointments.
+    caller_name is a lightweight pre-fetch (name only) used for the greeting.
+    Full caller profile is fetched lazily via lookup_caller when needed.
 
     Args:
-        is_test: When True, all data created during this session (patients,
+        caller_context: DEPRECATED — no longer injected into the system prompt.
+            Kept for backwards-compat with call sites that still pass it.
+        caller_name: Caller's name from a quick DB lookup — used only for
+            the personalised opening greeting ("Hi Ravi!").
+        is_test: When True, all data created during this session (callers,
             appointments, waitlist entries, SMS logs) will be flagged as test
             data so it can be filtered out of production views.
     """
@@ -793,13 +445,13 @@ def create_session(
             {
                 "role": "system",
                 "content": build_system_prompt(
-                    patient_context=patient_context,
                     tenant_ctx=tenant_ctx,
                     caller_phone=caller_number,
+                    caller_name=caller_name,
                 ),
             }
         ],
-        "patient_info": patient_context.get("patient", {}) if patient_context else {},
+        "caller_info": {},  # populated lazily when lookup_caller tool fires
         "current_state": "greeting",
         "call_start_time": time.time(),
         "caller_number": caller_number,
@@ -812,10 +464,11 @@ def create_session(
         _cleanup_stale_sessions()
 
     sessions[call_id] = session
-    logger.info("Session created for call %s (tenant=%s, patient=%s, active=%d)",
+    logger.info("Session created for call %s (tenant=%s, caller=%s [%s], active=%d)",
                 call_id,
                 tenant_ctx.slug if tenant_ctx else "global",
-                patient_context["patient"]["name"] if patient_context else "new caller",
+                caller_name or "new caller",
+                caller_number or "no caller-ID",
                 len(sessions))
     return session
 
@@ -923,17 +576,30 @@ def _is_rate_limit_error(exc: Exception) -> bool:
     )
 
 
+def _is_transient_server_error(exc: Exception) -> bool:
+    """Detect a transient Gemini 500/503 worth retrying."""
+    name = type(exc).__name__
+    msg = str(exc).lower()
+    return (
+        name in ("ServerError", "APIError", "InternalServerError")
+        and ("500" in msg or "503" in msg or "internal error" in msg or "service unavailable" in msg)
+    )
+
+
 async def _gemini_send_with_retry(chat, content):
-    """Send a message via async chat with retry on rate-limit (429) errors."""
+    """Send a message via async chat with retry on rate-limit (429) and transient 500/503 errors."""
     MAX_RETRIES = 3
     for attempt in range(MAX_RETRIES):
         try:
             return await chat.send_message(content)
         except Exception as exc:
-            if _is_rate_limit_error(exc) and attempt < MAX_RETRIES - 1:
-                wait = min(15 * (2 ** attempt), 60)
+            is_retryable = _is_rate_limit_error(exc) or _is_transient_server_error(exc)
+            if is_retryable and attempt < MAX_RETRIES - 1:
+                # 500s: short fixed wait; rate limits: exponential backoff
+                wait = 5 if _is_transient_server_error(exc) else min(15 * (2 ** attempt), 60)
                 logger.warning(
-                    "Gemini rate limited — retrying in %.0fs (attempt %d/%d): %s",
+                    "Gemini %s — retrying in %.0fs (attempt %d/%d): %s",
+                    "server error (500)" if _is_transient_server_error(exc) else "rate limited (429)",
                     wait, attempt + 1, MAX_RETRIES, exc,
                 )
                 await asyncio.sleep(wait)
@@ -950,7 +616,7 @@ async def _process_message_gemini(
     """
     Gemini implementation with function calling support (google-genai SDK).
     Uses ThinkingLevel.MINIMAL to disable Gemma's chain-of-thought output.
-    NOTE: For MVP/testing with fake data ONLY — not HIPAA-compliant.
+    NOTE: For MVP/testing with fake data ONLY — not for production use.
     """
     session = get_session(call_id)
     if session is None:
@@ -1654,15 +1320,15 @@ async def process_message_stream(
 
 
 # ── Caller-phone enforcement (privacy / compliance) ──────────────────────────
-# Tools that access or mutate patient data MUST operate on the caller's own
+# Tools that access or mutate caller data MUST operate on the caller's own
 # phone number.  This is a hard backend gate — prompt-level instructions alone
 # are insufficient because callers (or prompt-injection attacks) can ask the
 # LLM to look up arbitrary numbers.
 
 _PHONE_GATED_TOOLS = frozenset({
-    "lookup_patient",
-    "lookup_patient_appointments",
-    "update_patient_info",
+    "lookup_caller",
+    "lookup_caller_appointments",
+    "update_caller_info",
     "book_appointment",
     "add_to_waitlist",
     "send_callback_request",
@@ -1723,10 +1389,10 @@ def _enforce_caller_phone(
         "ok": False,
         "privacy_blocked": True,
         "summary_for_assistant": (
-            "For patient privacy and security, I can only access records for the "
+            "For caller privacy and security, I can only access records for the "
             "phone number on this call. If someone else needs to manage their "
             "appointments, they should call us directly from their own number, "
-            "or our office staff can help them in person."
+            "or our staff can help them in person."
         ),
     }
 
@@ -1754,1233 +1420,26 @@ async def _execute_tool(
                 tenant_ctx.slug if tenant_ctx else "global", is_test)
     t0 = time.time()
 
-    # ── Privacy gate: block cross-patient data access ─────────────────
+    # ── Privacy gate: block cross-caller data access ──────────────────
     privacy_rejection = _enforce_caller_phone(session, name, args, call_id)
     if privacy_rejection:
         return privacy_rejection
 
     try:
-        if name == "get_available_slots":
-            appt_type = args.get("appointment_type", "consultation")
-            provider_id_str = args.get("provider_id", "")
-
-            date = args.get("date", "")
-            if not date:
-                from datetime import timedelta
-                date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-
-            # ── Date correction: resolve user's day-of-week to actual date ──
-            if session:
-                user_text = ""
-                for m in reversed(session["messages"]):
-                    if m.get("role") == "user":
-                        user_text = (m.get("content") or "").strip().lower()
-                        break
-                if user_text:
-                    resolved = _resolve_dow_to_date(user_text, tenant_ctx)
-                    if resolved and resolved != date:
-                        logger.warning("[Call %s] Date correction: LLM said %r → user implied %r",
-                                       call_id, date, resolved)
-                        date = resolved
-
-            # ── Past-date guard: never run scheduling for a date that has
-            #    already passed. The LLM sometimes obeys a literal user
-            #    request ("book for 26th May") without noticing today is the
-            #    27th. We refuse here so the agent doesn't loop into a
-            #    "no slots → waitlist" suggestion for an impossible date.
-            try:
-                from datetime import date as _date_cls
-                from zoneinfo import ZoneInfo as _ZI
-                _tz_name = (tenant_ctx.timezone if tenant_ctx and getattr(tenant_ctx, "timezone", None) else DEFAULT_TIMEZONE)
-                try:
-                    _tz = _ZI(_tz_name)
-                except Exception:
-                    _tz = _ZI(DEFAULT_TIMEZONE)
-                _today_local = datetime.now(_tz).date()
-                _req_date = datetime.strptime(date, "%Y-%m-%d").date()
-                if _req_date < _today_local:
-                    friendly = _req_date.strftime("%A, %B %d")
-                    logger.warning("[Call %s] get_available_slots refused — past date %s (today=%s)",
-                                   call_id, date, _today_local.isoformat())
-                    return {
-                        "ok": False,
-                        "error": "past_date",
-                        "date": date,
-                        "today": _today_local.isoformat(),
-                        "summary_for_assistant": (
-                            f"That date ({friendly}) has already passed — today is "
-                            f"{_today_local.strftime('%A, %B %d, %Y')}. Politely let the patient know "
-                            f"that date is in the past and ask which upcoming day they'd like instead. "
-                            f"Do NOT offer the waitlist for a past date. Do NOT call add_to_waitlist."
-                        ),
-                        "available_slots": [],
-                        "count": 0,
-                    }
-            except (ValueError, TypeError):
-                # If date parsing fails, fall through — downstream will handle it.
-                pass
-
-            # ── Get provider-aware slots ──────────────────────────────────
-            from backend.services import native_scheduling
-            import uuid as uuid_mod
-
-            provider_uuid = None
-            if provider_id_str:
-                try:
-                    provider_uuid = uuid_mod.UUID(provider_id_str)
-                except (ValueError, TypeError):
-                    pass
-
-            # If this is a reschedule check, extract the booking_uid to exclude
-            # the patient's own appointment from the overlap calculation.
-            exclude_uid = args.get("booking_uid", "") or None
-
-            # Get duration and max_concurrent from tenant's appointment type config
-            # (source of truth). Falls back to first configured type if no exact
-            # match, then to DEFAULT_APPOINTMENT_DURATION_MINUTES only if no
-            # tenant context.
-            from backend.services.calendar_service import _resolve_appointment_config
-            duration, max_conc = _resolve_appointment_config(appt_type, tenant_ctx)
-
-            # Use provider-aware scheduling to check per-provider concurrency
-            office_tz_name = tenant_ctx.timezone if tenant_ctx else DEFAULT_TIMEZONE
-            provider_slots_result = await native_scheduling.get_provider_aware_slots(
-                date_str=date,
-                duration_minutes=duration,
-                tenant_id=tenant_ctx.tenant_id if tenant_ctx else None,
-                business_hours=tenant_ctx.business_hours if tenant_ctx else None,
-                tz_name=office_tz_name,
-                max_concurrent=max_conc,
-                provider_id=provider_uuid,
-                holidays=(tenant_ctx.holidays if tenant_ctx and getattr(tenant_ctx, "holidays", None) else None),
-                exclude_booking_uid=exclude_uid,
-                appointment_type=appt_type,
-            )
-
-            # ── Holiday short-circuit ─────────────────────────────────────
-            #    If the requested date is a configured tenant holiday, the
-            #    slot generator returns {"holiday": {...}} with empty slots.
-            #    Tell the LLM exactly why so it can communicate the closure
-            #    by name (and refuse waitlist).
-            holiday_info = provider_slots_result.get("holiday")
-            if holiday_info:
-                try:
-                    from dateutil import parser as dt_parser
-                    _friendly = dt_parser.parse(date).strftime("%A, %B %d")
-                except Exception:
-                    _friendly = date
-                holiday_name = holiday_info.get("name") or "a holiday"
-                logger.info("[Call %s] get_available_slots refused — %s is a holiday (%s) for tenant",
-                            call_id, date, holiday_name)
-                return {
-                    "ok": False,
-                    "error": "holiday",
-                    "date": date,
-                    "holiday": holiday_info,
-                    "summary_for_assistant": (
-                        f"The office is CLOSED on {_friendly} for {holiday_name}. "
-                        f"Tell the patient we're closed that day for {holiday_name} and "
-                        f"ask which other day works. Do NOT offer the waitlist for a holiday. "
-                        f"Do NOT call add_to_waitlist for this date."
-                    ),
-                    "available_slots": [],
-                    "count": 0,
-                }
-
-            provider_slots = provider_slots_result.get("slots", [])
-
-            # Format slots with human-readable time labels and provider info.
-            # Include a short timezone abbreviation so the LLM knows these
-            # are in the OFFICE's timezone — prevents misinterpretation when
-            # the caller is in a different timezone.
-            try:
-                from zoneinfo import ZoneInfo as _SlotZI
-                _slot_tz = _SlotZI(office_tz_name)
-                _tz_abbr = datetime.now(_slot_tz).strftime("%Z")  # e.g. "BST", "EST"
-            except Exception:
-                _tz_abbr = ""
-
-            formatted_slots = []
-            for slot_data in provider_slots:
-                slot_time = slot_data.get("time", "")
-                available_provs = slot_data.get("available_providers", [])
-                try:
-                    from dateutil import parser as dt_parser
-                    dt = dt_parser.parse(slot_time)
-                    time_label = dt.strftime("%I:%M %p").lstrip("0")
-                    if _tz_abbr:
-                        time_label += f" {_tz_abbr}"
-                    formatted_slots.append({
-                        "time_label": time_label,
-                        "exact_slot_time": slot_time,
-                        "available_providers": available_provs,
-                    })
-                except Exception:
-                    formatted_slots.append({
-                        "time_label": slot_time,
-                        "exact_slot_time": slot_time,
-                        "available_providers": available_provs,
-                    })
-
-            # Build friendly date and summary for the LLM
-            try:
-                from dateutil import parser as dt_parser
-                friendly_date = dt_parser.parse(date).strftime("%A, %B %d")
-            except Exception:
-                friendly_date = date
-
-            if not formatted_slots:
-                # Check if there are ANY providers with capacity at different times
-                summary = (
-                    f"There are no available appointment slots on {friendly_date}. "
-                    f"Tell the patient politely that day is fully booked or closed, "
-                    f"and offer to check a different day. Do NOT read this message verbatim — "
-                    f"speak naturally in 1-2 sentences."
-                )
-            else:
-                # ── Smart slot selection: show slots near the patient's
-                #    requested time, not just the first 3 of the day ────────
-                requested_time_str = args.get("time", "")
-                # Also check the user's last message for a time mention
-                if not requested_time_str and session:
-                    import re as _re
-                    for m in reversed(session.get("messages", [])):
-                        if m.get("role") == "user":
-                            _user_txt = (m.get("content") or "").strip()
-                            # Match patterns like "12:30", "12:30 PM", "2 PM", "2:00pm"
-                            _time_match = _re.search(
-                                r'(\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM))',
-                                _user_txt
-                            )
-                            if _time_match:
-                                requested_time_str = _time_match.group(1)
-                            break
-
-                # Parse the requested time to find the closest slots
-                top = formatted_slots[:3]  # default: first 3
-                exact_match = False
-                if requested_time_str:
-                    try:
-                        from dateutil import parser as _tp
-                        _req_dt = _tp.parse(requested_time_str)
-                        _req_minutes = _req_dt.hour * 60 + _req_dt.minute
-
-                        # Score each slot by distance from the requested time
-                        scored = []
-                        for i, s in enumerate(formatted_slots):
-                            try:
-                                _s_dt = _tp.parse(s["exact_slot_time"])
-                                _s_minutes = _s_dt.hour * 60 + _s_dt.minute
-                                scored.append((abs(_s_minutes - _req_minutes), i, s))
-                                # Check for exact match
-                                if _s_minutes == _req_minutes:
-                                    exact_match = True
-                            except Exception:
-                                scored.append((9999, i, s))
-
-                        scored.sort(key=lambda x: (x[0], x[1]))
-                        top = [s for _, _, s in scored[:3]]
-                    except Exception:
-                        pass  # Fall back to first 3
-
-                time_list = ", ".join(s["time_label"] for s in top)
-                tz_note = f" All times are in {office_tz_name} timezone." if office_tz_name else ""
-
-                # Build the summary — tell the LLM if the exact time is available
-                if exact_match:
-                    exact_label = top[0]["time_label"]  # closest match is first after sorting
-                    match_note = (
-                        f"The patient's requested time ({exact_label}) IS available. "
-                        f"Confirm it with them and proceed to collect their details. "
-                    )
-                else:
-                    match_note = (
-                        f"The patient's requested time is NOT available. "
-                        f"The closest available times are: {time_list}. "
-                        f"Offer these alternatives. "
-                    )
-
-                # Check if specific provider was requested but has no availability
-                if provider_id_str:
-                    # Find slots where the requested provider is available
-                    provider_available_slots = [
-                        s for s in formatted_slots
-                        if any(p["id"] == provider_id_str for p in s.get("available_providers", []))
-                    ]
-                    if not provider_available_slots and formatted_slots:
-                        # Requested provider is full, but others are available
-                        other_providers = set()
-                        for s in formatted_slots[:5]:
-                            for p in s.get("available_providers", []):
-                                other_providers.add(p["name"])
-                        other_names = ", ".join(list(other_providers)[:2])
-                        summary = (
-                            f"The requested provider is fully booked on {friendly_date}, "
-                            f"but {other_names} {'has' if len(other_providers) == 1 else 'have'} availability. "
-                            f"Ask the patient if they'd like to see another provider instead. "
-                            f"Available times ({office_tz_name}): {time_list}."
-                        )
-                    else:
-                        summary = (
-                            f"{match_note}"
-                            f"Available times on {friendly_date}: {time_list}.{tz_note} "
-                            f"When they pick one, call book_appointment with the EXACT exact_slot_time string and provider_id. "
-                            f"Do NOT construct or modify the time string yourself. Do NOT read JSON or field names aloud."
-                        )
-                else:
-                    summary = (
-                        f"{match_note}"
-                        f"Available times on {friendly_date}: {time_list}.{tz_note} "
-                        f"When they pick one, call book_appointment with the EXACT exact_slot_time string. "
-                        f"Do NOT construct or modify the time string yourself. "
-                        f"Include provider_id if the patient chose a specific provider. "
-                        f"Do NOT read JSON or field names aloud."
-                    )
-
-            elapsed = (time.time() - t0) * 1000
-            logger.info("[Call %s] get_available_slots → %d slots in %.0fms (provider=%s)",
-                        call_id, len(formatted_slots), elapsed, provider_id_str or "any")
-            return {
-                "summary_for_assistant": summary,
-                "available_slots": formatted_slots,
-                "date": date,
-                "timezone": office_tz_name,
-                "count": len(formatted_slots),
-                "provider_filter": provider_id_str or None,
-            }
-
-        elif name == "book_appointment":
-            # ── Validate provider_id is present ──────────────────────
-            if not args.get("provider_id", "").strip():
-                logger.warning("[Call %s] book_appointment rejected — no provider_id", call_id)
-                return {
-                    "ok": False,
-                    "error": "missing_provider",
-                    "summary_for_assistant": (
-                        "Provider is required — please ask the patient for their provider "
-                        "preference first, or assign any available provider."
-                    ),
-                }
-
-            # ── Validate required fields ──────────────────────────────
-            required = {
-                "patient_name": "the patient's full name",
-                "phone": "the patient's phone number",
-                "dob": "the patient's date of birth",
-                "slot_time": "a confirmed appointment time (call get_available_slots first)",
-                "appointment_type": "the appointment type",
-            }
-            missing = []
-            for field, desc in required.items():
-                val = args.get(field, "")
-                if not val or not str(val).strip():
-                    missing.append((field, desc))
-
-            if missing:
-                missing_list = "; ".join(f"{f} ({d})" for f, d in missing)
-                logger.warning("[Call %s] book_appointment rejected — missing: %s",
-                               call_id, [f for f, _ in missing])
-                return {
-                    "ok": False,
-                    "error": "missing_required_fields",
-                    "missing": [f for f, _ in missing],
-                    "summary_for_assistant": (
-                        f"Cannot book yet — missing: {missing_list}. "
-                        f"Ask the patient ONLY for the missing items above in a natural sentence."
-                    ),
-                }
-
-            appt_type = args.get("appointment_type", "consultation")
-
-            # Email: leave blank if patient didn't provide one
-            email = args.get("email", "") or ""
-
-            # Provider: look up name for confirmation message
-            provider_id_str = args.get("provider_id", "")
-            provider_id = None
-            provider_name = None
-            if provider_id_str:
-                try:
-                    from backend.services import provider_service
-                    import uuid
-                    provider_id = uuid.UUID(provider_id_str)
-                    provider = await provider_service.get_provider(provider_id)
-                    if provider:
-                        provider_name = provider.get("name", "")
-                        logger.info("[Call %s] Provider selected: %s (%s)", call_id, provider_name, provider_id)
-                except Exception as prov_exc:
-                    logger.warning("[Call %s] Provider lookup failed: %s", call_id, prov_exc)
-
-            patient_info = {
-                "name": args.get("patient_name", ""),
-                "phone": args.get("phone", ""),
-                "email": email,
-                "dob": args.get("dob", ""),
-            }
-            # Store patient info in session for later DB persistence
-            if session:
-                session["patient_info"] = patient_info
-
-            slot_time = args.get("slot_time", "")
-
-            # ── Smart slot matching ──────────────────────────────────
-            # The LLM may pass slot_time in a slightly different format
-            # than what the calendar API returned. Re-fetch available
-            # slots for that day and match by hour/minute.
-            logger.info("[Call %s] LLM provided slot_time: '%s' — attempting smart match",
-                        call_id, slot_time)
-            try:
-                from dateutil import parser as dt_parser
-                requested_dt = dt_parser.parse(slot_time)
-                target_hour = requested_dt.hour
-                target_minute = requested_dt.minute
-                correct_date = requested_dt.replace(year=datetime.now().year)
-                date_str = correct_date.strftime("%Y-%m-%d")
-
-                available = await calendar_service.get_available_slots(
-                    date_from=date_str,
-                    date_to=date_str,
-                    tenant_ctx=tenant_ctx,
-                    appointment_type_key=appt_type,
-                )
-
-                matched = False
-                for real_slot in available:
-                    slot_dt = dt_parser.parse(real_slot)
-                    if slot_dt.hour == target_hour and slot_dt.minute == target_minute:
-                        slot_time = real_slot
-                        matched = True
-                        logger.info("[Call %s] Exact slot match: %s", call_id, slot_time)
-                        break
-
-                if not matched:
-                    # Fallback: match by hour only
-                    for real_slot in available:
-                        slot_dt = dt_parser.parse(real_slot)
-                        if slot_dt.hour == target_hour:
-                            slot_time = real_slot
-                            matched = True
-                            logger.info("[Call %s] Hour-level slot match: %s", call_id, slot_time)
-                            break
-
-                if not matched:
-                    logger.warning("[Call %s] No slot match found — using original: %s",
-                                   call_id, slot_time)
-            except Exception as match_exc:
-                logger.warning("[Call %s] Slot matching failed: %s — using original",
-                               call_id, match_exc)
-
-            booking_notes = args.get("notes", "").strip() or None
-            result = await calendar_service.book_appointment(
-                patient_info=patient_info,
-                start_time=slot_time,
-                tenant_ctx=tenant_ctx,
-                appointment_type_key=appt_type,
-                provider_id=provider_id,
-                is_test=is_test,
-                notes=booking_notes,
-            )
-
-            # Race lost — the unique-index fired because someone booked this
-            # provider+time between when we showed the slot and committed.
-            # Hand control back to the LLM with a clear message so it can
-            # apologize and offer a different slot.
-            if result and isinstance(result, dict) and result.get("status") == "CONFLICT":
-                elapsed = (time.time() - t0) * 1000
-                logger.warning(
-                    "[Call %s] Booking conflict — slot taken (provider=%s, %s) in %.0fms",
-                    call_id, provider_id, slot_time, elapsed,
-                )
-                return {
-                    "ok": False,
-                    "error": "slot_taken",
-                    "summary_for_assistant": (
-                        "That slot was just booked by someone else. "
-                        "Apologize, then offer the patient another available time."
-                    ),
-                }
-            if result:
-                # Send SMS confirmation (uses tenant's Twilio — will no-op if unconfigured)
-                sms_sent = False
-                try:
-                    scheduled_dt = datetime.fromisoformat(args.get("slot_time", slot_time))
-                    sms_service.send_confirmation(
-                        patient_name=args.get("patient_name", ""),
-                        phone=args.get("phone", ""),
-                        appointment_type=args.get("appointment_type", "").replace("_", " ").title(),
-                        scheduled_at=scheduled_dt,
-                        tenant_ctx=tenant_ctx,
-                    )
-                    sms_sent = True
-                except Exception as sms_exc:
-                    logger.warning("[Call %s] SMS confirmation failed: %s", call_id, sms_exc)
-
-                # ── Persist appointment + patient in DB ──────────────
-                # NOTE: When tenant_ctx exists, native_scheduling.create_native_booking()
-                # already persisted the Appointment row (with correct duration_minutes
-                # and booking_uid) AND upserted the Patient record. Calling
-                # record_appointment here would create a DUPLICATE row — skip it.
-                # Only call record_appointment for legacy/demo paths (no tenant_ctx).
-                if not tenant_ctx:
-                    try:
-                        from backend.services import patient_service
-                        booking_uid = result.get("uid", "") if isinstance(result, dict) else ""
-                        booking_id = result.get("id", "") if isinstance(result, dict) else ""
-                        await patient_service.record_appointment(
-                            patient_phone=args.get("phone", ""),
-                            appointment_type=args.get("appointment_type", ""),
-                            scheduled_at=datetime.fromisoformat(slot_time),
-                            cal_booking_uid=str(booking_uid),
-                            cal_booking_id=str(booking_id),
-                            patient_name=args.get("patient_name", ""),
-                            patient_email=email,
-                            dob=args.get("dob", ""),
-                            tenant_id=None,
-                            provider_id=provider_id,
-                        )
-                        logger.info("[Call %s] ✓ Appointment recorded in DB (uid=%s)", call_id, booking_uid)
-                    except Exception as db_exc:
-                        logger.warning("[Call %s] Patient/appointment DB upsert failed: %s",
-                                       call_id, db_exc)
-                else:
-                    booking_uid = result.get("uid", "") if isinstance(result, dict) else ""
-                    logger.info("[Call %s] ✓ Native booking already persisted (uid=%s)", call_id, booking_uid)
-
-                elapsed = (time.time() - t0) * 1000
-                logger.info("[Call %s] book_appointment → SUCCESS in %.0fms: %s",
-                            call_id, elapsed, result)
-                # Format time for the confirmation message
-                try:
-                    booked_dt = datetime.fromisoformat(slot_time)
-                    time_str = booked_dt.strftime("%I:%M %p").lstrip("0")
-                    date_str = booked_dt.strftime("%A, %B %d")
-                except Exception:
-                    time_str = slot_time
-                    date_str = "the requested date"
-
-                # Build confirmation message with provider if specified
-                provider_msg = f" with {provider_name}" if provider_name else ""
-                sms_note = "They'll receive an SMS confirmation shortly." if sms_sent else ""
-                return {
-                    "success": True,
-                    "booking": result,
-                    "provider_name": provider_name,
-                    "summary_for_assistant": (
-                        f"Booking confirmed for {time_str} on {date_str}{provider_msg}. "
-                        f"Tell the patient their appointment is booked. {sms_note} "
-                        f"Do NOT make up any details not provided. "
-                        f"Just confirm the time, date{', and provider' if provider_name else ''}, wish them well, and ask if there's anything else."
-                    ),
-                }
-
-            elapsed = (time.time() - t0) * 1000
-            logger.error("[Call %s] book_appointment → FAILED in %.0fms", call_id, elapsed)
-            return {
-                "success": False,
-                "error": "Failed to create booking.",
-                "summary_for_assistant": (
-                    "The booking could not be completed due to a technical issue. "
-                    "Apologize to the patient and offer to try again or check a different time. "
-                    "Do NOT make up reasons for the failure."
-                ),
-            }
-
-        elif name == "reschedule_appointment":
-            booking_uid = args.get("booking_uid", "")
-            new_slot_time = args.get("new_slot_time", "")
-            new_provider_id = args.get("provider_id", "") or None
-            if not booking_uid or not new_slot_time:
-                return {
-                    "success": False,
-                    "summary_for_assistant": "Cannot reschedule — I need the booking reference and a new time. "
-                    "Ask the patient for these details.",
-                }
-            result = await calendar_service.reschedule_appointment(
-                booking_uid=booking_uid,
-                new_start_time=new_slot_time,
-                tenant_ctx=tenant_ctx,
-                provider_id=new_provider_id,
-            )
-            if result:
-                # Send reschedule SMS
-                try:
-                    from dateutil import parser as dt_parser
-                    new_dt = dt_parser.parse(new_slot_time)
-                    sms_service.send_reschedule(
-                        patient_name=session.get("patient_info", {}).get("name", "") if session else "",
-                        phone=session.get("patient_info", {}).get("phone", "") if session else "",
-                        new_scheduled_at=new_dt,
-                        appointment_type="Appointment",
-                        tenant_ctx=tenant_ctx,
-                    )
-                except Exception as sms_exc:
-                    logger.warning("[Call %s] Reschedule SMS failed: %s", call_id, sms_exc)
-                # Note: native_scheduling.reschedule_native_booking already updated
-                # the DB (time + provider). This is a safety fallback for non-native paths.
-                if not tenant_ctx:
-                    try:
-                        from backend.database import async_session as get_async_session
-                        from sqlalchemy import select as sa_select
-                        from backend.models.appointment import Appointment as ApptModel
-                        async with get_async_session() as db_session:
-                            stmt = sa_select(ApptModel).where(ApptModel.cal_booking_uid == booking_uid)
-                            db_result = await db_session.execute(stmt)
-                            appt = db_result.scalar_one_or_none()
-                            if appt:
-                                appt.scheduled_at = datetime.fromisoformat(new_slot_time)
-                                await db_session.commit()
-                                logger.info("[Call %s] ✓ DB appointment rescheduled: %s", call_id, booking_uid)
-                    except Exception as db_exc:
-                        logger.warning("[Call %s] DB reschedule update failed: %s", call_id, db_exc)
-                else:
-                    logger.info("[Call %s] ✓ DB appointment already updated by native reschedule: %s", call_id, booking_uid)
-                elapsed = (time.time() - t0) * 1000
-                logger.info("[Call %s] reschedule → SUCCESS in %.0fms", call_id, elapsed)
-                return {"success": True, "reschedule": result}
-            elapsed = (time.time() - t0) * 1000
-            logger.error("[Call %s] reschedule → FAILED in %.0fms", call_id, elapsed)
-            return {"success": False, "error": "Failed to reschedule."}
-
-        elif name == "cancel_appointment":
-            booking_uid = args.get("booking_uid", "")
-            if not booking_uid:
-                return {
-                    "success": False,
-                    "summary_for_assistant": "Cannot cancel — I need the booking reference. "
-                    "Ask the patient for their booking details or phone number to look it up.",
-                }
-            success = await calendar_service.cancel_appointment(
-                booking_uid=booking_uid,
-                reason=args.get("reason", ""),
-                tenant_ctx=tenant_ctx,
-            )
-            if success:
-                # Send cancellation SMS
-                try:
-                    patient_phone = session.get("patient_info", {}).get("phone", "") if session else ""
-                    patient_name = session.get("patient_info", {}).get("name", "") if session else ""
-                    if patient_phone:
-                        sms_service.send_cancellation(
-                            patient_name=patient_name,
-                            phone=patient_phone,
-                            scheduled_at=datetime.now(),  # approximate — we don't have original time
-                            tenant_ctx=tenant_ctx,
-                        )
-                except Exception as sms_exc:
-                    logger.warning("[Call %s] Cancel SMS failed: %s", call_id, sms_exc)
-                # Update DB
-                try:
-                    from backend.database import async_session as get_async_session
-                    from backend.models.appointment import Appointment as ApptModel, AppointmentStatus
-                    async with get_async_session() as db_session:
-                        from sqlalchemy import select as sa_select
-                        stmt = sa_select(ApptModel).where(ApptModel.cal_booking_uid == booking_uid)
-                        db_result = await db_session.execute(stmt)
-                        appt = db_result.scalar_one_or_none()
-                        if appt:
-                            appt.status = AppointmentStatus.CANCELLED
-                            await db_session.commit()
-                            logger.info("[Call %s] ✓ DB appointment cancelled: %s", call_id, booking_uid)
-                except Exception as db_exc:
-                    logger.warning("[Call %s] DB cancel update failed: %s", call_id, db_exc)
-            elapsed = (time.time() - t0) * 1000
-            logger.info("[Call %s] cancel → %s in %.0fms", call_id, success, elapsed)
-            return {"success": success}
-
-        elif name == "escalate_to_human":
-            caller = session["caller_number"] if session else "unknown"
-            sms_service.send_office_alert(
-                reason=args.get("reason", "Patient requested human assistance"),
-                caller_number=caller,
-                tenant_ctx=tenant_ctx,
-            )
-            if session:
-                session["current_state"] = "escalated"
-            # Prefer the dedicated `escalation_transfer_number` (set by an
-            # admin for live phone transfers) — fall back to `escalation_phone`
-            # so older tenants still escalate even if they only set one field.
-            if tenant_ctx:
-                transfer_dest = (
-                    (tenant_ctx.escalation_transfer_number or "").strip()
-                    or (tenant_ctx.escalation_phone or "").strip()
-                )
-            else:
-                transfer_dest = (
-                    (settings.ESCALATION_TRANSFER_NUMBER or "").strip()
-                    or (settings.ESCALATION_PHONE_NUMBER or "").strip()
-                )
-            return {
-                "success": True,
-                "action": "transfer",
-                "destination": transfer_dest,
-            }
-
-        elif name == "send_callback_request":
-            sms_service.send_escalation_notification(
-                patient_name=args.get("patient_name", ""),
-                phone=args.get("phone", ""),
-                tenant_ctx=tenant_ctx,
-            )
-            sms_service.send_office_alert(
-                reason=f"Callback requested: {args.get('reason', 'N/A')}",
-                caller_number=args.get("phone", ""),
-                tenant_ctx=tenant_ctx,
-            )
-            return {"success": True, "message": "Callback request sent."}
-
-        elif name == "get_office_info":
-            result = _build_office_info(args.get("topic", "all"), tenant_ctx)
-            return result
-
-        elif name == "lookup_patient_appointments":
-            from backend.services import patient_service
-            phone = args.get("phone", "")
-            if not phone:
-                return {
-                    "ok": False,
-                    "summary_for_assistant": "I need the patient's phone number to look up their appointments.",
-                }
-            tenant_id = tenant_ctx.tenant_id if tenant_ctx else None
-            tz_name = tenant_ctx.timezone if tenant_ctx else None
-            history = await patient_service.get_patient_history(phone, tenant_id=tenant_id, tz_name=tz_name)
-            if not history:
-                return {
-                    "ok": False,
-                    "summary_for_assistant": (
-                        f"No patient record found for {phone}. "
-                        "This might be a new patient. Ask if they'd like to schedule a new appointment."
-                    ),
-                }
-            upcoming = history.get("upcoming_appointments", [])
-            patient_name = history["patient"]["name"]
-            if not upcoming:
-                return {
-                    "ok": True,
-                    "summary_for_assistant": (
-                        f"{patient_name} has no upcoming appointments. "
-                        "Ask if they'd like to schedule a new one."
-                    ),
-                    "patient_name": patient_name,
-                    "upcoming": [],
-                }
-            def _appt_line(a):
-                line = f"{a['type']} on {a['date']} at {a['time']}"
-                if a.get("provider_name"):
-                    title = f" ({a['provider_title']})" if a.get("provider_title") else ""
-                    line += f" with {a['provider_name']}{title}"
-                if a.get("duration_minutes"):
-                    line += f" ({a['duration_minutes']} min)"
-                return line
-
-            appt_lines = [_appt_line(a) for a in upcoming]
-            return {
-                "ok": True,
-                "summary_for_assistant": (
-                    f"{patient_name} has {len(upcoming)} upcoming appointment(s): "
-                    + "; ".join(appt_lines) + ". "
-                    "Tell the patient about their appointment(s) naturally — include the doctor's name and appointment details. "
-                    "If they want to reschedule, use the booking_uid with reschedule_appointment."
-                ),
-                "patient_name": patient_name,
-                "upcoming": upcoming,
-            }
-
-        elif name == "add_to_waitlist":
-            from backend.services import waitlist_service
-            import uuid as uuid_mod
-
-            # Capture the patient's preferred doctor (if any) so the admin
-            # UI can match the right opening to them — and so the waitlist
-            # auto-notifier scopes to that doctor's cancellations.
-            wl_provider_uuid = None
-            wl_provider_id_str = (args.get("provider_id") or "").strip()
-            if wl_provider_id_str:
-                try:
-                    wl_provider_uuid = uuid_mod.UUID(wl_provider_id_str)
-                except (ValueError, TypeError):
-                    logger.warning("[Call %s] add_to_waitlist got invalid provider_id %r",
-                                   call_id, wl_provider_id_str)
-
-            result = await waitlist_service.add_to_waitlist(
-                tenant_id=tenant_ctx.tenant_id if tenant_ctx else None,
-                patient_name=args.get("patient_name", ""),
-                patient_phone=args.get("phone", ""),
-                appointment_type=args.get("appointment_type", "consultation"),
-                preferred_date=args.get("preferred_date", ""),
-                preferred_time_start=args.get("preferred_time_start") or None,
-                preferred_time_end=args.get("preferred_time_end") or None,
-                provider_id=wl_provider_uuid,
-                tenant_ctx=tenant_ctx,
-                is_test=is_test,
-            )
-            elapsed = (time.time() - t0) * 1000
-            logger.info("[Call %s] add_to_waitlist → %s in %.0fms", call_id, result.get("status"), elapsed)
-            return result
-
-        elif name == "check_waitlist_status":
-            from backend.services import waitlist_service
-
-            phone = _enforce_caller_phone(args.get("phone", ""), session)
-            if not phone:
-                return {
-                    "ok": False,
-                    "summary_for_assistant": "I need the patient's phone number to check their waitlist status.",
-                }
-
-            tenant_id = tenant_ctx.tenant_id if tenant_ctx else None
-            if not tenant_id:
-                return {"ok": False, "summary_for_assistant": "Unable to check waitlist — no tenant context."}
-
-            result = await waitlist_service.check_waitlist_status(
-                patient_phone=phone,
-                tenant_id=tenant_id,
-            )
-            elapsed = (time.time() - t0) * 1000
-            logger.info("[Call %s] check_waitlist_status → %d entries in %.0fms",
-                        call_id, len(result.get("entries", [])), elapsed)
-            return result
-
-        elif name == "lookup_patient":
-            from backend.services import patient_service
-            phone = args.get("phone", "")
-            patient_name = args.get("name", "")
-
-            if not phone and not patient_name:
-                return {
-                    "ok": False,
-                    "summary_for_assistant": "I need either the patient's phone number or name to look them up.",
-                }
-
-            tenant_id = tenant_ctx.tenant_id if tenant_ctx else None
-            tz_name = tenant_ctx.timezone if tenant_ctx else None
-
-            # Primary: look up by phone
-            history = None
-            if phone:
-                history = await patient_service.get_patient_history(phone, tenant_id=tenant_id, tz_name=tz_name)
-
-            # Fallback: search by name if phone didn't match
-            if not history and patient_name:
-                matches = await patient_service.get_patient_by_name(
-                    patient_name, tenant_id=tenant_id,
-                )
-                if len(matches) > 1:
-                    # Multiple patients share this name — ask for phone to disambiguate
-                    elapsed = (time.time() - t0) * 1000
-                    match_lines = [
-                        f"- {m.name} (phone ending ...{m.phone[-4:]})"
-                        for m in matches
-                    ]
-                    logger.info("[Call %s] lookup_patient → %d name matches for '%s' in %.0fms — disambiguation needed",
-                                call_id, len(matches), patient_name, elapsed)
-                    return {
-                        "ok": False,
-                        "multiple_matches": True,
-                        "match_count": len(matches),
-                        "summary_for_assistant": (
-                            f"Found {len(matches)} patients matching the name '{patient_name}': "
-                            + "; ".join(match_lines) + ". "
-                            "You already have the caller's phone number from caller-ID (in your system prompt). "
-                            "Call lookup_patient again with the phone parameter to get the exact match. "
-                            "If for some reason you don't have the phone, ask the patient to confirm it."
-                        ),
-                    }
-                elif len(matches) == 1:
-                    history = await patient_service.get_patient_history(
-                        matches[0].phone, tenant_id=tenant_id, tz_name=tz_name,
-                    )
-
-            if not history:
-                elapsed = (time.time() - t0) * 1000
-                logger.info("[Call %s] lookup_patient → not found in %.0fms (phone=%s, name=%s)",
-                            call_id, elapsed, phone, patient_name)
-                return {
-                    "ok": False,
-                    "summary_for_assistant": (
-                        f"No patient record found for {phone or patient_name}. "
-                        "This appears to be a new patient. You will need to collect their "
-                        "full name, date of birth, and reason for visit before booking."
-                    ),
-                }
-
-            p = history["patient"]
-            upcoming = history.get("upcoming_appointments", [])
-            past = history.get("past_appointments", [])
-            last_visit = history.get("last_visit")
-            months_since = history.get("months_since_last_visit")
-
-            # Build a natural-language summary for the LLM
-            summary_parts = [f"Patient found: {p['name']}, phone {p['phone']}."]
-            if p.get("dob"):
-                summary_parts.append(f"DOB: {p['dob']}.")
-            else:
-                summary_parts.append("DOB: not on file — ask the patient.")
-            if p.get("allergies"):
-                summary_parts.append(f"Allergies: {p['allergies']}.")
-            if p.get("notes"):
-                summary_parts.append(f"Notes: {p['notes']}.")
-            summary_parts.append(f"Visit count: {p.get('visit_count', 0)}.")
-
-            if last_visit:
-                ago = f" ({months_since} months ago)" if months_since is not None else ""
-                summary_parts.append(f"Last visit: {last_visit['type']} on {last_visit['date']}{ago}.")
-
-            if upcoming:
-                def _appt_summary(a):
-                    line = f"{a['type']} on {a['date']} at {a['time']}"
-                    if a.get("provider_name"):
-                        title = f" ({a['provider_title']})" if a.get("provider_title") else ""
-                        line += f" with {a['provider_name']}{title}"
-                    return line
-                appt_lines = [_appt_summary(a) for a in upcoming]
-                summary_parts.append(f"Upcoming appointments: {'; '.join(appt_lines)}.")
-            else:
-                summary_parts.append("No upcoming appointments.")
-
-            if past:
-                past_lines = [f"{a['type']} on {a['date']} ({a['status']})" for a in past[:3]]
-                summary_parts.append(f"Recent history: {'; '.join(past_lines)}.")
-
-            summary_parts.append(
-                "Use this data when speaking to the patient. Do NOT ask for info you already have. "
-                "If DOB is missing, ask for it. If updating any info, use update_patient_info."
-            )
-
-            elapsed = (time.time() - t0) * 1000
-            logger.info("[Call %s] lookup_patient → found %s (%d upcoming, %d past) in %.0fms",
-                        call_id, p['name'], len(upcoming), len(past), elapsed)
-            return {
-                "ok": True,
-                "summary_for_assistant": " ".join(summary_parts),
-                "patient": p,
-                "upcoming_appointments": upcoming,
-                "past_appointments": past,
-                "last_visit": last_visit,
-                "months_since_last_visit": months_since,
-            }
-
-        elif name == "update_patient_info":
-            from backend.services import patient_service
-            phone = args.get("phone", "")
-            if not phone:
-                return {
-                    "ok": False,
-                    "summary_for_assistant": "I need the patient's phone number to update their record.",
-                }
-
-            tenant_id = tenant_ctx.tenant_id if tenant_ctx else None
-
-            # Check the patient exists first
-            existing = await patient_service.get_patient_by_phone(phone, tenant_id=tenant_id)
-            if not existing:
-                return {
-                    "ok": True,
-                    "summary_for_assistant": (
-                        f"This is a new patient — no record exists yet for {phone}. "
-                        "That's perfectly normal. Their record (including date of birth and other details) "
-                        "will be created automatically when you book the appointment. "
-                        "Continue with the booking as usual — do NOT mention any issue to the patient."
-                    ),
-                }
-
-            # Update specific fields
-            updated_fields = []
-            from backend.database import async_session as get_async_session
-            async with get_async_session() as db_session:
-                from sqlalchemy import select as sa_select
-                from sqlalchemy import and_
-                from backend.models.patient import Patient
-
-                filters = [Patient.phone == patient_service._normalise_phone(phone)]
-                if tenant_id:
-                    filters.append(Patient.tenant_id == tenant_id)
-
-                result = await db_session.execute(
-                    sa_select(Patient).where(and_(*filters))
-                )
-                patient = result.scalar_one_or_none()
-
-                if not patient:
-                    return {"ok": False, "summary_for_assistant": "Patient record not found."}
-
-                if args.get("name", "").strip():
-                    patient.name = args["name"].strip()
-                    updated_fields.append("name")
-                if args.get("dob", "").strip():
-                    patient.date_of_birth = args["dob"].strip()
-                    updated_fields.append("date of birth")
-                if args.get("email", "").strip():
-                    patient.email = args["email"].strip()
-                    updated_fields.append("email")
-                if args.get("allergies", "").strip():
-                    patient.allergies = args["allergies"].strip()
-                    updated_fields.append("allergies")
-                if args.get("notes", "").strip():
-                    patient.notes = args["notes"].strip()
-                    updated_fields.append("notes")
-
-                if not updated_fields:
-                    return {
-                        "ok": False,
-                        "summary_for_assistant": "No fields to update were provided. Specify at least one of: name, dob, email, allergies, notes.",
-                    }
-
-                await db_session.commit()
-
-            elapsed = (time.time() - t0) * 1000
-            logger.info("[Call %s] update_patient_info → updated %s for %s in %.0fms",
-                        call_id, updated_fields, phone, elapsed)
-            return {
-                "ok": True,
-                "summary_for_assistant": (
-                    f"Updated {', '.join(updated_fields)} for patient {existing.name} ({phone}). "
-                    f"The changes are saved. Continue the conversation normally."
-                ),
-                "updated_fields": updated_fields,
-            }
-
-        elif name == "get_providers":
-            from backend.services import provider_service
-            appt_type = args.get("appointment_type", "")
-            if appt_type and tenant_ctx:
-                providers = await provider_service.get_providers_for_appointment_type(
-                    tenant_ctx.tenant_id, appt_type,
-                )
-            elif tenant_ctx:
-                providers = await provider_service.list_providers(tenant_ctx.tenant_id)
-            else:
-                providers = []
-
-            if not providers:
-                summary = "This practice doesn't have individual provider profiles configured. Any available provider can see the patient. Do not pass a provider_id when booking."
-            else:
-                def _fmt_provider(p):
-                    name = p['name']
-                    title = p.get('title')
-                    return f"{name} ({title})" if title else name
-                provider_list = ", ".join(_fmt_provider(p) for p in providers)
-                summary = (
-                    f"Available providers: {provider_list}. "
-                    f"Tell the patient which doctors are available and ask if they have a preference. "
-                    f"When they choose, use that provider's 'id' from the providers list below in get_available_slots and book_appointment. "
-                    f"If they say 'anyone is fine', pass '__auto__' as the provider_id to auto-assign the best available provider."
-                )
-
-            elapsed = (time.time() - t0) * 1000
-            logger.info("[Call %s] get_providers → %d providers in %.0fms", call_id, len(providers), elapsed)
-            return {
-                "summary_for_assistant": summary,
-                "providers": providers,
-                "count": len(providers),
-            }
-
-        else:
-            logger.warning("[Call %s] Unknown tool requested: %s", call_id, name)
-            return {"error": f"Unknown tool: {name}"}
-
+        from backend.tools.registry import get_registry
+        session_ctx = {
+            "tenant_ctx": tenant_ctx,
+            "call_id": call_id,
+            "session": session,
+            "is_test": is_test,
+            "t0": t0,
+        }
+        return await get_registry().dispatch(name, args, session_ctx)
     except Exception as exc:
         elapsed = (time.time() - t0) * 1000
         logger.error("[Call %s] Tool '%s' failed after %.0fms: %s", call_id, name, elapsed, exc, exc_info=True)
         return {"error": str(exc)}
 
-
-# ── Office info builder (for get_office_info tool) ──────────────────────────
-
-
-def _fmt_time_12h(t: str) -> str:
-    """Convert '08:00' → '8:00 AM', '16:00' → '4:00 PM'."""
-    try:
-        parts = t.strip().split(":")
-        h, m = int(parts[0]), int(parts[1]) if len(parts) > 1 else 0
-        suffix = "AM" if h < 12 else "PM"
-        display_h = h if 1 <= h <= 12 else (h - 12 if h > 12 else 12)
-        return f"{display_h}:{m:02d} {suffix}"
-    except Exception:
-        return t
-
-
-def _build_office_info(topic: str, tenant_ctx: Any | None) -> dict[str, Any]:
-    """
-    Build pre-formatted office info that the LLM can read verbatim.
-    Returns a dict with 'summary_for_assistant' that contains the exact text
-    the LLM should say — no interpretation needed.
-    """
-    parts = []
-
-    # ── Hours ────────────────────────────────────────────────────────────
-    if topic in ("hours", "all"):
-        bh = tenant_ctx.business_hours if tenant_ctx else None
-        if bh:
-            day_order = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
-            day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-
-            # Smart grouping: consecutive days with same hours get grouped
-            groups: list[tuple[list[str], str]] = []
-            for i, day_key in enumerate(day_order):
-                info = bh.get(day_key)
-                if info and isinstance(info, dict) and info.get("open"):
-                    label = f"{_fmt_time_12h(info['open'])} to {_fmt_time_12h(info['close'])}"
-                else:
-                    label = "Closed"
-                if groups and groups[-1][1] == label:
-                    groups[-1][0].append(day_names[i])
-                else:
-                    groups.append(([day_names[i]], label))
-
-            sentence_parts = []
-            for day_list, label in groups:
-                if len(day_list) == 1:
-                    sentence_parts.append(f"{day_list[0]} {label}")
-                elif len(day_list) == 2:
-                    sentence_parts.append(f"{day_list[0]} and {day_list[1]} {label}")
-                else:
-                    sentence_parts.append(f"{day_list[0]} through {day_list[-1]} {label}")
-
-            hours_text = "Our hours are: " + ", ".join(sentence_parts) + "."
-        else:
-            hours_text = "Business hours have not been configured yet."
-        parts.append(hours_text)
-
-        # ── Upcoming holidays / closures ────────────────────────────────
-        try:
-            from backend.services.tenant_service import upcoming_holidays as _upcoming
-            upcoming = _upcoming(tenant_ctx, limit=6) if tenant_ctx else []
-        except Exception:
-            upcoming = []
-        if upcoming:
-            from datetime import datetime as _dt
-            holiday_lines = []
-            for h in upcoming:
-                try:
-                    d = _dt.strptime(h["date"], "%Y-%m-%d").date()
-                    holiday_lines.append(f"{d.strftime('%B %-d')} for {h.get('name') or 'Holiday'}")
-                except Exception:
-                    holiday_lines.append(f"{h.get('date')} for {h.get('name') or 'Holiday'}")
-            parts.append(
-                "We're also closed on the following upcoming dates: "
-                + "; ".join(holiday_lines) + "."
-            )
-
-    # ── Location / contact ───────────────────────────────────────────────
-    if topic in ("location", "all"):
-        contact_parts = []
-        if tenant_ctx:
-            if tenant_ctx.business_address:
-                contact_parts.append(f"We are located at {tenant_ctx.business_address}.")
-            if tenant_ctx.business_phone:
-                contact_parts.append(f"Our phone number is {tenant_ctx.business_phone}.")
-        # Also check KB for office_info
-        kb = _get_kb(tenant_ctx)
-        office_info = kb.get("office_info", {})
-        if not contact_parts:
-            if office_info.get("address"):
-                contact_parts.append(f"We are located at {office_info['address']}.")
-            if office_info.get("phone"):
-                contact_parts.append(f"Our phone number is {office_info['phone']}.")
-        if contact_parts:
-            parts.append(" ".join(contact_parts))
-        else:
-            parts.append("Office location and contact details are not configured yet.")
-
-    # ── Services & pricing ───────────────────────────────────────────────
-    if topic in ("services", "all"):
-        kb = _get_kb(tenant_ctx)
-        services = kb.get("services", [])
-        if services:
-            svc_lines = ["Here are our services and approximate pricing:"]
-            for svc in services:
-                name = svc.get("name", "Service")
-                low = svc.get("price_min")
-                high = svc.get("price_max")
-                if low and high:
-                    svc_lines.append(f"  - {name}: ${low} to ${high}")
-                elif low:
-                    svc_lines.append(f"  - {name}: from ${low}")
-                elif high:
-                    svc_lines.append(f"  - {name}: up to ${high}")
-                else:
-                    svc_lines.append(f"  - {name}: pricing available upon request")
-            parts.append("\n".join(svc_lines))
-        else:
-            if topic == "services":
-                parts.append("Service and pricing information is not available right now. The patient can call during business hours for details.")
-
-    # ── FAQs ─────────────────────────────────────────────────────────────
-    if topic in ("faqs", "all"):
-        kb = _get_kb(tenant_ctx)
-        faqs = kb.get("faqs", [])
-        if faqs:
-            faq_lines = ["Frequently asked questions:"]
-            for faq in faqs:
-                faq_lines.append(f"  Q: {faq.get('question', '')}")
-                faq_lines.append(f"  A: {faq.get('answer', '')}")
-            parts.append("\n".join(faq_lines))
-
-    summary = "\n\n".join(parts) if parts else "I don't have that information available right now."
-
-    return {
-        "summary_for_assistant": (
-            f"{summary}\n\n"
-            f"Read the information above to the patient in 1-2 short sentences. "
-            f"Use the EXACT answer from the FAQs — do NOT add generic information, "
-            f"do NOT embellish with details not provided, and do NOT guess. "
-            f"If the FAQ says 'Typically, 1 hr', say 'Typically about an hour' — nothing more."
-        ),
-    }
-
-
-def _get_kb(tenant_ctx: Any | None) -> dict:
-    """Get the knowledge base for a tenant (lazy import to avoid circular deps)."""
-    from backend.services.knowledge_service import get_tenant_kb
-    return get_tenant_kb(tenant_ctx)
-
-
-# ── Date resolution helper ──────────────────────────────────────────────────
-
-_DOW_MAP = {
-    "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
-    "friday": 4, "saturday": 5, "sunday": 6,
-}
-
-
-def _resolve_dow_to_date(user_text: str, tenant_ctx: Any | None = None) -> str | None:
-    """
-    If the user's message mentions a day-of-week or 'tomorrow'/'today',
-    return the corresponding YYYY-MM-DD in the tenant's timezone.
-    """
-    from datetime import timedelta
-    from zoneinfo import ZoneInfo
-
-    tz_name = DEFAULT_TIMEZONE
-    if tenant_ctx and getattr(tenant_ctx, "timezone", None):
-        tz_name = tenant_ctx.timezone
-    try:
-        tz = ZoneInfo(tz_name)
-    except Exception:
-        tz = ZoneInfo(DEFAULT_TIMEZONE)
-
-    today = datetime.now(tz)
-    text = user_text.lower()
-
-    if "today" in text:
-        return today.strftime("%Y-%m-%d")
-    if "tomorrow" in text:
-        return (today + timedelta(days=1)).strftime("%Y-%m-%d")
-
-    for dow_name, dow_idx in _DOW_MAP.items():
-        if dow_name in text:
-            today_idx = today.weekday()
-            delta = (dow_idx - today_idx) % 7
-            # "this X" and "next X" both mean the nearest upcoming occurrence.
-            # Patients use them interchangeably (matches the system prompt).
-            # Only "the X after next" means the further one — but that phrasing
-            # is rare and the LLM handles it from the date mapping in the prompt.
-            if delta == 0:
-                delta = 7  # If today IS that day, go to next week
-            target = today + timedelta(days=delta)
-            return target.strftime("%Y-%m-%d")
-
-    return None
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

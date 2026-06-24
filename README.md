@@ -31,7 +31,7 @@ Each tenant (business) gets:
 - **Their own AI personality** — custom agent name, greeting, voice config
 - **Business-specific knowledge base** — services, pricing, FAQs, hours
 - **Per-vertical emergency guidance** — dental, hospital, veterinary, or custom
-- **Isolated data** — calls, appointments, patients scoped per tenant
+- **Isolated data** — calls, appointments, callers scoped per tenant
 - **Independent integrations** — Vapi, Google Calendar, Twilio per tenant
 
 Supported business types: `dental`, `hospital`, `clinic`, `veterinary`, `physiotherapy`, `custom`
@@ -47,7 +47,7 @@ Supported business types: `dental`, `hospital`, `clinic`, `veterinary`, `physiot
 - **Admin Dashboard** — Real-time stats, call logs with transcripts, appointment calendar
 - **Editable Knowledge Base** — Update office info, services, FAQs from the dashboard
 - **Google Review Solicitation** — Automated post-visit review requests
-- **SMS Two-Way Chat** — Patients can confirm, reschedule, or cancel via text
+- **SMS Two-Way Chat** — Callers can confirm, reschedule, or cancel via text
 - **Demo Mode** — Works fully offline with simulated SMS and calendar responses
 
 ## Prerequisites

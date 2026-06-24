@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   CalendarDays,
   CalendarCheck,
+  CalendarClock,
   Clock,
   User,
   UserCog,
@@ -25,6 +26,7 @@ import { useModal } from '../contexts/ModalContext';
 import { useAuth } from '../contexts/AuthContext';
 import { formatDateTime, formatTime, isSameDay } from '../lib/timezone';
 import ThemedDatePicker from './ui/ThemedDatePicker';
+import ThemedDateTimePicker from './ui/ThemedDateTimePicker';
 import TestDataToggle, { TestBadge } from './ui/TestDataToggle';
 
 const STATUS_STYLES = {
@@ -44,13 +46,11 @@ const STATUS_LABELS = {
 };
 
 const TYPE_COLORS = {
-  'Routine Cleaning': 'border-l-green-400',
-  'New Patient Exam + Cleaning': 'border-l-blue-400',
+  'Consultation': 'border-l-indigo-400',
+  'Demo Class': 'border-l-blue-400',
+  'Follow-up': 'border-l-indigo-400',
   'Emergency': 'border-l-red-400',
-  'Consultation': 'border-l-purple-400',
-  'Filling': 'border-l-amber-400',
-  'Crown Preparation': 'border-l-pink-400',
-  'Teeth Whitening': 'border-l-cyan-400',
+  'Session': 'border-l-amber-400',
 };
 
 export default function AppointmentManager() {
@@ -92,6 +92,11 @@ export default function AppointmentManager() {
   // Status update state
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [confirmAction, setConfirmAction] = useState(null); // { action: 'attended'|'no-show'|'cancel', id: number }
+
+  // Reschedule modal state
+  const [rescheduleApt, setRescheduleApt] = useState(null);
+  const [rescheduleTime, setRescheduleTime] = useState('');
+  const [rescheduling, setRescheduling] = useState(false);
 
   // Status history timeline
   const [statusHistory, setStatusHistory] = useState([]);
@@ -198,6 +203,28 @@ export default function AppointmentManager() {
       toast.error(err.message || 'Cancel failed');
     } finally {
       setUpdatingStatus(false);
+    }
+  }
+
+  async function handleReschedule() {
+    if (!rescheduleApt || !rescheduleTime) return;
+    setRescheduling(true);
+    try {
+      // ThemedDateTimePicker gives "YYYY-MM-DDTHH:MM" (local time) — convert to UTC ISO
+      const utcIso = new Date(rescheduleTime).toISOString();
+      await apiFetch(`/api/appointments/${rescheduleApt.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ scheduled_at: utcIso }),
+      });
+      setRescheduleApt(null);
+      setRescheduleTime('');
+      setSelectedApt(null);
+      fetchAppointments();
+    } catch (err) {
+      console.error('Reschedule failed:', err);
+      toast.error(err.message || 'Reschedule failed');
+    } finally {
+      setRescheduling(false);
     }
   }
 
@@ -314,17 +341,17 @@ export default function AppointmentManager() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500"></div>
+        <div className="w-8 h-8 border-2 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin" />
       </div>
     );
   }
 
   return (
-    <div className="p-4 md:p-8 space-y-4 md:space-y-6">
+    <div className="p-5 md:p-8 space-y-5 animate-fade-in">
       {/* Header */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div>
-          <h2 className="text-xl md:text-2xl font-bold text-gray-900 dark:text-white">Appointments</h2>
+          <h1 className="text-xl md:text-2xl font-bold text-gray-900 dark:text-white">Appointments</h1>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
             {appointments.filter((a) => {
               const d = new Date(a.scheduled_at);
@@ -355,7 +382,7 @@ export default function AppointmentManager() {
             onClick={handleSyncGcal}
             disabled={syncing}
             title="Sync with Google Calendar"
-            className="flex items-center gap-2 px-3 py-2 rounded-lg border border-primary-200 dark:border-primary-700 bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 hover:bg-primary-100 dark:hover:bg-primary-900/50 transition-colors disabled:opacity-50 text-sm font-medium"
+            className="flex items-center gap-2 px-3 py-2 rounded-lg border border-indigo-200 dark:border-indigo-700 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 transition-colors disabled:opacity-50 text-sm font-medium"
           >
             <CalendarCheck className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
             {syncing ? 'Syncing...' : 'Sync Google Calendar'}
@@ -376,7 +403,7 @@ export default function AppointmentManager() {
           </button>
           <button
             onClick={() => { setViewYear(new Date().getFullYear()); setViewMonth(new Date().getMonth()); setHighlightedDate(null); }}
-            className="px-3 py-2 text-sm font-medium text-primary-600 dark:text-primary-400 bg-primary-50 dark:bg-primary-900/30 rounded-lg hover:bg-primary-100 dark:hover:bg-primary-900/50 transition-colors"
+            className="px-3 py-2 text-sm font-medium text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-900/30 rounded-lg hover:bg-indigo-100 dark:hover:bg-indigo-900/50 transition-colors"
           >
             Today
           </button>
@@ -396,7 +423,7 @@ export default function AppointmentManager() {
       )}
 
       {syncResult && (
-        <div className="bg-primary-50 dark:bg-primary-900/30 border border-primary-200 dark:border-primary-800 rounded-xl p-3 text-sm text-primary-700 dark:text-primary-300 flex items-center justify-between">
+        <div className="bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-800 rounded-xl p-3 text-sm text-indigo-700 dark:text-indigo-300 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <CalendarCheck className="w-4 h-4" />
             <span>
@@ -405,7 +432,7 @@ export default function AppointmentManager() {
               {syncResult.errors > 0 && <span className="text-amber-600 dark:text-amber-400 ml-1">({syncResult.errors} errors)</span>}
             </span>
           </div>
-          <button onClick={() => setSyncResult(null)} className="p-1 hover:bg-primary-100 dark:hover:bg-primary-800 rounded">
+          <button onClick={() => setSyncResult(null)} className="p-1 hover:bg-indigo-100 dark:hover:bg-indigo-800 rounded">
             <X className="w-3 h-3" />
           </button>
         </div>
@@ -455,7 +482,7 @@ export default function AppointmentManager() {
           } else if (isHighlighted) {
             borderRing = 'border-amber-400 dark:border-amber-500 ring-2 ring-amber-300 dark:ring-amber-700';
           } else if (isToday) {
-            borderRing = 'border-primary-400 dark:border-primary-500 ring-1 ring-primary-200 dark:ring-primary-800';
+            borderRing = 'border-indigo-400 dark:border-indigo-500 ring-1 ring-indigo-200 dark:ring-indigo-800';
           }
 
           const MAX_VISIBLE = 3;
@@ -477,12 +504,12 @@ export default function AppointmentManager() {
                 holiday
                   ? 'bg-rose-50 dark:bg-rose-900/30'
                   : isToday
-                  ? 'bg-primary-50 dark:bg-primary-900/30'
+                  ? 'bg-indigo-50 dark:bg-indigo-900/30'
                   : ''
               }`}>
                 <span className={`text-xs font-bold leading-none ${
                   isToday
-                    ? 'text-white bg-primary-500 rounded-full w-6 h-6 inline-flex items-center justify-center'
+                    ? 'text-white bg-indigo-500 rounded-full w-6 h-6 inline-flex items-center justify-center'
                     : holiday
                     ? 'text-rose-600 dark:text-rose-400'
                     : isHighlighted
@@ -513,9 +540,31 @@ export default function AppointmentManager() {
                     <>
                       <p className="text-[10px] text-rose-400 dark:text-rose-500 text-center">Office Closed</p>
                       {dayApts.length > 0 && (
-                        <p className="text-[10px] text-amber-500 dark:text-amber-400 font-medium text-center">
-                          ⚠️ {dayApts.length} appt{dayApts.length > 1 ? 's' : ''}
-                        </p>
+                        <>
+                          <p className="text-[10px] text-amber-500 dark:text-amber-400 font-medium text-center">
+                            ⚠️ {dayApts.length} appt{dayApts.length > 1 ? 's' : ''} need rescheduling
+                          </p>
+                          {dayApts.map((apt) => (
+                            <button
+                              key={apt.id}
+                              onClick={() => {
+                                setSelectedApt(apt);
+                                setEditingNotes(false);
+                                setNotesText(apt.notes || '');
+                                fetchHistory(apt.id);
+                              }}
+                              className="w-full text-left px-1.5 py-0.5 rounded border-l-2 border-l-amber-400 bg-amber-50/60 dark:bg-amber-900/20 text-[11px] leading-tight hover:bg-amber-100 dark:hover:bg-amber-900/40 transition-colors truncate"
+                            >
+                              <span className="font-semibold text-amber-700 dark:text-amber-300">
+                                {formatTime(apt.scheduled_at, tz)}
+                              </span>
+                              {' '}
+                              <span className="text-amber-600 dark:text-amber-400">
+                                {apt.student_name?.split(' ')[0]}
+                              </span>
+                            </button>
+                          ))}
+                        </>
                       )}
                     </>
                   ) : isClosed ? (
@@ -534,7 +583,7 @@ export default function AppointmentManager() {
                         const pillBg = isCancelled
                           ? 'bg-red-50 dark:bg-red-900/20 border-l-red-400'
                           : isUpcoming
-                          ? 'bg-green-50 dark:bg-green-900/20 border-l-green-400'
+                          ? 'bg-indigo-50/60 dark:bg-indigo-950/20 border-l-indigo-400'
                           : isPastApt
                           ? 'bg-gray-50 dark:bg-gray-700/50 ' + typeColor
                           : 'bg-gray-50 dark:bg-gray-700/50 ' + typeColor;
@@ -556,7 +605,7 @@ export default function AppointmentManager() {
                               isCancelled
                                 ? 'text-red-500 dark:text-red-400'
                                 : isUpcoming
-                                ? 'text-green-700 dark:text-green-300'
+                                ? 'text-indigo-700 dark:text-indigo-300'
                                 : 'text-gray-800 dark:text-gray-200'
                             }`}>
                               {formatTime(apt.scheduled_at, tz)}
@@ -567,7 +616,7 @@ export default function AppointmentManager() {
                                 ? 'text-red-400 dark:text-red-500'
                                 : 'text-gray-500 dark:text-gray-400'
                             }`}>
-                              {apt.patient_name?.split(' ')[0]}
+                              {apt.student_name?.split(' ')[0]}
                             </span>
                           </button>
                         );
@@ -575,7 +624,7 @@ export default function AppointmentManager() {
                       {dayApts.length > MAX_VISIBLE && !isDayExpanded && (
                         <button
                           onClick={() => setExpandedDay(dayStr)}
-                          className="text-[10px] text-primary-500 dark:text-primary-400 font-medium text-center cursor-pointer hover:text-primary-600 dark:hover:text-primary-300 w-full"
+                          className="text-[10px] text-indigo-500 dark:text-indigo-400 font-medium text-center cursor-pointer hover:text-indigo-600 dark:hover:text-indigo-300 w-full"
                         >
                           +{dayApts.length - MAX_VISIBLE} more
                         </button>
@@ -603,7 +652,7 @@ export default function AppointmentManager() {
                 const totalRange = closeMin - openMin;
                 if (totalRange <= 0) return null;
 
-                // Convert current time to clinic timezone
+                // Convert current time to tenant timezone
                 const nowInTz = new Date(now.toLocaleString('en-US', { timeZone: tz }));
                 const nowMin = nowInTz.getHours() * 60 + nowInTz.getMinutes();
 
@@ -651,11 +700,36 @@ export default function AppointmentManager() {
               </button>
             </div>
             <div className="p-4 md:p-6 space-y-5">
-              <DetailRow icon={User} label="Patient" value={selectedApt.patient_name} />
-              <DetailRow icon={PhoneIcon} label="Phone" value={selectedApt.patient_phone} />
-              <DetailRow icon={Mail} label="Email" value={selectedApt.patient_email || '—'} />
+              <DetailRow icon={User} label="Contact" value={selectedApt.student_name} />
+              {/* Phone with call + message actions */}
+              <div className="flex items-start gap-3">
+                <div className="flex-1">
+                  <DetailRow icon={PhoneIcon} label="Phone" value={selectedApt.student_phone} />
+                </div>
+                {selectedApt.student_phone && (
+                  <div className="flex gap-1.5 mt-0.5 shrink-0">
+                    <a
+                      href={`tel:${selectedApt.student_phone}`}
+                      title="Call student"
+                      className="flex items-center gap-1 px-2.5 py-1.5 bg-emerald-50 dark:bg-emerald-900/30 border border-emerald-200 dark:border-emerald-700 text-emerald-700 dark:text-emerald-400 rounded-lg text-xs font-medium hover:bg-emerald-100 dark:hover:bg-emerald-900/50 transition-colors"
+                    >
+                      <PhoneIcon className="w-3.5 h-3.5" />
+                      Call
+                    </a>
+                    <a
+                      href={`sms:${selectedApt.student_phone}`}
+                      title="Send SMS"
+                      className="flex items-center gap-1 px-2.5 py-1.5 bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-700 text-indigo-700 dark:text-indigo-400 rounded-lg text-xs font-medium hover:bg-indigo-100 dark:hover:bg-indigo-900/50 transition-colors"
+                    >
+                      <Mail className="w-3.5 h-3.5" />
+                      SMS
+                    </a>
+                  </div>
+                )}
+              </div>
+              <DetailRow icon={Mail} label="Email" value={selectedApt.student_email || '—'} />
               <DetailRow icon={CalendarDays} label="Type" value={selectedApt.appointment_type_display || selectedApt.appointment_type} />
-              <DetailRow icon={UserCog} label="Doctor" value={selectedApt.provider_name || '—'} />
+              <DetailRow icon={UserCog} label="Faculty" value={selectedApt.provider_name || '—'} />
               <DetailRow
                 icon={Clock}
                 label="Scheduled"
@@ -689,7 +763,7 @@ export default function AppointmentManager() {
                         setNotesText(selectedApt.notes || '');
                         setEditingNotes(true);
                       }}
-                      className="text-xs text-primary-600 dark:text-primary-400 hover:underline"
+                      className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline"
                     >
                       {selectedApt.notes ? 'Edit' : 'Add Notes'}
                     </button>
@@ -701,14 +775,14 @@ export default function AppointmentManager() {
                       value={notesText}
                       onChange={(e) => setNotesText(e.target.value)}
                       rows={4}
-                      className="w-full p-2 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-300 focus:border-primary-300 resize-none"
+                      className="w-full p-2 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-300 focus:border-indigo-300 resize-none"
                       placeholder="Add notes about this visit (visible to AI on next call)..."
                     />
                     <div className="flex gap-2">
                       <button
                         onClick={() => handleSaveNotes(selectedApt.id)}
                         disabled={savingNotes}
-                        className="flex items-center gap-1 px-3 py-1.5 bg-primary-600 text-white rounded-lg text-xs font-medium hover:bg-primary-700 disabled:opacity-50 transition-colors"
+                        className="flex items-center gap-1 px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors"
                       >
                         <Save className="w-3 h-3" />
                         {savingNotes ? 'Saving...' : 'Save'}
@@ -736,7 +810,7 @@ export default function AppointmentManager() {
                 </p>
                 {loadingHistory ? (
                   <div className="flex justify-center py-2">
-                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary-500"></div>
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-indigo-500"></div>
                   </div>
                 ) : statusHistory.length === 0 ? (
                   <p className="text-xs text-gray-400 dark:text-gray-500 italic">No history recorded yet.</p>
@@ -799,7 +873,7 @@ export default function AppointmentManager() {
                       <button
                         onClick={() => setConfirmAction({ action: 'attended', id: selectedApt.id, status: 'COMPLETED' })}
                         disabled={updatingStatus}
-                        className="flex-1 flex items-center justify-center gap-1.5 py-2.5 px-4 bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800 rounded-lg text-sm font-medium hover:bg-emerald-100 dark:hover:bg-emerald-900/50 disabled:opacity-50 transition-colors"
+                        className="flex-1 flex items-center justify-center gap-1.5 py-2.5 px-4 bg-indigo-50 dark:bg-indigo-950/30 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800/50 rounded-lg text-sm font-medium hover:bg-indigo-100 dark:hover:bg-indigo-950/50 disabled:opacity-50 transition-colors"
                       >
                         <CheckCircle2 className="w-4 h-4" />
                         Attended
@@ -821,7 +895,7 @@ export default function AppointmentManager() {
                   <button
                     onClick={() => setConfirmAction({ action: 'correct-attended', id: selectedApt.id, status: 'COMPLETED' })}
                     disabled={updatingStatus}
-                    className="w-full flex items-center justify-center gap-1.5 py-2.5 px-4 bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800 rounded-lg text-sm font-medium hover:bg-emerald-100 dark:hover:bg-emerald-900/50 disabled:opacity-50 transition-colors"
+                    className="w-full flex items-center justify-center gap-1.5 py-2.5 px-4 bg-indigo-50 dark:bg-indigo-950/30 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800/50 rounded-lg text-sm font-medium hover:bg-indigo-100 dark:hover:bg-indigo-950/50 disabled:opacity-50 transition-colors"
                   >
                     <CheckCircle2 className="w-4 h-4" />
                     Correct to Attended
@@ -840,14 +914,30 @@ export default function AppointmentManager() {
                   </button>
                 )}
 
-                {/* Future CONFIRMED → cancel */}
+                {/* Future CONFIRMED → reschedule or cancel */}
                 {selectedApt.status === 'CONFIRMED' && !isPastAppointment(selectedApt) && (
-                  <button
-                    onClick={() => setConfirmAction({ action: 'cancel', id: selectedApt.id })}
-                    className="w-full py-2.5 px-4 bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-800 rounded-lg text-sm font-medium hover:bg-red-100 dark:hover:bg-red-900/50 transition-colors"
-                  >
-                    Cancel Appointment
-                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => {
+                        // Pre-fill with current appointment time in local format
+                        const dt = new Date(selectedApt.scheduled_at);
+                        const pad = (n) => String(n).padStart(2, '0');
+                        const localStr = `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}T${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+                        setRescheduleTime(localStr);
+                        setRescheduleApt(selectedApt);
+                      }}
+                      className="flex-1 flex items-center justify-center gap-1.5 py-2.5 px-4 bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-800 rounded-lg text-sm font-medium hover:bg-blue-100 dark:hover:bg-blue-900/50 transition-colors"
+                    >
+                      <CalendarClock className="w-4 h-4" />
+                      Reschedule
+                    </button>
+                    <button
+                      onClick={() => setConfirmAction({ action: 'cancel', id: selectedApt.id })}
+                      className="flex-1 py-2.5 px-4 bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-800 rounded-lg text-sm font-medium hover:bg-red-100 dark:hover:bg-red-900/50 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </div>
                 )}
               </div>
             </div>
@@ -890,11 +980,48 @@ export default function AppointmentManager() {
                   confirmAction.action === 'cancel'
                     ? 'bg-red-500 text-white hover:bg-red-600'
                     : confirmAction.status === 'COMPLETED'
-                    ? 'bg-emerald-500 text-white hover:bg-emerald-600'
+                    ? 'bg-indigo-500 text-white hover:bg-indigo-600'
                     : 'bg-amber-500 text-white hover:bg-amber-600'
                 }`}
               >
                 {updatingStatus ? 'Updating...' : 'Confirm'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reschedule modal */}
+      {rescheduleApt && (
+        <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4" onClick={() => setRescheduleApt(null)}>
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-sm w-full p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-bold text-gray-900 dark:text-white">Reschedule Appointment</h3>
+            <p className="text-sm text-gray-600 dark:text-gray-400">
+              Pick a new date and time for <strong>{rescheduleApt.student_name}</strong>'s{' '}
+              {rescheduleApt.appointment_type_display || rescheduleApt.appointment_type}.
+            </p>
+            <ThemedDateTimePicker
+              value={rescheduleTime}
+              onChange={setRescheduleTime}
+              min={new Date()}
+              placeholder="Pick new date & time"
+              accent="primary"
+              dropUp
+            />
+            <div className="flex gap-3">
+              <button
+                onClick={() => { setRescheduleApt(null); setRescheduleTime(''); }}
+                disabled={rescheduling}
+                className="flex-1 px-4 py-2.5 border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleReschedule}
+                disabled={rescheduling || !rescheduleTime}
+                className="flex-1 px-4 py-2.5 bg-blue-500 text-white rounded-lg text-sm font-medium hover:bg-blue-600 disabled:opacity-50 transition-colors"
+              >
+                {rescheduling ? 'Rescheduling...' : 'Confirm Reschedule'}
               </button>
             </div>
           </div>
@@ -947,13 +1074,13 @@ function ProviderPicker({ providers, value, onChange }) {
         onClick={() => setOpen((o) => !o)}
         className={`flex items-center gap-2 pl-3 pr-2 py-2 rounded-lg border text-sm font-medium transition-colors min-w-[140px] md:min-w-[180px] ${
           selected
-            ? 'border-primary-200 dark:border-primary-700 bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 hover:bg-primary-100 dark:hover:bg-primary-900/50'
+            ? 'border-indigo-200 dark:border-indigo-700 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/50'
             : 'border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600'
         }`}
       >
         <Users className="w-4 h-4 shrink-0" />
         <span className="flex-1 text-left truncate">
-          {selected ? selected.name : 'All Doctors'}
+          {selected ? selected.name : 'All Staff'}
         </span>
         <ChevronDown
           className={`w-4 h-4 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`}
@@ -966,16 +1093,16 @@ function ProviderPicker({ providers, value, onChange }) {
             type="button"
             onClick={() => { onChange(null); setOpen(false); }}
             className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors ${
-              !value ? 'text-primary-700 dark:text-primary-300 font-medium' : 'text-gray-700 dark:text-gray-300'
+              !value ? 'text-indigo-700 dark:text-indigo-300 font-medium' : 'text-gray-700 dark:text-gray-300'
             }`}
           >
             <Users className="w-4 h-4 text-gray-400 shrink-0" />
-            <span className="flex-1">All Doctors</span>
-            {!value && <Check className="w-4 h-4 text-primary-500 shrink-0" />}
+            <span className="flex-1">All Staff</span>
+            {!value && <Check className="w-4 h-4 text-indigo-500 shrink-0" />}
           </button>
           {providers.length === 0 ? (
             <p className="px-3 py-2 text-xs text-gray-400 dark:text-gray-500 italic">
-              No doctors configured yet.
+              No staff configured yet.
             </p>
           ) : (
             providers.map((p) => {
@@ -986,11 +1113,11 @@ function ProviderPicker({ providers, value, onChange }) {
                   type="button"
                   onClick={() => { onChange(p.id); setOpen(false); }}
                   className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors ${
-                    isSelected ? 'text-primary-700 dark:text-primary-300 font-medium' : 'text-gray-700 dark:text-gray-300'
+                    isSelected ? 'text-indigo-700 dark:text-indigo-300 font-medium' : 'text-gray-700 dark:text-gray-300'
                   }`}
                 >
-                  <div className="w-7 h-7 rounded-full bg-gradient-to-br from-primary-100 to-primary-200 dark:from-primary-900/50 dark:to-primary-800/50 flex items-center justify-center shrink-0">
-                    <span className="text-xs font-semibold text-primary-700 dark:text-primary-300">
+                  <div className="w-7 h-7 rounded-full bg-gradient-to-br from-indigo-100 to-indigo-200 dark:from-indigo-900/50 dark:to-indigo-800/50 flex items-center justify-center shrink-0">
+                    <span className="text-xs font-semibold text-indigo-700 dark:text-indigo-300">
                       {(p.name || '?').charAt(0).toUpperCase()}
                     </span>
                   </div>
@@ -1000,7 +1127,7 @@ function ProviderPicker({ providers, value, onChange }) {
                       <p className="text-[11px] text-gray-400 dark:text-gray-500 truncate">{p.specialty}</p>
                     )}
                   </div>
-                  {isSelected && <Check className="w-4 h-4 text-primary-500 shrink-0" />}
+                  {isSelected && <Check className="w-4 h-4 text-indigo-500 shrink-0" />}
                 </button>
               );
             })

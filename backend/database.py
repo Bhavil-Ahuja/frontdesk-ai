@@ -85,7 +85,7 @@ _MIGRATIONS: list[str] = [
     # ── tenants table — unified test_callers [{phone, name}] (replaces parallel arrays)
     "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS test_callers JSONB DEFAULT '[]'::jsonb",
 
-    # ── tenants table — Google Maps share-link for the clinic location
+    # ── tenants table — Google Maps share-link for the office location
     #    Used at signup for admin approval review (iframe preview) and inside
     #    SMS / email templates as a clickable map link.
     "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS google_maps_url TEXT",
@@ -96,11 +96,11 @@ _MIGRATIONS: list[str] = [
     #    the AI agent (proactively tells callers when a day is a holiday).
     "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS holidays JSONB NOT NULL DEFAULT '[]'::jsonb",
 
-    # ── appointments table — provider, extra reminders, patient confirmation
-    "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS provider_id UUID REFERENCES providers(id)",
+    # ── appointments table — provider, extra reminders, caller confirmation
+    "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS provider_id UUID REFERENCES faculty(id)",
     "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS reminder_2h_sent_at TIMESTAMPTZ",
     "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS review_requested_at TIMESTAMPTZ",
-    "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS confirmed_by_patient BOOLEAN",
+    "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS confirmed_by_student BOOLEAN",
 
     # ── tenants table — drop orphaned calcom_event_types column
     #    This column was added manually during a Cal.com integration experiment
@@ -176,8 +176,8 @@ _MIGRATIONS: list[str] = [
         RAISE NOTICE 'Provider backfill skipped: %', SQLERRM;
     END $$;""",
 
-    # ── is_test flag — separate test/demo data from real patient data ──
-    "ALTER TABLE patients ADD COLUMN IF NOT EXISTS is_test BOOLEAN NOT NULL DEFAULT false",
+    # ── is_test flag — separate test/demo data from real caller data ──
+    "ALTER TABLE callers ADD COLUMN IF NOT EXISTS is_test BOOLEAN NOT NULL DEFAULT false",
     "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS is_test BOOLEAN NOT NULL DEFAULT false",
     "ALTER TABLE waitlist_entries ADD COLUMN IF NOT EXISTS is_test BOOLEAN NOT NULL DEFAULT false",
     "ALTER TABLE sms_messages ADD COLUMN IF NOT EXISTS is_test BOOLEAN NOT NULL DEFAULT false",
@@ -186,13 +186,20 @@ _MIGRATIONS: list[str] = [
     #    Historic data may contain "635-241-8405" or "(512) 555-1234" which
     #    breaks suffix-match queries.  Strip all non-digit / non-plus chars
     #    so stored phones look like "+16352418405" or "6352418405".
-    "UPDATE appointments SET patient_phone = regexp_replace(patient_phone, '[^0-9+]', '', 'g') WHERE patient_phone ~ '[^0-9+]'",
-    "UPDATE patients SET phone = regexp_replace(phone, '[^0-9+]', '', 'g') WHERE phone ~ '[^0-9+]'",
-    "UPDATE waitlist_entries SET patient_phone = regexp_replace(patient_phone, '[^0-9+]', '', 'g') WHERE patient_phone IS NOT NULL AND patient_phone ~ '[^0-9+]'",
+    "UPDATE appointments SET student_phone = regexp_replace(student_phone, '[^0-9+]', '', 'g') WHERE student_phone ~ '[^0-9+]'",
+    "UPDATE callers SET phone = regexp_replace(phone, '[^0-9+]', '', 'g') WHERE phone ~ '[^0-9+]'",
+    "UPDATE waitlist_entries SET student_phone = regexp_replace(student_phone, '[^0-9+]', '', 'g') WHERE student_phone IS NOT NULL AND student_phone ~ '[^0-9+]'",
     "UPDATE sms_messages SET to_number = regexp_replace(to_number, '[^0-9+]', '', 'g') WHERE to_number IS NOT NULL AND to_number ~ '[^0-9+]'",
 
     # ── tenants table — owner-toggleable agent on/off (separate from status)
     "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS agent_active BOOLEAN NOT NULL DEFAULT true",
+
+    # ── providers table — subject and demo time windows (coaching institutes) ─
+    "ALTER TABLE providers ADD COLUMN IF NOT EXISTS subject VARCHAR(255)",
+    "ALTER TABLE providers ADD COLUMN IF NOT EXISTS max_demo_slots_per_day INTEGER",
+    # Replace integer daily cap with JSONB fixed-window time slots
+    "ALTER TABLE providers DROP COLUMN IF EXISTS max_demo_slots_per_day",
+    "ALTER TABLE providers ADD COLUMN IF NOT EXISTS demo_time_slots JSONB",
 
     # ── appointment_status_history — audit trail for status changes ──
     """CREATE TABLE IF NOT EXISTS appointment_status_history (
@@ -205,6 +212,144 @@ _MIGRATIONS: list[str] = [
         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )""",
     "CREATE INDEX IF NOT EXISTS ix_status_history_appt ON appointment_status_history (appointment_id, created_at)",
+
+    # ── providers — null out legacy array-format demo_time_slots ─────────────
+    # demo_time_slots changed from a flat list [{start,end}] to a day-keyed dict
+    # {monday: [{start,end}], tuesday: null, ...}.  Old array data is incompatible;
+    # nulling it out forces re-entry through the new UI.
+    "UPDATE providers SET demo_time_slots = NULL WHERE demo_time_slots IS NOT NULL AND jsonb_typeof(demo_time_slots) = 'array'",
+    # ── sms_messages — backfill is_test for test phone numbers ───────────────
+    # is_test was not propagated through the send pipeline; all existing messages
+    # from test phones (+1555XXXX) should be flagged as test data.
+    "UPDATE sms_messages SET is_test = TRUE WHERE is_test = FALSE AND student_phone LIKE '+1555%'",
+
+    # ── sms_messages — sender_type: distinguish AI agent vs admin manual send ─
+    "ALTER TABLE sms_messages ADD COLUMN IF NOT EXISTS sender_type VARCHAR(20) NOT NULL DEFAULT 'agent'",
+
+    # ── platform_config — admin-managed global key-value settings ────────────
+    """CREATE TABLE IF NOT EXISTS platform_config (
+        key VARCHAR(100) PRIMARY KEY,
+        value TEXT,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )""",
+
+    # ── calls table — make vapi_call_id nullable (Vapi removed) ──────────────
+    "ALTER TABLE calls ALTER COLUMN vapi_call_id DROP NOT NULL",
+
+    # ── tenants — drop Vapi-specific columns (Vapi removed from platform) ─────
+    "ALTER TABLE tenants DROP COLUMN IF EXISTS vapi_api_key",
+    "ALTER TABLE tenants DROP COLUMN IF EXISTS vapi_assistant_id",
+    "ALTER TABLE tenants DROP COLUMN IF EXISTS vapi_phone_number_id",
+    "ALTER TABLE tenants DROP COLUMN IF EXISTS vapi_webhook_secret",
+    "ALTER TABLE tenants DROP COLUMN IF EXISTS feature_vapi_enabled",
+
+    # ── tenants — drop per-tenant Bolna columns (now global via platform_config)
+    "ALTER TABLE tenants DROP COLUMN IF EXISTS bolna_api_key",
+    "ALTER TABLE tenants DROP COLUMN IF EXISTS bolna_agent_id",
+
+    # ── businesstype enum — migrate column to plain VARCHAR ──────────────────
+    # SQLAlchemy 2.0 on Python 3.12+ builds _object_lookup from enum member
+    # NAMES (uppercase) by default, but the DB may have stored lowercase values
+    # (from enum .value) or old medical-domain values.  We fix this by:
+    #   1. Converting the column to VARCHAR first (no value constraints).
+    #   2. Dropping the stale PG enum type.
+    #   3. LOWER()-normalising all values so they match the Python enum's .value.
+    #   4. Remapping any remaining unknown values (old medical types) to 'custom'.
+    # ORDER MATTERS: ALTER must precede UPDATE — you can't INSERT a lowercase
+    # string into a native-enum column that only has uppercase labels.
+    """DO $$ BEGIN
+        ALTER TABLE tenants ALTER COLUMN business_type TYPE VARCHAR(50) USING business_type::text;
+    EXCEPTION WHEN OTHERS THEN
+        RAISE NOTICE 'business_type column type change skipped: %', SQLERRM;
+    END $$;""",
+    "DROP TYPE IF EXISTS businesstype",
+    """DO $$ BEGIN
+        UPDATE tenants SET business_type = LOWER(business_type)
+        WHERE business_type IS DISTINCT FROM LOWER(business_type);
+        UPDATE tenants SET business_type = 'custom'
+        WHERE business_type NOT IN ('coaching_institute', 'custom');
+    EXCEPTION WHEN OTHERS THEN
+        RAISE NOTICE 'business_type normalisation skipped: %', SQLERRM;
+    END $$;""",
+
+    # ── caller_id FK — consolidate is_test ownership onto callers table ────────
+    # Step 1: Add caller_id FK columns (nullable — orphan rows keep NULL → is_test=False)
+    "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS caller_id UUID REFERENCES callers(id)",
+    "ALTER TABLE waitlist_entries ADD COLUMN IF NOT EXISTS caller_id UUID REFERENCES callers(id)",
+    "ALTER TABLE sms_messages ADD COLUMN IF NOT EXISTS caller_id UUID REFERENCES callers(id)",
+    "CREATE INDEX IF NOT EXISTS ix_appointments_caller_id ON appointments (caller_id)",
+    "CREATE INDEX IF NOT EXISTS ix_waitlist_entries_caller_id ON waitlist_entries (caller_id)",
+    "CREATE INDEX IF NOT EXISTS ix_sms_messages_caller_id ON sms_messages (caller_id)",
+
+    # Step 2: Backfill caller_id via suffix-tail phone match (last 10 digits of digits-only phone)
+    # Matches "+16352418405" with "6352418405" or "+6352418405" — same approach as _phone_digits_tail()
+    """UPDATE appointments a SET caller_id = c.id
+       FROM callers c
+       WHERE c.tenant_id = a.tenant_id
+         AND RIGHT(regexp_replace(c.phone, '[^0-9]', '', 'g'), 10)
+             = RIGHT(regexp_replace(a.student_phone, '[^0-9]', '', 'g'), 10)
+         AND a.caller_id IS NULL""",
+    """UPDATE waitlist_entries w SET caller_id = c.id
+       FROM callers c
+       WHERE c.tenant_id = w.tenant_id
+         AND RIGHT(regexp_replace(c.phone, '[^0-9]', '', 'g'), 10)
+             = RIGHT(regexp_replace(w.student_phone, '[^0-9]', '', 'g'), 10)
+         AND w.caller_id IS NULL""",
+    """UPDATE sms_messages s SET caller_id = c.id
+       FROM callers c
+       WHERE c.tenant_id = s.tenant_id
+         AND RIGHT(regexp_replace(c.phone, '[^0-9]', '', 'g'), 10)
+             = RIGHT(regexp_replace(s.student_phone, '[^0-9]', '', 'g'), 10)
+         AND s.caller_id IS NULL""",
+
+    # Step 3: Reconcile callers.is_test — promote to TRUE if ANY linked record was test
+    # Must run BEFORE dropping is_test from the 3 tables.
+    """UPDATE callers c SET is_test = TRUE
+       WHERE c.is_test = FALSE AND (
+           EXISTS (SELECT 1 FROM appointments a WHERE a.caller_id = c.id AND a.is_test = TRUE)
+           OR EXISTS (SELECT 1 FROM waitlist_entries w WHERE w.caller_id = c.id AND w.is_test = TRUE)
+           OR EXISTS (SELECT 1 FROM sms_messages s WHERE s.caller_id = c.id AND s.is_test = TRUE)
+       )""",
+
+    # Step 4: Drop the now-redundant is_test columns from the 3 dependent tables
+    "ALTER TABLE appointments DROP COLUMN IF EXISTS is_test",
+    "ALTER TABLE waitlist_entries DROP COLUMN IF EXISTS is_test",
+    "ALTER TABLE sms_messages DROP COLUMN IF EXISTS is_test",
+
+    # ── Phase 2 — remove redundant tenant_id from child tables ─────────────────
+    # tenant_id is fully derivable via caller_id → callers.tenant_id.
+    # Callers ARE the single source of truth for tenant scope.
+
+    # Step 1: Delete orphan rows (NULL caller_id) — user accepted data loss.
+    # Must run BEFORE ALTER COLUMN SET NOT NULL.
+    "DELETE FROM appointments WHERE caller_id IS NULL",
+    "DELETE FROM waitlist_entries WHERE caller_id IS NULL",
+    "DELETE FROM sms_messages WHERE caller_id IS NULL",
+
+    # Step 2: Enforce NOT NULL on caller_id across all 3 tables.
+    """DO $$ BEGIN
+        ALTER TABLE appointments ALTER COLUMN caller_id SET NOT NULL;
+    EXCEPTION WHEN OTHERS THEN
+        RAISE NOTICE 'appointments caller_id NOT NULL already or skipped: %', SQLERRM;
+    END $$;""",
+    """DO $$ BEGIN
+        ALTER TABLE waitlist_entries ALTER COLUMN caller_id SET NOT NULL;
+    EXCEPTION WHEN OTHERS THEN
+        RAISE NOTICE 'waitlist_entries caller_id NOT NULL already or skipped: %', SQLERRM;
+    END $$;""",
+    """DO $$ BEGIN
+        ALTER TABLE sms_messages ALTER COLUMN caller_id SET NOT NULL;
+    EXCEPTION WHEN OTHERS THEN
+        RAISE NOTICE 'sms_messages caller_id NOT NULL already or skipped: %', SQLERRM;
+    END $$;""",
+
+    # Step 3: Drop the redundant tenant_id columns (derive from caller).
+    "ALTER TABLE appointments DROP COLUMN IF EXISTS tenant_id",
+    "ALTER TABLE waitlist_entries DROP COLUMN IF EXISTS tenant_id",
+    "ALTER TABLE sms_messages DROP COLUMN IF EXISTS tenant_id",
+
+    # Step 4: Drop student_phone from sms_messages (derive from caller.phone).
+    "ALTER TABLE sms_messages DROP COLUMN IF EXISTS student_phone",
 ]
 
 
@@ -215,24 +360,26 @@ async def init_db() -> None:
     logger.info("Connecting to database: %s", settings.DATABASE_URL.split("@")[-1])  # Log host only, not creds
     async with engine.begin() as conn:
         # Import models so they register with Base.metadata
-        from backend.models import tenant, call, appointment, patient, provider, waitlist, sms_message, profile_change_log, support_ticket, status_history  # noqa: F401
+        from backend.models import tenant, call, appointment, caller, provider, waitlist, sms_message, profile_change_log, support_ticket, status_history, platform_config  # noqa: F401
         await conn.run_sync(Base.metadata.create_all)
 
-    # Apply column-level migrations (idempotent — safe to re-run)
-    async with engine.begin() as conn:
-        applied = 0
-        for stmt in _MIGRATIONS:
-            try:
+    # Apply column-level migrations — each in its own transaction so a failed
+    # migration (e.g. column already exists from a prior run) doesn't abort the
+    # rest via asyncpg's InFailedSQLTransactionError cascade.
+    applied = 0
+    for stmt in _MIGRATIONS:
+        try:
+            async with engine.begin() as conn:
                 await conn.execute(text(stmt))
-                applied += 1
-            except Exception as exc:
-                # Log but don't crash — column might already exist (non-PG DBs
-                # may not support IF NOT EXISTS for ADD COLUMN).
-                logger.warning("Migration skipped (%s): %s", exc.__class__.__name__, str(exc)[:120])
-        if applied:
-            logger.info("Applied %d column migrations on existing tables.", applied)
+            applied += 1
+        except Exception as exc:
+            # Log but don't crash — column might already exist (non-PG DBs
+            # may not support IF NOT EXISTS for ADD COLUMN).
+            logger.warning("Migration skipped (%s): %s", exc.__class__.__name__, str(exc)[:120])
+    if applied:
+        logger.info("Applied %d column migrations on existing tables.", applied)
 
-    logger.info("Database tables created / verified: tenants, calls, appointments, patients, providers, waitlist_entries, sms_messages")
+    logger.info("Database tables created / verified: tenants, calls, appointments, callers, providers, waitlist_entries, sms_messages")
 
 
 async def get_db() -> AsyncSession:

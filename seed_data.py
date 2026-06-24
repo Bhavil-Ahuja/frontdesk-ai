@@ -1,11 +1,12 @@
 """
-Seed script — populates the database with realistic demo data.
+Seed script — populates the database with realistic demo data for a coaching institute.
 
 Creates:
-  - 5 patients
+  - 1 demo tenant (Bright Future Coaching Institute)
+  - 3 faculty members
+  - 5 callers (students / parents)
   - 15 calls from the past 7 days with varied outcomes
   - 8 confirmed appointments across the next 2 weeks
-  - 2 escalated calls with realistic transcripts
 
 Run:  python seed_data.py
 """
@@ -18,197 +19,254 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import text
 
 from backend.database import engine, async_session, init_db
+from backend.models.tenant import Tenant, BusinessType, TenantStatus, PlanTier
+from backend.models.provider import Provider
 from backend.models.call import Call, CallOutcome
 from backend.models.appointment import Appointment, AppointmentStatus, BookedVia
-from backend.models.patient import Patient
+from backend.models.caller import Caller
 
 
-# ── Sample patients ───────────────────────────────────────────────────────────
+# ── Demo tenant ──────────────────────────────────────────────────────────────
 
-PATIENTS = [
+DEMO_TENANT_SLUG = "bright-future-coaching"
+
+DEMO_TENANT = {
+    "slug": DEMO_TENANT_SLUG,
+    "business_name": "Bright Future Coaching Institute",
+    "business_type": BusinessType.COACHING_INSTITUTE,
+    "business_phone": "+919876540100",
+    "business_address": "42, Sector 18, Noida, Uttar Pradesh 201301, India",
+    "timezone": "Asia/Kolkata",
+    "owner_name": "Priya Sharma",
+    "owner_email": "priya@brightfuture.edu",
+    "owner_phone": "+919876540101",
+    "agent_name": "Aria",
+    "greeting_message": "Thank you for calling Bright Future Coaching Institute! This is Aria. How can I help you today?",
+    "status": TenantStatus.ACTIVE,
+    "plan": PlanTier.PROFESSIONAL,
+    "demo_mode": True,
+    "appointment_types": [
+        {"code": "demo_class", "name": "Demo Class", "duration_minutes": 60, "max_concurrent": 5},
+        {"code": "counselling", "name": "Counselling Session", "duration_minutes": 45, "max_concurrent": 2},
+        {"code": "enrollment", "name": "Enrollment Meeting", "duration_minutes": 30, "max_concurrent": 3},
+    ],
+    "business_hours": {
+        "monday":    {"open": "09:00", "close": "19:00"},
+        "tuesday":   {"open": "09:00", "close": "19:00"},
+        "wednesday": {"open": "09:00", "close": "19:00"},
+        "thursday":  {"open": "09:00", "close": "19:00"},
+        "friday":    {"open": "09:00", "close": "19:00"},
+        "saturday":  {"open": "10:00", "close": "16:00"},
+        "sunday":    None,
+    },
+    "escalation_phone": "+919876540199",
+    "test_caller_phone": "+919876500001",
+}
+
+# ── Faculty ───────────────────────────────────────────────────────────────────
+
+FACULTY = [
     {
-        "name": "Maria Gonzalez",
-        "phone": "+15125551001",
-        "email": "maria.gonzalez@email.com",
-        "dob": "03/15/1985",
-        "is_new": False,
+        "name": "Prof. Anand Mehta",
+        "title": "M.Sc. Mathematics",
+        "subject": "Mathematics",
+        "appointment_types": ["demo_class", "counselling"],
+        "demo_time_slots": {
+            "monday":    [{"start": "10:00", "end": "11:00"}, {"start": "15:00", "end": "16:00"}],
+            "wednesday": [{"start": "10:00", "end": "11:00"}, {"start": "15:00", "end": "16:00"}],
+            "friday":    [{"start": "10:00", "end": "11:00"}],
+        },
     },
     {
-        "name": "James Chen",
-        "phone": "+15125551002",
-        "email": "james.chen@email.com",
-        "dob": "11/22/1992",
-        "is_new": False,
+        "name": "Dr. Kavita Rao",
+        "title": "Ph.D. Physics",
+        "subject": "Physics",
+        "appointment_types": ["demo_class", "counselling"],
+        "demo_time_slots": {
+            "tuesday":   [{"start": "11:00", "end": "12:00"}, {"start": "16:00", "end": "17:00"}],
+            "thursday":  [{"start": "11:00", "end": "12:00"}, {"start": "16:00", "end": "17:00"}],
+            "saturday":  [{"start": "11:00", "end": "12:00"}],
+        },
     },
     {
-        "name": "Emily Thompson",
-        "phone": "+15125551003",
-        "email": "emily.t@email.com",
-        "dob": "07/04/1978",
-        "is_new": True,
+        "name": "Ms. Deepa Nair",
+        "title": "M.A. English",
+        "subject": "English & Communication",
+        "appointment_types": ["demo_class", "enrollment"],
+        "demo_time_slots": {
+            "monday":    [{"start": "14:00", "end": "15:00"}],
+            "wednesday": [{"start": "14:00", "end": "15:00"}],
+            "friday":    [{"start": "14:00", "end": "15:00"}],
+            "saturday":  [{"start": "13:00", "end": "14:00"}],
+        },
     },
-    {
-        "name": "Robert Williams",
-        "phone": "+15125551004",
-        "email": "rwilliams@email.com",
-        "dob": "01/30/1965",
-        "is_new": False,
-    },
-    {
-        "name": "Sarah Kim",
-        "phone": "+15125551005",
-        "email": "sarah.kim@email.com",
-        "dob": "09/12/1990",
-        "is_new": True,
-    },
+]
+
+# ── Sample callers ───────────────────────────────────────────────────────────
+
+CALLERS = [
+    {"name": "Rohan Verma",   "phone": "+919876541001", "email": "rohan.verma@email.com",  "dob": "03/15/2007", "is_new": False},
+    {"name": "Preethi Iyer",  "phone": "+919876541002", "email": "preethi.i@email.com",    "dob": "11/22/2006", "is_new": False},
+    {"name": "Aryan Kapoor",  "phone": "+919876541003", "email": "aryan.kapoor@email.com", "dob": "07/04/2007", "is_new": True},
+    {"name": "Sneha Reddy",   "phone": "+919876541004", "email": "sneha.r@email.com",      "dob": "01/30/2006", "is_new": False},
+    {"name": "Kiran Sharma",  "phone": "+919876541005", "email": "kiran.s@email.com",      "dob": "09/12/2008", "is_new": True},
 ]
 
 # ── Sample transcripts ───────────────────────────────────────────────────────
 
 BOOKING_TRANSCRIPT = [
-    {"role": "assistant", "content": "Thank you for calling. This is your AI assistant. How can I help you today?"},
-    {"role": "user", "content": "Hi, I'd like to schedule an appointment please."},
-    {"role": "assistant", "content": "Absolutely, I'd be happy to help you schedule an appointment! Are you an existing client with us or would this be your first visit?"},
-    {"role": "user", "content": "I've been there before, yeah. Last time was about six months ago."},
-    {"role": "assistant", "content": "Great, welcome back! Let me look up some available times for you. Could I get your name so I can pull up your information?"},
-    {"role": "user", "content": "Sure, it's Maria Gonzalez."},
-    {"role": "assistant", "content": "Thank you, Maria. And could you confirm the phone number we have on file?"},
-    {"role": "user", "content": "It's 512-555-1001."},
-    {"role": "assistant", "content": "Perfect, I've got your information right here. I have a few openings this week. I can offer you Wednesday at 10 AM, Thursday at 2 PM, or Friday at 9 AM. Which works best for you?"},
-    {"role": "user", "content": "Thursday at 2 sounds perfect."},
-    {"role": "assistant", "content": "Wonderful! I've got you down for this Thursday at 2 PM. You'll receive a text confirmation shortly. Is there anything else I can help you with?"},
-    {"role": "user", "content": "No, that's all. Thank you so much!"},
-    {"role": "assistant", "content": "You're welcome, Maria! We'll see you Thursday. Have a great day!"},
+    {"role": "assistant", "content": "Thank you for calling Bright Future Coaching Institute! This is Aria. How can I help you today?"},
+    {"role": "user",      "content": "Hi, I'd like to book a demo class for my son in Mathematics."},
+    {"role": "assistant", "content": "Absolutely! I'd be happy to arrange a demo class. Prof. Anand Mehta takes our Maths demos. Can I get your son's name and class?"},
+    {"role": "user",      "content": "His name is Rohan Verma, he's in Class 11."},
+    {"role": "assistant", "content": "Great, Rohan! I have a slot with Prof. Mehta this Wednesday at 10 AM or Friday at 10 AM. Which works better?"},
+    {"role": "user",      "content": "Wednesday at 10 sounds perfect."},
+    {"role": "assistant", "content": "Wonderful! Rohan is confirmed for a Maths demo class this Wednesday at 10 AM with Prof. Mehta. You'll get a text confirmation shortly. Anything else I can help with?"},
+    {"role": "user",      "content": "No, that's all. Thank you!"},
+    {"role": "assistant", "content": "You're welcome! We look forward to seeing Rohan on Wednesday. Have a great day!"},
 ]
 
 INQUIRY_TRANSCRIPT = [
-    {"role": "assistant", "content": "Thank you for calling. This is your AI assistant. How can I help you today?"},
-    {"role": "user", "content": "Hi, I was wondering about your pricing for a consultation?"},
-    {"role": "assistant", "content": "Great question! An initial consultation is typically $50 to $100 and takes about 45 minutes. Would you like to schedule one?"},
-    {"role": "user", "content": "Hmm, that's a bit more than I expected. Do you offer any payment plans?"},
-    {"role": "assistant", "content": "I understand. We do offer flexible payment options if needed. Would you like me to share more details about that?"},
-    {"role": "user", "content": "No, I think I'll think about it and call back. Thanks for the info."},
-    {"role": "assistant", "content": "Of course! Take your time. When you're ready, just give us a call and we'll get you set up. Have a wonderful day!"},
+    {"role": "assistant", "content": "Thank you for calling Bright Future Coaching Institute! This is Aria. How can I help you today?"},
+    {"role": "user",      "content": "Hi, I wanted to know about your JEE coaching batches and fees."},
+    {"role": "assistant", "content": "We offer JEE Main and Advanced batches starting every month. Fees vary by batch size — regular batches are ₹8,000 per month and personal mentoring is ₹15,000. Would you like to book a free counselling session to discuss in detail?"},
+    {"role": "user",      "content": "Let me think about it and call back."},
+    {"role": "assistant", "content": "Of course! Take your time. We also offer a free demo class so you can experience our teaching style before deciding. Just call us whenever you're ready!"},
 ]
 
 ESCALATED_TRANSCRIPT_1 = [
-    {"role": "assistant", "content": "Thank you for calling. This is your AI assistant. How can I help you today?"},
-    {"role": "user", "content": "I need to talk to someone about my bill. I was charged more than expected."},
-    {"role": "assistant", "content": "I'm sorry to hear about the billing concern. I want to make sure we get this resolved for you. Can you tell me a little more about what happened?"},
-    {"role": "user", "content": "Yeah, I had an appointment last month and I got a bill for $180. This is really frustrating."},
-    {"role": "assistant", "content": "I completely understand your frustration, and I'm sorry about the confusion. Billing questions can be tricky, and I want to make sure you get the most accurate help. Let me connect you with one of our team members who specializes in billing. They'll be able to look into this in detail for you. Please hold for just a moment."},
+    {"role": "assistant", "content": "Thank you for calling Bright Future Coaching Institute! This is Aria. How can I help you today?"},
+    {"role": "user",      "content": "I'm very unhappy with the recent batch change. My daughter was moved without notice."},
+    {"role": "assistant", "content": "I'm really sorry to hear that — unexpected batch changes can be very disruptive. Let me connect you with our student counsellor who can look into this and resolve it for you right away."},
 ]
 
 ESCALATED_TRANSCRIPT_2 = [
-    {"role": "assistant", "content": "Thank you for calling. This is your AI assistant. How can I help you today?"},
-    {"role": "user", "content": "Hi... I'm really nervous. I haven't been in like five years and I'm pretty sure I have some issues. I'm kind of freaking out."},
-    {"role": "assistant", "content": "I really appreciate you reaching out, and please know that you're not alone. Many of our clients feel the same way after time away. Whatever is going on, we're here to help and there's no judgment at all."},
-    {"role": "user", "content": "I think I might need a lot of work done and I'm just... I don't know if I can handle it. I get really anxious about these things."},
-    {"role": "assistant", "content": "I hear you, and that anxiety is incredibly common. We have a wonderful team who is very gentle and understanding. You can take breaks anytime. I'd love to connect you with our care coordinator who can walk you through everything at your pace. Let me transfer you now. Please hold for just a moment."},
-]
-
-EMERGENCY_TRANSCRIPT = [
-    {"role": "assistant", "content": "Thank you for calling. This is your AI assistant. How can I help you today?"},
-    {"role": "user", "content": "I'm having a really bad reaction to my medication and I need to be seen right away."},
-    {"role": "assistant", "content": "I'm sorry to hear that! Let me help you right away. If you're experiencing difficulty breathing or chest pain, please call 911 immediately. Otherwise, let me get you in as soon as possible."},
-    {"role": "user", "content": "It's not that serious, but I really need to see someone today."},
-    {"role": "assistant", "content": "Absolutely. We prioritize urgent cases and I want to get you in as soon as possible. Let me check our schedule. I have an opening at 3:30 PM today. Can you make it in by then?"},
-    {"role": "user", "content": "Yes, definitely. I'll be there."},
-    {"role": "assistant", "content": "Perfect. Can I get your name and phone number so I can get you checked in?"},
-    {"role": "user", "content": "It's James Chen, 512-555-1002."},
-    {"role": "assistant", "content": "Got it, James. You're all set for an emergency visit today at 3:30 PM. You'll get a text confirmation shortly. In the meantime, take it easy and take an over-the-counter pain reliever if needed. We'll take great care of you!"},
+    {"role": "assistant", "content": "Thank you for calling Bright Future Coaching Institute! This is Aria. How can I help you today?"},
+    {"role": "user",      "content": "My son has been really stressed lately and I'm worried. He says the pace is too fast."},
+    {"role": "assistant", "content": "Thank you for sharing that — your son's well-being is our top priority. I'd like to connect you with one of our academic counsellors who can assess the situation and suggest the best batch or schedule for him. Shall I transfer you?"},
+    {"role": "user",      "content": "Yes please, that would be helpful."},
+    {"role": "assistant", "content": "Connecting you now. Please hold for just a moment."},
 ]
 
 CANCELLED_TRANSCRIPT = [
-    {"role": "assistant", "content": "Thank you for calling. This is your AI assistant. How can I help you today?"},
-    {"role": "user", "content": "Hi, I need to cancel my appointment for tomorrow."},
-    {"role": "assistant", "content": "Of course, I can help with that. Can I get your name please?"},
-    {"role": "user", "content": "Robert Williams."},
-    {"role": "assistant", "content": "Thank you, Robert. I see your follow-up appointment for tomorrow at 11 AM. I've gone ahead and cancelled that for you. Would you like to reschedule for another day?"},
-    {"role": "user", "content": "Not right now, I'll call back when I know my schedule better."},
-    {"role": "assistant", "content": "No problem at all! Just give us a call whenever you're ready and we'll find a time that works. Have a great day, Robert!"},
+    {"role": "assistant", "content": "Thank you for calling Bright Future Coaching Institute! This is Aria. How can I help you today?"},
+    {"role": "user",      "content": "Hi, I need to cancel tomorrow's demo class for Sneha Reddy."},
+    {"role": "assistant", "content": "Of course. I've cancelled Sneha's demo class scheduled for tomorrow. Would you like to reschedule for another day?"},
+    {"role": "user",      "content": "Not right now — we'll call back when we're ready."},
+    {"role": "assistant", "content": "No problem at all! Just give us a call whenever you're ready and we'll find a time that works. Have a great day!"},
 ]
 
-NEW_PATIENT_TRANSCRIPT = [
-    {"role": "assistant", "content": "Thank you for calling. This is your AI assistant. How can I help you today?"},
-    {"role": "user", "content": "Hi, I just moved to Austin and I'm looking for a new provider. Are you accepting new patients?"},
-    {"role": "assistant", "content": "Welcome to Austin! Yes, we are absolutely accepting new patients. We'd love to have you as a client! Would you like to schedule your first visit with us?"},
-    {"role": "user", "content": "That would be great. What do I need for a first visit?"},
-    {"role": "assistant", "content": "For new clients, we do a comprehensive initial evaluation, which takes about 60 minutes. I'll just need your full name, date of birth, phone number, and email. Would you like to get started?"},
-    {"role": "user", "content": "Sure! My name is Sarah Kim, date of birth September 12, 1990, phone is 512-555-1005, email is sarah.kim@email.com."},
-    {"role": "assistant", "content": "Perfect, thank you Sarah! Let me check our availability. I have openings next Monday at 9 AM, next Tuesday at 1 PM, or next Wednesday at 10 AM. Which would you prefer?"},
-    {"role": "user", "content": "Monday at 9 AM works for me."},
-    {"role": "assistant", "content": "Wonderful! You're all set for a new client visit next Monday at 9 AM. Please arrive about 15 minutes early so we can get your paperwork taken care of. You'll receive a text confirmation shortly. Is there anything else I can help with?"},
-    {"role": "user", "content": "No, that's everything. Thanks so much!"},
-    {"role": "assistant", "content": "You're welcome, Sarah! We're excited to meet you. See you Monday!"},
+NEW_CALLER_TRANSCRIPT = [
+    {"role": "assistant", "content": "Thank you for calling Bright Future Coaching Institute! This is Aria. How can I help you today?"},
+    {"role": "user",      "content": "Hi, we just moved to Austin and we're looking for coaching for our son for Class 12 Science."},
+    {"role": "assistant", "content": "Welcome to Austin! We'd love to have your son join us. We have excellent faculty for Physics, Chemistry, and Maths for Class 12. Would you like to book a free demo class so he can experience our teaching style?"},
+    {"role": "user",      "content": "Yes, that sounds great. What do we need to bring?"},
+    {"role": "assistant", "content": "Just the student's last report card and a note of any specific topics they'd like covered. Can I get his name and your contact number?"},
+    {"role": "user",      "content": "His name is Kiran Sharma, phone is 512-555-1005, email kiran.s@email.com."},
+    {"role": "assistant", "content": "Perfect! I have a demo class slot available next Monday at 10 AM with Prof. Mehta for Maths or Tuesday at 11 AM with Dr. Rao for Physics. Which subject first?"},
+    {"role": "user",      "content": "Physics with Dr. Rao on Tuesday sounds good."},
+    {"role": "assistant", "content": "Wonderful! Kiran is booked for a Physics demo class next Tuesday at 11 AM with Dr. Rao. You'll receive a confirmation text shortly. Welcome aboard!"},
 ]
 
 
 # ── Seed function ─────────────────────────────────────────────────────────────
 
-
 async def seed():
-    """Populate the database with demo data."""
+    """Populate the database with demo data for the coaching institute tenant."""
     await init_db()
 
     async with async_session() as session:
-        # Check if data already exists
-        result = await session.execute(text("SELECT COUNT(*) FROM patients"))
-        if result.scalar() > 0:
-            print("⚠ Database already has data. Skipping seed.")
-            return
+        # ── Check / create demo tenant ────────────────────────────────────
+        result = await session.execute(
+            text("SELECT id FROM tenants WHERE slug = :slug"),
+            {"slug": DEMO_TENANT_SLUG},
+        )
+        row = result.fetchone()
 
+        if row:
+            tenant_id = row[0]
+            print(f"✓ Demo tenant already exists (id={tenant_id}). Checking data…")
+
+            # Check if callers already seeded for this tenant
+            r2 = await session.execute(
+                text("SELECT COUNT(*) FROM callers WHERE tenant_id = :tid"),
+                {"tid": tenant_id},
+            )
+            if r2.scalar() > 0:
+                print("⚠  Callers already seeded for this tenant. Skipping.")
+                return
+        else:
+            tenant = Tenant(**DEMO_TENANT)
+            session.add(tenant)
+            await session.flush()
+            tenant_id = tenant.id
+            print(f"✓ Created demo tenant '{DEMO_TENANT_SLUG}' (id={tenant_id})")
+
+        # ── Faculty ───────────────────────────────────────────────────────
+        faculty_records = []
+        for f in FACULTY:
+            provider = Provider(
+                tenant_id=tenant_id,
+                name=f["name"],
+                title=f["title"],
+                subject=f["subject"],
+                appointment_types=f["appointment_types"],
+                demo_time_slots=f["demo_time_slots"],
+                is_active=True,
+            )
+            session.add(provider)
+            faculty_records.append(provider)
+        await session.flush()
+        print(f"✓ Created {len(faculty_records)} faculty members")
+
+        # ── Callers ───────────────────────────────────────────────────────
         now = datetime.now(timezone.utc)
-
-        # ── Patients ──────────────────────────────────────────────────────
-        patient_records = []
-        for p in PATIENTS:
-            patient = Patient(
+        caller_records = []
+        for p in CALLERS:
+            caller_rec = Caller(
+                tenant_id=tenant_id,
                 name=p["name"],
                 phone=p["phone"],
                 email=p["email"],
                 date_of_birth=p["dob"],
-                is_new_patient=p["is_new"],
+                is_new_caller=p["is_new"],
                 first_seen_at=now - timedelta(days=random.randint(30, 365)),
                 last_appointment_at=now - timedelta(days=random.randint(1, 60)),
             )
-            session.add(patient)
-            patient_records.append(patient)
+            session.add(caller_rec)
+            caller_records.append(caller_rec)
         await session.flush()
-        print(f"✓ Created {len(patient_records)} patients")
+        print(f"✓ Created {len(caller_records)} callers")
 
         # ── Calls (15 over the past 7 days) ───────────────────────────────
         transcripts = [
-            (BOOKING_TRANSCRIPT, CallOutcome.BOOKED, "Patient called to schedule a routine cleaning. Booked for Thursday at 2 PM."),
-            (INQUIRY_TRANSCRIPT, CallOutcome.INQUIRY, "Patient inquired about consultation pricing. Will call back."),
-            (ESCALATED_TRANSCRIPT_1, CallOutcome.ESCALATED, "Patient had a billing dispute. Escalated to billing team."),
-            (ESCALATED_TRANSCRIPT_2, CallOutcome.ESCALATED, "Patient with severe dental anxiety needed extra support. Transferred to care coordinator."),
-            (EMERGENCY_TRANSCRIPT, CallOutcome.BOOKED, "Emergency call — patient had urgent reaction. Booked same-day emergency visit at 3:30 PM."),
-            (CANCELLED_TRANSCRIPT, CallOutcome.CANCELLED, "Patient cancelled tomorrow's follow-up appointment. Will reschedule later."),
-            (NEW_PATIENT_TRANSCRIPT, CallOutcome.BOOKED, "New client from out of state. Booked new client visit for Monday at 9 AM."),
+            (BOOKING_TRANSCRIPT,    CallOutcome.BOOKED,    "Parent booked a Maths demo class for Rohan Verma with Prof. Mehta on Wednesday at 10 AM."),
+            (INQUIRY_TRANSCRIPT,    CallOutcome.INQUIRY,   "Parent inquired about JEE batch fees. Will call back."),
+            (ESCALATED_TRANSCRIPT_1,CallOutcome.ESCALATED, "Parent unhappy with batch change. Escalated to student counsellor."),
+            (ESCALATED_TRANSCRIPT_2,CallOutcome.ESCALATED, "Parent concerned about student stress. Transferred to academic counsellor."),
+            (CANCELLED_TRANSCRIPT,  CallOutcome.CANCELLED, "Parent cancelled demo class for Sneha Reddy. Will reschedule later."),
+            (NEW_CALLER_TRANSCRIPT,  CallOutcome.BOOKED,    "New student Kiran Sharma booked Physics demo with Dr. Rao on Tuesday at 11 AM."),
         ]
 
         call_records = []
         for i in range(15):
             days_ago = random.randint(0, 6)
-            hour = random.randint(8, 17)
+            hour = random.randint(9, 18)
             started = now - timedelta(days=days_ago, hours=random.randint(0, 8))
-            started = started.replace(hour=hour, minute=random.randint(0, 59))
+            started = started.replace(hour=hour, minute=random.randint(0, 59), second=0, microsecond=0)
             duration = random.randint(60, 420)
 
             t_idx = i % len(transcripts)
             transcript, outcome, summary = transcripts[t_idx]
 
-            # Add timestamps to transcript entries
-            stamped = []
-            for j, entry in enumerate(transcript):
-                stamped.append({
-                    **entry,
-                    "timestamp": (started + timedelta(seconds=j * 15)).isoformat(),
-                })
+            stamped = [
+                {**entry, "timestamp": (started + timedelta(seconds=j * 15)).isoformat()}
+                for j, entry in enumerate(transcript)
+            ]
 
-            caller = random.choice(PATIENTS)
+            caller = random.choice(CALLERS)
             call = Call(
+                tenant_id=tenant_id,
                 vapi_call_id=f"demo-call-{uuid.uuid4().hex[:12]}",
                 caller_number=caller["phone"],
                 started_at=started,
@@ -226,49 +284,51 @@ async def seed():
 
         # ── Appointments (8 across the next 2 weeks) ─────────────────────
         apt_types = [
-            ("Follow-up Visit", 30),
-            ("New Client Visit", 60),
-            ("Emergency", 30),
-            ("Consultation", 45),
-            ("Assessment", 60),
-            ("Extended Session", 90),
-            ("Initial Evaluation", 60),
-            ("Follow-up Visit", 30),
+            ("Demo Class",         60, faculty_records[0]),  # Prof. Mehta — Maths
+            ("Counselling Session", 45, faculty_records[0]),
+            ("Demo Class",         60, faculty_records[1]),  # Dr. Rao — Physics
+            ("Demo Class",         60, faculty_records[2]),  # Ms. Nair — English
+            ("Enrollment Meeting", 30, faculty_records[2]),
+            ("Counselling Session", 45, faculty_records[1]),
+            ("Demo Class",         60, faculty_records[0]),
+            ("Demo Class",         60, faculty_records[1]),
         ]
 
-        for i, (apt_type, duration) in enumerate(apt_types):
+        for i, (apt_type, duration, faculty) in enumerate(apt_types):
             days_ahead = random.randint(1, 14)
             hour = random.choice([9, 10, 11, 13, 14, 15, 16])
-            scheduled = now + timedelta(days=days_ahead)
-            scheduled = scheduled.replace(hour=hour, minute=0, second=0, microsecond=0)
+            scheduled = (now + timedelta(days=days_ahead)).replace(
+                hour=hour, minute=0, second=0, microsecond=0
+            )
 
-            patient = PATIENTS[i % len(PATIENTS)]
-
-            # Link to a call record if the appointment was AI-booked
+            caller_data = CALLERS[i % len(CALLERS)]
             linked_call = call_records[i % len(call_records)] if i < 5 else None
 
             appointment = Appointment(
+                tenant_id=tenant_id,
                 cal_booking_id=f"demo-booking-{uuid.uuid4().hex[:8]}",
                 cal_booking_uid=f"demo-uid-{uuid.uuid4().hex[:8]}",
-                patient_name=patient["name"],
-                patient_phone=patient["phone"],
-                patient_email=patient["email"],
-                date_of_birth=patient["dob"],
+                student_name=caller_data["name"],
+                student_phone=caller_data["phone"],
+                student_email=caller_data["email"],
+                date_of_birth=caller_data["dob"],
                 appointment_type=apt_type,
                 scheduled_at=scheduled,
                 duration_minutes=duration,
                 status=AppointmentStatus.CONFIRMED,
                 booked_via=BookedVia.AI if i < 6 else BookedVia.MANUAL,
+                provider_id=faculty.id,
                 call_id=linked_call.id if linked_call else None,
-                notes=f"Demo appointment — {apt_type.lower()}",
+                notes=f"Demo seed — {apt_type.lower()}",
             )
             session.add(appointment)
 
-        await session.flush()
         await session.commit()
         print(f"✓ Created {len(apt_types)} appointments")
 
         print("\n✅ Database seeded successfully!")
+        print(f"   Tenant slug : {DEMO_TENANT_SLUG}")
+        print(f"   Tenant id   : {tenant_id}")
         print("   Run the server: python -m backend.main")
 
 

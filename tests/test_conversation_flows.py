@@ -2,7 +2,7 @@
 Conversation flow simulator.
 
 Exercises the LLM proxy end-to-end against a real Ollama backend, but with
-calendar / Twilio tool execution mocked. Validates every common patient
+calendar / Twilio tool execution mocked. Validates every common caller
 interaction so we don't have to discover bugs through real Vapi calls.
 
 Run:  venv/bin/python tests/test_conversation_flows.py
@@ -94,14 +94,14 @@ async def mock_execute_tool(name, args, tenant_ctx=None):
         if not formatted:
             summary = (
                 f"There are no available appointment slots on {friendly}. "
-                f"Tell the patient politely that day is fully booked or closed, "
+                f"Tell the caller politely that day is fully booked or closed, "
                 f"and offer to check a different day. Do NOT read this message verbatim."
             )
         else:
             time_list = ", ".join(s["time_label"] for s in formatted[:3])
             summary = (
                 f"Available times on {friendly}: {time_list}. "
-                f"Offer these to the patient in natural conversation. "
+                f"Offer these to the caller in natural conversation. "
                 f"Do NOT read JSON or field names aloud."
             )
         return {
@@ -114,9 +114,9 @@ async def mock_execute_tool(name, args, tenant_ctx=None):
     if name == "book_appointment":
         # Mirror the same validation logic as the real _execute_tool
         required = {
-            "patient_name": "the patient's full name",
-            "phone": "the patient's phone number",
-            "dob": "the patient's date of birth",
+            "caller_name": "the caller's full name",
+            "phone": "the caller's phone number",
+            "dob": "the caller's date of birth",
             "slot_time": "a confirmed appointment time (call get_available_slots first)",
             "appointment_type": "the appointment type",
         }
@@ -133,37 +133,37 @@ async def mock_execute_tool(name, args, tenant_ctx=None):
                 "missing": [f for f, _ in missing],
                 "summary_for_assistant": (
                     f"Cannot book yet — missing: {missing_list}. "
-                    f"Do NOT tell the patient the booking is confirmed. "
-                    f"Ask the patient ONLY for the missing items in a natural sentence."
+                    f"Do NOT tell the caller the booking is confirmed. "
+                    f"Ask the caller ONLY for the missing items in a natural sentence."
                 ),
             }
         return {
             "ok": True,
             "booking_id": "MOCK-12345",
             "summary_for_assistant": (
-                f"Booking confirmed for {args.get('patient_name')} at {args.get('slot_time')}. "
-                f"Tell the patient briefly that the booking is confirmed and they will get an SMS."
+                f"Booking confirmed for {args.get('caller_name')} at {args.get('slot_time')}. "
+                f"Tell the caller briefly that the booking is confirmed and they will get an SMS."
             ),
         }
 
     if name == "escalate_to_human":
         return {
             "ok": True,
-            "summary_for_assistant": "Transfer initiated. Tell the patient briefly to please hold.",
+            "summary_for_assistant": "Transfer initiated. Tell the caller briefly to please hold.",
         }
 
-    if name == "lookup_patient_appointments":
+    if name == "lookup_caller_appointments":
         phone = args.get("phone", "")
-        # Mock: known returning patient
+        # Mock: known returning caller
         if "555-1234" in phone or "5551234" in phone:
             return {
                 "ok": True,
                 "summary_for_assistant": (
                     "Sarah Johnson has 1 upcoming appointment: Follow-up Visit on Monday, May 11, 2026 at 10:00 AM. "
-                    "Tell the patient about their appointment naturally. "
+                    "Tell the caller about their appointment naturally. "
                     "If they want to reschedule, use the booking_uid with reschedule_appointment."
                 ),
-                "patient_name": "Sarah Johnson",
+                "caller_name": "Sarah Johnson",
                 "upcoming": [{
                     "type": "Follow-up Visit",
                     "date": "Monday, May 11, 2026",
@@ -173,7 +173,7 @@ async def mock_execute_tool(name, args, tenant_ctx=None):
             }
         return {
             "ok": False,
-            "summary_for_assistant": f"No patient record found for {phone}. Ask if they'd like to schedule a new appointment.",
+            "summary_for_assistant": f"No record found for {phone}. Ask if they'd like to schedule a new appointment.",
         }
 
     if name == "reschedule_appointment":
@@ -181,7 +181,7 @@ async def mock_execute_tool(name, args, tenant_ctx=None):
             "ok": True,
             "summary_for_assistant": (
                 "Appointment rescheduled successfully. "
-                "Tell the patient their appointment has been moved to the new time."
+                "Tell the caller their appointment has been moved to the new time."
             ),
         }
 
@@ -204,19 +204,19 @@ class FlowResult:
         return all(c[1] for c in self.checks)
 
 
-async def run_flow(name, turns, system_prompt, model="llama3.2:latest", patient_context=None):
+async def run_flow(name, turns, system_prompt, model="llama3.2:latest", caller_context=None):
     """
     Run one multi-turn conversation. `turns` is a list of dicts:
       {"user": str, "checks": [(label, predicate(reply)) ...]}
-    If patient_context is provided, builds a patient-aware system prompt.
+    If caller_context is provided, builds a caller-aware system prompt.
     Returns FlowResult.
     """
     result = FlowResult(name)
     client = OpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
 
-    # If patient context is provided, rebuild prompt with it
-    if patient_context:
-        system_prompt = build_system_prompt(patient_context=patient_context)
+    # If caller context is provided, rebuild prompt with it
+    if caller_context:
+        system_prompt = build_system_prompt(caller_context=caller_context)
 
     messages = [
         {"role": "system", "content": system_prompt},
@@ -272,17 +272,16 @@ async def run_flow(name, turns, system_prompt, model="llama3.2:latest", patient_
     return result
 
 
-# ─── Mock patient contexts for returning-patient flows ──────────────────────
+# ─── Mock caller contexts for returning-caller flows ────────────────────────
 
-MOCK_RETURNING_PATIENT = {
-    "patient": {
+MOCK_RETURNING_CALLER = {
+    "caller": {
         "name": "Sarah Johnson",
         "phone": "+15125551234",
         "dob": "03/15/1985",
-        "is_new_patient": False,
+        "is_new": False,
         "visit_count": 4,
         "preferred_type": "follow_up",
-        "allergies": None,
         "notes": None,
     },
     "upcoming_appointments": [
@@ -301,16 +300,15 @@ MOCK_RETURNING_PATIENT = {
     "months_since_last_visit": 6,
 }
 
-MOCK_RETURNING_PATIENT_NO_UPCOMING = {
-    "patient": {
+MOCK_RETURNING_CALLER_NO_UPCOMING = {
+    "caller": {
         "name": "John Smith",
         "phone": "+15125559876",
         "dob": "05/01/1990",
-        "is_new_patient": False,
+        "is_new": False,
         "visit_count": 2,
         "preferred_type": "consultation",
-        "allergies": "Penicillin",
-        "notes": "Prefers morning appointments",
+        "notes": "Prefers morning sessions",
     },
     "upcoming_appointments": [],
     "past_appointments": [
@@ -469,20 +467,20 @@ def all_flows():
              ]},
         ]),
 
-        # ─── TIER 1: Caller Recognition & Returning Patient Flows ────────
+        # ─── TIER 1: Caller Recognition & Returning Caller Flows ─────────
 
-        # Flow: returning patient — agent should greet by name, NOT ask for info
-        ("ReturningPatient_Greeting", [
+        # Flow: returning caller — agent should greet by name, NOT ask for info
+        ("ReturningCaller_Greeting", [
             {"user": "Hi, I'd like to schedule a follow-up.",
              "checks": [
                  ("natural_reply", is_natural),
                  ("knows_name_or_context", lambda r: mentions_any(r, ["Sarah", "welcome back", "follow", "schedule", "happy to help"])),
                  ("doesnt_ask_name", lambda r: mentions_none(r, ["what is your name", "may I have your name", "can I get your name"])),
              ]},
-        ], MOCK_RETURNING_PATIENT),
+        ], MOCK_RETURNING_CALLER),
 
-        # Flow: returning patient mentions upcoming appointment
-        ("ReturningPatient_ExistingAppt", [
+        # Flow: returning caller mentions upcoming appointment
+        ("ReturningCaller_ExistingAppt", [
             {"user": "Hi, I'm calling about my upcoming appointment.",
              "checks": [
                  ("natural_reply", is_natural),
@@ -490,20 +488,20 @@ def all_flows():
                      "follow", "may 11", "monday", "10", "upcoming",
                  ])),
              ]},
-        ], MOCK_RETURNING_PATIENT),
+        ], MOCK_RETURNING_CALLER),
 
-        # Flow: returning patient with no upcoming — should suggest scheduling
-        ("ReturningPatient_NoUpcoming", [
+        # Flow: returning caller with no upcoming — should suggest scheduling
+        ("ReturningCaller_NoUpcoming", [
             {"user": "Hi there.",
              "checks": [
                  ("natural_reply", is_natural),
                  # LLM sometimes says "John" and sometimes "Hi there! Welcome back"
                  ("knows_name_or_greeting", lambda r: mentions_any(r, ["John", "welcome", "back", "help", "how"])),
              ]},
-        ], MOCK_RETURNING_PATIENT_NO_UPCOMING),
+        ], MOCK_RETURNING_CALLER_NO_UPCOMING),
 
-        # Flow: returning patient wants to reschedule
-        ("ReturningPatient_Reschedule", [
+        # Flow: returning caller wants to reschedule
+        ("ReturningCaller_Reschedule", [
             {"user": "I need to move my appointment to a different day.",
              "checks": [
                  ("natural_reply", is_natural),
@@ -511,10 +509,10 @@ def all_flows():
                      "reschedule", "move", "change", "different", "may 11", "follow", "which day", "when",
                  ])),
              ]},
-        ], MOCK_RETURNING_PATIENT),
+        ], MOCK_RETURNING_CALLER),
 
-        # Flow: returning patient — pre-filled booking (doesn't ask for DOB/phone again)
-        ("ReturningPatient_QuickBook", [
+        # Flow: returning caller — pre-filled booking (doesn't ask for DOB/phone again)
+        ("ReturningCaller_QuickBook", [
             {"user": "Can I schedule an appointment for Tuesday?",
              "checks": [
                  ("natural_reply", is_natural),
@@ -522,13 +520,13 @@ def all_flows():
                  ("doesnt_ask_dob", lambda r: mentions_none(r, ["date of birth", "DOB", "when were you born"])),
                  ("doesnt_ask_phone", lambda r: mentions_none(r, ["phone number", "what's your number"])),
              ]},
-        ], MOCK_RETURNING_PATIENT),
+        ], MOCK_RETURNING_CALLER),
 
         # ─── Original multi-turn booking flow ────────────────────────────
 
         # Flow 9: multi-turn booking
         # Critical: turn 1 must NOT falsely claim a booking is confirmed
-        # because no patient info or chosen slot has been provided yet.
+        # because no caller info or chosen slot has been provided yet.
         ("Booking_Multiturn", [
             {"user": "I'd like to book an appointment for Monday.",
              "checks": [
@@ -577,14 +575,14 @@ async def main():
     results = []
 
     for flow_tuple in flows:
-        # Support (name, turns) or (name, turns, patient_context)
+        # Support (name, turns) or (name, turns, caller_context)
         name = flow_tuple[0]
         turns = flow_tuple[1]
-        patient_ctx = flow_tuple[2] if len(flow_tuple) > 2 else None
+        caller_ctx = flow_tuple[2] if len(flow_tuple) > 2 else None
 
-        print(f"\n▸ Running flow: {name}" + (" [returning patient]" if patient_ctx else ""))
+        print(f"\n▸ Running flow: {name}" + (" [returning caller]" if caller_ctx else ""))
         try:
-            result = await run_flow(name, turns, sp, patient_context=patient_ctx)
+            result = await run_flow(name, turns, sp, caller_context=caller_ctx)
         except Exception as exc:
             print(f"   FLOW CRASHED: {exc}")
             r = FlowResult(name)

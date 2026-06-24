@@ -48,9 +48,9 @@ TENANT_ID = uuid.UUID("33333333-3333-3333-3333-333333333333")
 def _make_mock_tenant(**overrides):
     t = MagicMock()
     t.id = overrides.get("id", TENANT_ID)
-    t.slug = overrides.get("slug", "test-clinic")
-    t.business_name = overrides.get("business_name", "Test Clinic")
-    t.business_type = MagicMock(value=overrides.get("business_type_val", "clinic"))
+    t.slug = overrides.get("slug", "test-institute")
+    t.business_name = overrides.get("business_name", "Test Institute")
+    t.business_type = MagicMock(value=overrides.get("business_type_val", "coaching_institute"))
     t.business_phone = overrides.get("business_phone", "+15551112222")
     t.business_address = overrides.get("business_address", "100 Test St")
     t.timezone = overrides.get("timezone_val", "America/Chicago")
@@ -74,8 +74,8 @@ def _make_mock_tenant(**overrides):
     t.holidays = overrides.get("holidays", [])
     t.knowledge_base = overrides.get("knowledge_base", {})
     t.emergency_guidance = overrides.get("emergency_guidance", "")
-    t.owner_name = "Dr. Test"
-    t.owner_email = "dr@test.com"
+    t.owner_name = "Prof. Test"
+    t.owner_email = "admin@test.com"
     t.owner_phone = "+15551231234"
     t.plan = MagicMock(value="starter")
     t.status = MagicMock(value="ACTIVE")
@@ -120,7 +120,7 @@ def test_send_no_show_sms():
     from backend.services import sms_service
 
     ctx = _make_ctx(
-        business_name="Bright Smile Dental",
+        business_name="Bright Future Coaching",
         timezone_val="America/New_York",
         demo_mode=True,
     )
@@ -134,18 +134,18 @@ def test_send_no_show_sms():
 
     with patch.object(sms_service, "_send_sms", side_effect=_capture):
         result = sms_service.send_no_show(
-            patient_name="John Doe",
+            caller_name="John Doe",
             phone="+15551234567",
-            appointment_type="Cleaning",
+            appointment_type="Demo Class",
             scheduled_at=datetime(2026, 5, 5, 10, 30, tzinfo=timezone.utc),
             tenant_ctx=ctx,
         )
 
     _assert(result is True, "send_no_show returns True")
     body = captured.get("body", "")
-    _assert("John Doe" in body, "patient name in body")
-    _assert("Cleaning" in body, "appointment type in body")
-    _assert("Bright Smile Dental" in body, "business name in body")
+    _assert("John Doe" in body, "caller name in body")
+    _assert("Demo Class" in body, "appointment type in body")
+    _assert("Bright Future Coaching" in body, "business name in body")
     _assert("missed" in body.lower() or "reschedule" in body.lower(),
             "reschedule prompt in body")
 
@@ -162,7 +162,7 @@ def test_send_no_show_skipped_when_no_twilio():
     # Force LOCAL_CHAT_MODE off + DEMO_MODE off so we go through the real path
     with patch.object(sms_service.settings, "LOCAL_CHAT_MODE", False):
         ok = sms_service.send_no_show(
-            patient_name="X",
+            caller_name="X",
             phone="+15551231234",
             appointment_type="Visit",
             scheduled_at=datetime(2026, 5, 5, 10, 0, tzinfo=timezone.utc),
@@ -361,7 +361,7 @@ def test_escalate_uses_transfer_number():
             return await llm_service._execute_tool(
                 "test_call_id",
                 "escalate_to_human",
-                {"reason": "human plz", "patient_name": "X", "phone": "+15551231234"},
+                {"reason": "human plz", "caller_name": "X", "phone": "+15551231234"},
                 tenant_ctx=ctx,
             )
         result = asyncio.run(_run())
@@ -462,28 +462,28 @@ def test_prompt_has_escalation_via_phone():
     from backend.prompts.agent_prompt import build_system_prompt
 
     ctx = _make_ctx(
-        business_type_val="dental",
+        business_type_val="coaching_institute",
         emergency_guidance="",
         escalation_phone="+15559990000",  # phone but no guidance text
     )
     prompt = build_system_prompt(tenant_ctx=ctx)
-    _assert("Knocked out tooth" in prompt,
-            "dental defaults kick in when escalation_phone is set")
+    _assert("transfer to a human counselor" in prompt.lower() or "escalation" in prompt.lower(),
+            "escalation block present when escalation_phone is set")
 
 
 def test_prompt_no_escalation_when_nothing_set():
-    print("\n── No escalation block when tenant has nothing configured ──")
+    print("\n── No human-transfer block when tenant has nothing configured ──")
     from backend.prompts.agent_prompt import build_system_prompt
 
     ctx = _make_ctx(
-        business_type_val="dental",
+        business_type_val="coaching_institute",
         emergency_guidance="",
         escalation_phone="",
         escalation_transfer_number="",
     )
     prompt = build_system_prompt(tenant_ctx=ctx)
-    _assert("Knocked out tooth" not in prompt,
-            "no dental defaults when escalation channels not configured")
+    _assert("not configured escalation" in prompt.lower() or "has not configured" in prompt.lower(),
+            "prompt states escalation not configured when no channels set")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -531,16 +531,16 @@ def test_waitlist_check_conflicts_route():
             "promote route still registered")
 
 
-# ── Prompt update: says doctor not provider when speaking to patient ────────
-def test_prompt_uses_doctor_terminology():
-    print("\n── system prompt directs the AI to say 'doctor' to patients ──")
+# ── Prompt update: says faculty not provider when speaking to caller ────────
+def test_prompt_uses_faculty_terminology():
+    print("\n── system prompt directs the AI to say 'faculty' to callers ──")
     from backend.prompts.agent_prompt import build_system_prompt
 
     prompt = build_system_prompt(tenant_ctx=None)
-    _assert("doctor" in prompt.lower(),
-            "prompt mentions 'doctor' for patient-facing speech")
-    _assert("DOCTOR SELECTION" in prompt or "doctor" in prompt.lower(),
-            "DOCTOR SELECTION section present")
+    _assert("faculty" in prompt.lower(),
+            "prompt uses 'faculty' terminology for caller-facing speech")
+    _assert("doctor" not in prompt.lower(),
+            "prompt does NOT use medical 'doctor' terminology")
 
 
 # ── Past-date guard: waitlist service refuses past preferred_date ───────────
@@ -552,8 +552,8 @@ def test_waitlist_rejects_past_date():
     # 2000-01-01 is unambiguously in the past
     result = asyncio.run(waitlist_service.add_to_waitlist(
         tenant_id=ctx.tenant_id,
-        patient_name="Past Person",
-        patient_phone="+15550000001",
+        caller_name="Past Person",
+        student_phone="+15550000001",
         appointment_type="consultation",
         preferred_date="2000-01-01",
         tenant_ctx=ctx,
@@ -631,8 +631,8 @@ def test_waitlist_rejects_holiday():
 
     result = asyncio.run(waitlist_service.add_to_waitlist(
         tenant_id=ctx.tenant_id,
-        patient_name="Holiday Person",
-        patient_phone="+15550000002",
+        caller_name="Holiday Person",
+        student_phone="+15550000002",
         appointment_type="consultation",
         preferred_date=future,
         tenant_ctx=ctx,
@@ -795,7 +795,7 @@ def main():
         test_waitlist_promote_request_supports_force,
         test_waitlist_service_force_promote_wired,
         test_waitlist_check_conflicts_route,
-        test_prompt_uses_doctor_terminology,
+        test_prompt_uses_faculty_terminology,
         test_waitlist_rejects_past_date,
         test_prompt_includes_past_date_guard,
         test_get_available_slots_rejects_past_date,

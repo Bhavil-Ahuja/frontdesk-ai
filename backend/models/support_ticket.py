@@ -45,9 +45,10 @@ class TicketPriority(str, enum.Enum):
 
 
 class MessageSender(str, enum.Enum):
-    """Who sent the message — the tenant (client) or a platform admin."""
+    """Who sent the message — the tenant (client), a platform admin, or the system (audit trail)."""
     TENANT = "TENANT"
     ADMIN = "ADMIN"
+    SYSTEM = "SYSTEM"
 
 
 class SupportTicket(Base):

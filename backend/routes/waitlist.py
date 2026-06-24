@@ -34,7 +34,7 @@ class PromoteRequest(BaseModel):
         False,
         description=(
             "If True, bypass the provider/time concurrency check. Use only when "
-            "the admin has confirmed the double-book in the UI (e.g. the doctor "
+            "the admin has confirmed the double-book in the UI (e.g. the faculty member "
             "has explicitly agreed to take an overlapping appointment)."
         ),
     )
@@ -77,7 +77,7 @@ async def cancel_waitlist_entry(
     entry_id: str,
     current_user: Tenant = Depends(auth_service.get_current_user),
 ):
-    """Cancel a waitlist entry. The patient is notified by SMS."""
+    """Cancel a waitlist entry. The caller is notified by SMS."""
     logger.info("[Waitlist] Cancelling entry %s for tenant=%s", entry_id, current_user.slug)
     try:
         tenant_ctx = await tenant_service.resolve_by_id(current_user.id)
@@ -135,7 +135,7 @@ async def promote_waitlist_entry(
     Promote a waitlist entry to a booked appointment.
 
     Books the slot via the tenant's calendar (Google or native), marks the
-    entry BOOKED, and sends the patient an SMS confirming the booking.
+    entry BOOKED, and sends the caller an SMS confirming the booking.
     """
     logger.info(
         "[Waitlist] Promoting entry %s for tenant=%s at %s",

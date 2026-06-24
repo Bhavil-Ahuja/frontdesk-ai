@@ -36,6 +36,7 @@ from backend.defaults import (
     slugify_appointment_type,
 )
 from backend.models.appointment import Appointment, AppointmentStatus, BookedVia
+from backend.models.caller import Caller
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +99,7 @@ async def get_native_slots(
         max_concurrent: how many overlapping bookings are allowed per slot
             before it's considered full. Default 1 (classic single-booking).
         exclude_booking_uid: if provided, excludes this booking from the
-            overlap check. Used during rescheduling so the patient's own
+            overlap check. Used during rescheduling so the caller's own
             appointment doesn't block the new time they want to move to.
         appointment_type: when set, only count existing appointments of the
             same type toward the concurrency limit (case-insensitive).
@@ -143,7 +144,7 @@ async def get_native_slots(
 
     # ── Generate slot grid in local timezone, convert to UTC ─────────────
     # Always use a fixed 15-minute grid (:00, :15, :30, :45) regardless of
-    # appointment duration so patients can start at any quarter-hour.
+    # appointment duration so callers can start at any quarter-hour.
     effective_interval = _SLOT_INTERVAL
 
     candidate_slots_local: list[datetime] = []
@@ -167,15 +168,19 @@ async def get_native_slots(
 
     existing_appointments: list[Appointment] = []
     async with async_session() as session:
-        query = select(Appointment).where(
-            and_(
-                Appointment.scheduled_at >= day_start_utc,
-                Appointment.scheduled_at < day_end_utc,
-                Appointment.status == AppointmentStatus.CONFIRMED,
+        query = (
+            select(Appointment)
+            .join(Caller, Appointment.caller_id == Caller.id)
+            .where(
+                and_(
+                    Appointment.scheduled_at >= day_start_utc,
+                    Appointment.scheduled_at < day_end_utc,
+                    Appointment.status == AppointmentStatus.CONFIRMED,
+                )
             )
         )
         if tenant_id:
-            query = query.where(Appointment.tenant_id == tenant_id)
+            query = query.where(Caller.tenant_id == tenant_id)
         # Only count appointments of the SAME type toward the concurrency
         # limit — different types are independent resource pools.
         # Stored values are normalised at booking time via
@@ -184,7 +189,7 @@ async def get_native_slots(
             query = query.where(
                 func.lower(Appointment.appointment_type) == slugify_appointment_type(appointment_type)
             )
-        # Exclude the appointment being rescheduled so the patient's own
+        # Exclude the appointment being rescheduled so the caller's own
         # booking doesn't block the new slot they want to move to.
         if exclude_booking_uid:
             query = query.where(Appointment.cal_booking_uid != exclude_booking_uid)
@@ -248,6 +253,7 @@ async def get_provider_aware_slots(
     holidays: list[dict[str, Any]] | None = None,
     exclude_booking_uid: str | None = None,
     appointment_type: str = "",
+    subject: str | None = None,
 ) -> dict[str, Any]:
     """
     Get available slots with provider-level concurrency tracking.
@@ -315,44 +321,48 @@ async def get_provider_aware_slots(
         local_tz = ZoneInfo(DEFAULT_TIMEZONE)
 
     dow_key = _DOW_KEYS[target_date.weekday()]
+    is_demo_class = slugify_appointment_type(appointment_type) == "demo_class"
 
-    # Default business hours
-    if not business_hours:
-        business_hours = DEFAULT_BUSINESS_HOURS
-
-    day_hours = business_hours.get(dow_key)
-    if not day_hours:
-        logger.info("[NativeSched] %s (%s) is closed", date_str, dow_key)
-        return {"slots": [], "provider_filter": str(provider_id) if provider_id else None}
-
-    try:
-        open_h, open_m = map(int, day_hours["open"].split(":"))
-        close_h, close_m = map(int, day_hours["close"].split(":"))
-    except (KeyError, ValueError) as exc:
-        logger.warning("[NativeSched] Bad business hours for %s: %s", dow_key, exc)
-        return {"slots": [], "provider_filter": str(provider_id) if provider_id else None}
-
-    open_time = dtime(open_h, open_m)
-    close_time = dtime(close_h, close_m)
-
-    # Generate candidate slots — always use fixed 15-minute grid
-    effective_interval = _SLOT_INTERVAL
-
+    # For demo_class, providers' fixed windows override business hours entirely.
+    # For all other types, enforce the business-hours grid as usual.
     candidate_slots_local: list[datetime] = []
     candidate_slots_utc: list[datetime] = []
 
-    current_local = datetime.combine(target_date, open_time, tzinfo=local_tz)
-    latest_start_local = datetime.combine(target_date, close_time, tzinfo=local_tz) - timedelta(minutes=duration_minutes)
+    if not is_demo_class:
+        # Default business hours
+        if not business_hours:
+            business_hours = DEFAULT_BUSINESS_HOURS
 
-    while current_local <= latest_start_local:
-        candidate_slots_local.append(current_local)
-        candidate_slots_utc.append(current_local.astimezone(timezone.utc))
-        current_local += timedelta(minutes=effective_interval)
+        day_hours = business_hours.get(dow_key)
+        if not day_hours:
+            logger.info("[NativeSched] %s (%s) is closed", date_str, dow_key)
+            return {"slots": [], "provider_filter": str(provider_id) if provider_id else None}
 
-    if not candidate_slots_utc:
-        return {"slots": [], "provider_filter": str(provider_id) if provider_id else None}
+        try:
+            open_h, open_m = map(int, day_hours["open"].split(":"))
+            close_h, close_m = map(int, day_hours["close"].split(":"))
+        except (KeyError, ValueError) as exc:
+            logger.warning("[NativeSched] Bad business hours for %s: %s", dow_key, exc)
+            return {"slots": [], "provider_filter": str(provider_id) if provider_id else None}
 
-    # Get providers
+        open_time = dtime(open_h, open_m)
+        close_time = dtime(close_h, close_m)
+
+        # Generate candidate slots — always use fixed 15-minute grid
+        effective_interval = _SLOT_INTERVAL
+
+        current_local = datetime.combine(target_date, open_time, tzinfo=local_tz)
+        latest_start_local = datetime.combine(target_date, close_time, tzinfo=local_tz) - timedelta(minutes=duration_minutes)
+
+        while current_local <= latest_start_local:
+            candidate_slots_local.append(current_local)
+            candidate_slots_utc.append(current_local.astimezone(timezone.utc))
+            current_local += timedelta(minutes=effective_interval)
+
+        if not candidate_slots_utc:
+            return {"slots": [], "provider_filter": str(provider_id) if provider_id else None}
+
+    # Get providers (filter by subject if specified — for demo class bookings)
     async with async_session() as session:
         provider_query = select(Provider).where(
             and_(
@@ -364,9 +374,75 @@ async def get_provider_aware_slots(
             provider_query = provider_query.where(Provider.id == provider_id)
 
         provider_result = await session.execute(provider_query)
-        providers = list(provider_result.scalars().all())
+        providers_raw = list(provider_result.scalars().all())
 
-    if not providers:
+    # Filter by subject in Python (case-insensitive fuzzy match).
+    # Uses a canonical alias map so common variants resolve reliably:
+    #   "Maths" → "math", "Mathematics" → "math"  (prevents "maths" in "mathematics" = False)
+    #   "Chem" → "chem", "Chemistry" → "chem", etc.
+    # Falls back to bidirectional substring for anything not in the map.
+    _SUBJECT_ALIASES: dict[str, str] = {
+        "math": "math",
+        "maths": "math",
+        "mathematics": "math",
+        "phy": "physics",
+        "phys": "physics",
+        "physics": "physics",
+        "chem": "chemistry",
+        "chemistry": "chemistry",
+        "bio": "biology",
+        "biology": "biology",
+        "eng": "english",
+        "english": "english",
+        "cs": "computer_science",
+        "computer science": "computer_science",
+        "computer_science": "computer_science",
+    }
+
+    def _subjects_match(a: str, b: str) -> bool:
+        al, bl = a.strip().lower(), b.strip().lower()
+        if al == bl:
+            return True
+        canon_a = _SUBJECT_ALIASES.get(al, al)
+        canon_b = _SUBJECT_ALIASES.get(bl, bl)
+        if canon_a == canon_b:
+            return True
+        # fallback: bidirectional substring (handles unlisted aliases)
+        return al in bl or bl in al
+
+    if subject:
+        providers = [
+            p for p in providers_raw
+            if p.subject and _subjects_match(subject, p.subject)
+        ]
+        if not providers:
+            logger.info(
+                "[NativeSched] No providers found for subject=%r in tenant=%s",
+                subject, tenant_id,
+            )
+            return {
+                "slots": [],
+                "provider_filter": str(provider_id) if provider_id else None,
+                "subject_filter": subject,
+            }
+    else:
+        providers = providers_raw
+
+    # For demo_class: only providers WITH demo_time_slots configured are eligible.
+    # Providers without demo_time_slots are excluded entirely — no grid fallback.
+    if is_demo_class:
+        providers = [p for p in providers if p.demo_time_slots]
+        if not providers:
+            logger.info(
+                "[NativeSched] demo_class: no providers with demo_time_slots in tenant=%s",
+                tenant_id,
+            )
+            return {
+                "slots": [],
+                "provider_filter": str(provider_id) if provider_id else None,
+            }
+
+    if not providers and not is_demo_class:
         # No providers configured — fall back to global slot availability
         logger.info("[NativeSched] No providers found, using global availability (max_concurrent=%d)", max_concurrent)
         simple_slots = await get_native_slots(
@@ -379,17 +455,34 @@ async def get_provider_aware_slots(
             "provider_filter": None,
         }
 
+    # ── Demo class: fixed-window path ────────────────────────────────────────
+    if is_demo_class:
+        return await _get_demo_class_slots(
+            target_date=target_date,
+            local_tz=local_tz,
+            providers=providers,
+            tenant_id=tenant_id,
+            appointment_type=appointment_type,
+            max_concurrent=max_concurrent,
+            exclude_booking_uid=exclude_booking_uid,
+            provider_id=provider_id,
+        )
+
     # Get existing appointments for this day
     day_start_utc = candidate_slots_utc[0] - timedelta(hours=1)
     day_end_utc = candidate_slots_utc[-1] + timedelta(minutes=duration_minutes, hours=1)
 
     async with async_session() as session:
-        appt_query = select(Appointment).where(
-            and_(
-                Appointment.tenant_id == tenant_id,
-                Appointment.scheduled_at >= day_start_utc,
-                Appointment.scheduled_at < day_end_utc,
-                Appointment.status == AppointmentStatus.CONFIRMED,
+        appt_query = (
+            select(Appointment)
+            .join(Caller, Appointment.caller_id == Caller.id)
+            .where(
+                and_(
+                    Caller.tenant_id == tenant_id,
+                    Appointment.scheduled_at >= day_start_utc,
+                    Appointment.scheduled_at < day_end_utc,
+                    Appointment.status == AppointmentStatus.CONFIRMED,
+                )
             )
         )
         # Only count appointments of the SAME type toward the concurrency
@@ -398,7 +491,7 @@ async def get_provider_aware_slots(
             appt_query = appt_query.where(
                 func.lower(Appointment.appointment_type) == slugify_appointment_type(appointment_type)
             )
-        # Exclude the appointment being rescheduled so the patient's own
+        # Exclude the appointment being rescheduled so the caller's own
         # booking doesn't block the new slot they want to move to.
         if exclude_booking_uid:
             appt_query = appt_query.where(Appointment.cal_booking_uid != exclude_booking_uid)
@@ -408,6 +501,7 @@ async def get_provider_aware_slots(
 
     # Build lookup: provider_id → list of (start_utc, end_utc)
     provider_bookings: dict[uuid.UUID, list[tuple[datetime, datetime]]] = {p.id: [] for p in providers}
+
     for appt in existing_appointments:
         if appt.provider_id and appt.provider_id in provider_bookings:
             appt_start = appt.scheduled_at
@@ -445,6 +539,7 @@ async def get_provider_aware_slots(
                     "id": str(provider.id),
                     "name": provider.name,
                     "title": provider.title,
+                    "subject": provider.subject,
                     "slots_remaining": max_conc - overlap_count,
                 })
 
@@ -463,12 +558,205 @@ async def get_provider_aware_slots(
     }
 
 
+# ── Demo class helpers ───────────────────────────────────────────────────────
+
+
+async def _get_demo_class_slots(
+    target_date,
+    local_tz,
+    providers,
+    tenant_id,
+    appointment_type,
+    max_concurrent,
+    exclude_booking_uid,
+    provider_id,
+) -> dict[str, Any]:
+    """
+    Generate available demo class slots from each provider's demo_time_slots windows.
+
+    Unlike the 15-min grid, demo classes have fixed start/end times configured per
+    provider. Duration = end - start for each window.  Different providers can have
+    different windows; slots are merged by (time, duration) with their available
+    providers aggregated.
+    """
+    now_local = datetime.now(local_tz)
+    dow_key = _DOW_KEYS[target_date.weekday()]
+
+    # Gather all window boundary times to build a DB query range
+    all_starts_local: list[datetime] = []
+    all_ends_local: list[datetime] = []
+    for p in providers:
+        for window in ((p.demo_time_slots or {}).get(dow_key) or []):
+            try:
+                sh, sm = map(int, window["start"].split(":"))
+                eh, em = map(int, window["end"].split(":"))
+                all_starts_local.append(datetime.combine(target_date, dtime(sh, sm), tzinfo=local_tz))
+                all_ends_local.append(datetime.combine(target_date, dtime(eh, em), tzinfo=local_tz))
+            except (KeyError, ValueError, AttributeError, TypeError):
+                pass
+
+    if not all_starts_local:
+        return {"slots": [], "provider_filter": str(provider_id) if provider_id else None}
+
+    day_start_utc = min(all_starts_local).astimezone(timezone.utc) - timedelta(hours=1)
+    day_end_utc = max(all_ends_local).astimezone(timezone.utc) + timedelta(hours=1)
+
+    # Fetch existing confirmed appointments for this day
+    async with async_session() as session:
+        appt_query = (
+            select(Appointment)
+            .join(Caller, Appointment.caller_id == Caller.id)
+            .where(
+                and_(
+                    Caller.tenant_id == tenant_id,
+                    Appointment.scheduled_at >= day_start_utc,
+                    Appointment.scheduled_at < day_end_utc,
+                    Appointment.status == AppointmentStatus.CONFIRMED,
+                )
+            )
+        )
+        if appointment_type:
+            appt_query = appt_query.where(
+                func.lower(Appointment.appointment_type) == slugify_appointment_type(appointment_type)
+            )
+        if exclude_booking_uid:
+            appt_query = appt_query.where(Appointment.cal_booking_uid != exclude_booking_uid)
+        appt_result = await session.execute(appt_query)
+        existing_appointments = list(appt_result.scalars().all())
+
+    # Build provider → list[(start_utc, end_utc)] lookup
+    provider_bookings: dict[uuid.UUID, list[tuple[datetime, datetime]]] = {p.id: [] for p in providers}
+    for appt in existing_appointments:
+        if appt.provider_id and appt.provider_id in provider_bookings:
+            appt_start = appt.scheduled_at
+            if appt_start.tzinfo is None:
+                appt_start = appt_start.replace(tzinfo=timezone.utc)
+            appt_end = appt_start + timedelta(minutes=appt.duration_minutes or 30)
+            provider_bookings[appt.provider_id].append((appt_start, appt_end))
+
+    # Build slot map: (time_iso, duration_minutes) → slot dict
+    slot_map: dict[tuple[str, int], dict] = {}
+
+    for p in providers:
+        for window in ((p.demo_time_slots or {}).get(dow_key) or []):
+            try:
+                w_start = window.get("start", "")
+                w_end = window.get("end", "")
+                sh, sm = map(int, w_start.split(":"))
+                eh, em = map(int, w_end.split(":"))
+            except (KeyError, ValueError, AttributeError, TypeError):
+                continue
+
+            duration = (eh * 60 + em) - (sh * 60 + sm)
+            if duration <= 0:
+                continue
+
+            slot_local = datetime.combine(target_date, dtime(sh, sm), tzinfo=local_tz)
+            if slot_local < now_local + timedelta(minutes=5):
+                continue  # Skip past / imminent slots
+
+            slot_utc = slot_local.astimezone(timezone.utc)
+            slot_end_utc = slot_utc + timedelta(minutes=duration)
+
+            # Concurrency check for this provider at this window
+            bookings = provider_bookings.get(p.id, [])
+            overlap_count = sum(
+                1 for bs, be in bookings
+                if slot_utc < be and slot_end_utc > bs
+            )
+            provider_limit = p.max_concurrent or 1
+            max_conc = min(provider_limit, max_concurrent) if max_concurrent > 0 else provider_limit
+
+            if overlap_count < max_conc:
+                key = (slot_local.isoformat(), duration)
+                if key not in slot_map:
+                    slot_map[key] = {
+                        "time": slot_local.isoformat(),
+                        "duration_minutes": duration,
+                        "available_providers": [],
+                    }
+                slot_map[key]["available_providers"].append({
+                    "id": str(p.id),
+                    "name": p.name,
+                    "title": p.title,
+                    "subject": p.subject,
+                    "slots_remaining": max_conc - overlap_count,
+                })
+
+    result_slots = sorted(slot_map.values(), key=lambda s: s["time"])
+
+    logger.info(
+        "[NativeSched] demo_class %s: %d windows available (providers=%d, appts=%d)",
+        target_date, len(result_slots), len(providers), len(existing_appointments),
+    )
+    return {
+        "slots": result_slots,
+        "provider_filter": str(provider_id) if provider_id else None,
+    }
+
+
+async def _resolve_demo_duration(
+    provider_id: uuid.UUID,
+    scheduled_at_utc: datetime,
+    tz_name: str = DEFAULT_TIMEZONE,
+) -> int | None:
+    """
+    For a demo_class booking, find which of the provider's demo_time_slots windows
+    the scheduled UTC time falls into and return that window's duration (minutes).
+
+    Returns None if the provider has no windows or none match the slot.
+    """
+    from backend.models.provider import Provider as _Provider
+
+    try:
+        local_tz = ZoneInfo(tz_name)
+    except Exception:
+        local_tz = ZoneInfo(DEFAULT_TIMEZONE)
+
+    # Convert UTC booking time to local HH:MM for window matching
+    scheduled_local = scheduled_at_utc.astimezone(local_tz)
+    slot_hhmm = scheduled_local.strftime("%H:%M")
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(_Provider).where(_Provider.id == provider_id)
+        )
+        provider = result.scalar_one_or_none()
+
+    if not provider or not provider.demo_time_slots:
+        return None
+
+    dow_key = _DOW_KEYS[scheduled_local.weekday()]
+    day_windows = (provider.demo_time_slots or {}).get(dow_key) or []
+
+    for window in day_windows:
+        if not isinstance(window, dict):
+            continue
+        w_start = window.get("start", "")
+        w_end = window.get("end", "")
+        if w_start == slot_hhmm:
+            try:
+                sh, sm = map(int, w_start.split(":"))
+                eh, em = map(int, w_end.split(":"))
+                dur = (eh * 60 + em) - (sh * 60 + sm)
+                if dur > 0:
+                    return dur
+            except (ValueError, AttributeError):
+                pass
+
+    logger.warning(
+        "[NativeSched] No demo window matched %s for provider=%s (tz=%s)",
+        slot_hhmm, provider_id, tz_name,
+    )
+    return None
+
+
 # ── Booking ──────────────────────────────────────────────────────────────────
 
 
 async def create_native_booking(
     tenant_id: uuid.UUID | None,
-    patient_info: dict[str, str],
+    caller_info: dict[str, str],
     appointment_type: str,
     start_time: str,
     duration_minutes: int = DEFAULT_APPOINTMENT_DURATION_MINUTES,
@@ -502,48 +790,67 @@ async def create_native_booking(
     # used in tenant config and SQL overlap queries.
     appointment_type = slugify_appointment_type(appointment_type)
 
-    # Normalise phone so it matches patient lookups (E.164 format)
-    from backend.services.patient_service import _normalise_phone, upsert_patient
-    norm_phone = _normalise_phone(patient_info.get("phone", ""))
+    # Normalise phone so it matches caller lookups (E.164 format)
+    from backend.services.caller_service import _normalise_phone, upsert_caller
+    norm_phone = _normalise_phone(caller_info.get("phone", ""))
 
-    # Upsert the patient record so caller recognition works on next call
-    await upsert_patient(
-        name=patient_info.get("name", ""),
+    # Upsert the caller record so caller recognition works on next call
+    caller_rec = await upsert_caller(
+        name=caller_info.get("name", ""),
         phone=norm_phone,
-        dob=patient_info.get("dob", ""),
-        email=patient_info.get("email", ""),
+        dob=caller_info.get("dob", ""),
+        email=caller_info.get("email", ""),
         appointment_type=appointment_type,
         tenant_id=tenant_id,
         is_test=is_test,
     )
 
-    # ── Pre-booking concurrency check ─────────────────────────────────────
+    # ── Resolve tenant (needed for timezone, demo duration, and concurrency) ──
+    from backend.services.calendar_service import _resolve_appointment_config
+    from backend.models.tenant import Tenant as _Tenant
+
+    _tenant_obj = None
+    _tz_name = DEFAULT_TIMEZONE
+    if tenant_id:
+        async with async_session() as _ts:
+            _tr = await _ts.execute(select(_Tenant).where(_Tenant.id == tenant_id))
+            _tenant_obj = _tr.scalar_one_or_none()
+            if _tenant_obj and getattr(_tenant_obj, "timezone", None):
+                _tz_name = _tenant_obj.timezone
+
+    # ── Demo class duration override ───────────────────────────────────────────
+    # For demo_class bookings the duration is determined by the provider's
+    # configured time window (e.g. 8:00–10:00 = 120 min), not tenant config.
+    if appointment_type == "demo_class" and provider_id:
+        _demo_dur = await _resolve_demo_duration(provider_id, scheduled_at, _tz_name)
+        if _demo_dur and _demo_dur > 0:
+            duration_minutes = _demo_dur
+            logger.info(
+                "[NativeSched] Demo class duration resolved: %d min (provider=%s)",
+                duration_minutes, provider_id,
+            )
+
+    # ── Pre-booking concurrency check ─────────────────────────────────────────
     # Verify that the slot hasn't filled up since get_available_slots was
     # called. This closes the race window between slot-check and insert.
-    from backend.services.calendar_service import _resolve_appointment_config
-
-    # Resolve max_concurrent from tenant config
     _max_conc = 1
-    if tenant_id:
-        from backend.models.tenant import Tenant as _Tenant
-        async with async_session() as _check_session:
-            _t_result = await _check_session.execute(
-                select(_Tenant).where(_Tenant.id == tenant_id)
-            )
-            _tenant = _t_result.scalar_one_or_none()
-            if _tenant:
-                _, _max_conc = _resolve_appointment_config(appointment_type, _tenant)
+    if _tenant_obj:
+        _, _max_conc = _resolve_appointment_config(appointment_type, _tenant_obj)
 
-            # Count overlapping confirmed appointments of the same type
-            booking_end = scheduled_at + timedelta(minutes=duration_minutes)
-            _overlap_q = select(Appointment).where(
-                and_(
-                    Appointment.status == AppointmentStatus.CONFIRMED,
-                    Appointment.scheduled_at < booking_end,
+        # Count overlapping confirmed appointments of the same type
+        booking_end = scheduled_at + timedelta(minutes=duration_minutes)
+        async with async_session() as _check_session:
+            _overlap_q = (
+                select(Appointment)
+                .join(Caller, Appointment.caller_id == Caller.id)
+                .where(
+                    and_(
+                        Appointment.status == AppointmentStatus.CONFIRMED,
+                        Appointment.scheduled_at < booking_end,
+                    )
                 )
             )
-            if tenant_id:
-                _overlap_q = _overlap_q.where(Appointment.tenant_id == tenant_id)
+            _overlap_q = _overlap_q.where(Caller.tenant_id == tenant_id)
             if appointment_type:
                 _overlap_q = _overlap_q.where(
                     func.lower(Appointment.appointment_type) == slugify_appointment_type(appointment_type)
@@ -574,19 +881,18 @@ async def create_native_booking(
     try:
         async with async_session() as session:
             appt = Appointment(
-                tenant_id=tenant_id,
+                caller_id=caller_rec.id if caller_rec else None,
                 cal_booking_uid=booking_uid,
-                patient_name=patient_info.get("name", ""),
-                patient_phone=norm_phone,
-                patient_email=patient_info.get("email", ""),
-                date_of_birth=patient_info.get("dob", ""),
+                student_name=caller_info.get("name", ""),
+                student_phone=norm_phone,
+                student_email=caller_info.get("email", ""),
+                date_of_birth=caller_info.get("dob", ""),
                 appointment_type=appointment_type,
                 scheduled_at=scheduled_at,
                 duration_minutes=duration_minutes,
                 status=AppointmentStatus.CONFIRMED,
                 booked_via=BookedVia.AI,
                 provider_id=provider_id,
-                is_test=is_test,
                 notes=notes,
             )
             session.add(appt)
@@ -607,7 +913,7 @@ async def create_native_booking(
     except IntegrityError as exc:
         # Unique-index violation = slot already taken by another booking
         # since we last checked availability. Surface this so the caller can
-        # tell the patient "sorry, that slot was just taken — pick another."
+        # tell the caller "sorry, that slot was just taken — pick another."
         logger.warning(
             "[NativeSched] Booking conflict for provider=%s at %s (uid=%s): %s",
             provider_id, scheduled_at, booking_uid, str(exc.orig)[:160],
@@ -620,7 +926,7 @@ async def create_native_booking(
         "status": "ACCEPTED",
     }
     logger.info("[NativeSched] ✓ Booking created: %s for %s @ %s (%d min, provider=%s)",
-                booking_uid, patient_info.get("name"), start_time, duration_minutes, provider_id)
+                booking_uid, caller_info.get("name"), start_time, duration_minutes, provider_id)
     return result
 
 
@@ -652,7 +958,7 @@ async def cancel_native_booking(
             old_status=old_status.value if old_status else None,
             new_status=AppointmentStatus.CANCELLED.value,
             changed_by="ai_agent",
-            note=f"Cancelled by patient via call{(': ' + reason) if reason else ''}",
+            note=f"Cancelled by caller via call{(': ' + reason) if reason else ''}",
         )
         session.add(history_entry)
 
@@ -704,9 +1010,10 @@ async def reschedule_native_booking(
         tenant = None
         max_conc = 1
         duration = appt.duration_minutes or DEFAULT_APPOINTMENT_DURATION_MINUTES
-        if appt.tenant_id:
+        _appt_tenant_id = appt.tenant_id  # @property → caller.tenant_id
+        if _appt_tenant_id:
             tenant_result = await session.execute(
-                select(Tenant).where(Tenant.id == appt.tenant_id)
+                select(Tenant).where(Tenant.id == _appt_tenant_id)
             )
             tenant = tenant_result.scalar_one_or_none()
             if tenant:
@@ -718,15 +1025,19 @@ async def reschedule_native_booking(
         # Fetch confirmed appointments that could overlap with the new time.
         # We fetch rows and check overlap in Python to avoid Postgres-specific
         # interval arithmetic on the duration_minutes column.
-        overlap_query = select(Appointment).where(
-            and_(
-                Appointment.status == AppointmentStatus.CONFIRMED,
-                Appointment.scheduled_at < new_end,
-                Appointment.cal_booking_uid != booking_uid,  # exclude self
+        overlap_query = (
+            select(Appointment)
+            .join(Caller, Appointment.caller_id == Caller.id)
+            .where(
+                and_(
+                    Appointment.status == AppointmentStatus.CONFIRMED,
+                    Appointment.scheduled_at < new_end,
+                    Appointment.cal_booking_uid != booking_uid,  # exclude self
+                )
             )
         )
-        if appt.tenant_id:
-            overlap_query = overlap_query.where(Appointment.tenant_id == appt.tenant_id)
+        if _appt_tenant_id:
+            overlap_query = overlap_query.where(Caller.tenant_id == _appt_tenant_id)
         if appt.appointment_type:
             overlap_query = overlap_query.where(
                 func.lower(Appointment.appointment_type) == slugify_appointment_type(appt.appointment_type)

@@ -36,7 +36,7 @@ def _resolve_twilio(tenant_ctx: Any | None) -> tuple[str, str, str]:
 
     Option A (centralised SaaS): the platform owns ONE Twilio account. All
     tenants share the global SID + auth token from .env. Only the from-number
-    differs per tenant — each clinic gets its own Twilio number so patients
+    differs per tenant — each tenant gets its own Twilio number so callers
     see a local caller-ID.
 
     If a tenant has its own credentials stored (legacy Option B), they are
@@ -63,10 +63,10 @@ def _business_name(tenant_ctx: Any | None) -> str:
 
 
 def _business_phone_display(tenant_ctx: Any | None) -> str:
-    """Human-readable phone for patient-facing templates.
+    """Human-readable phone for caller-facing templates.
 
-    Returns the clinic's real phone number — never the Twilio provisioned
-    number (which is an internal routing number patients shouldn't see).
+    Returns the institute's real phone number — never the Twilio provisioned
+    number (which is an internal routing number callers shouldn't see).
 
     Fallback chain: business_phone → escalation_phone → "" (omit).
     """
@@ -87,7 +87,7 @@ def _to_local_time(dt: datetime, tenant_ctx: Any | None) -> datetime:
 
     The DB stores all scheduled_at values in UTC.  Before formatting a
     human-readable date/time string (for SMS, emails, etc.) we must
-    convert to the tenant's timezone so patients see the correct local
+    convert to the tenant's timezone so callers see the correct local
     time — e.g. "9:00 AM CST" not "3:00 PM UTC".
     """
     tz_name = tenant_ctx.timezone if tenant_ctx else DEFAULT_TIMEZONE
@@ -114,10 +114,10 @@ def _escalation_phone(tenant_ctx: Any | None) -> str:
     return settings.ESCALATION_PHONE_NUMBER  # legacy .env fallback
 
 
-def _send_sms(to: str, body: str, tenant_ctx: Any | None = None) -> bool:
+def _send_sms(to: str, body: str, tenant_ctx: Any | None = None, is_test: bool = False) -> bool:
     """
     Send an SMS via Twilio REST API. Returns True on success.
-    In LOCAL_CHAT_MODE or demo mode, messages are logged but not actually sent.
+    In LOCAL_CHAT_MODE, demo mode, or for test data, messages are logged but not actually sent.
     When Twilio is disabled (feature flag), messages are silently skipped.
     """
     # Feature flag: skip when Twilio is globally or per-tenant disabled
@@ -134,6 +134,11 @@ def _send_sms(to: str, body: str, tenant_ctx: Any | None = None) -> bool:
 
     if _is_demo(tenant_ctx):
         logger.info("[DEMO SMS → %s] %s", to, body)
+        return True
+
+    # Never hit Twilio for test agent flows — test phone numbers aren't real
+    if is_test:
+        logger.info("[TEST SMS — skipped → %s] %s", to, body)
         return True
 
     sid, token, from_number = _resolve_twilio(tenant_ctx)
@@ -200,9 +205,10 @@ async def _async_log_outbound_sms(
     tenant_id: uuid.UUID,
     to_number: str,
     body: str,
-    patient_phone: str,
+    caller_phone: str,
     from_number: str = "",
     is_test: bool = False,
+    sender_type: str = "agent",
 ) -> None:
     """Persist an outbound SMS record for conversation threading / audit.
 
@@ -213,17 +219,31 @@ async def _async_log_outbound_sms(
     # Lazy import to avoid circular dependency (sms_inbound_service -> sms_service)
     from backend.database import async_session
     from backend.models.sms_message import SMSMessage, SMSDirection
+    from backend.models.caller import Caller
+    from backend.services.caller_service import _phone_col_clean, _phone_digits_tail
+    from sqlalchemy import select as _select, and_ as _and_
 
     try:
+        from backend.services.caller_service import upsert_caller as _upsert_caller
+
+        # Upsert caller so caller_id is always set (SMSMessage.caller_id is NOT NULL)
+        _caller_rec = await _upsert_caller(
+            name="",
+            phone=caller_phone,
+            email="",
+            tenant_id=tenant_id,
+            is_test=caller_phone.startswith("+1555"),
+        )
+        _caller_id = _caller_rec.id if _caller_rec else None
+
         async with async_session() as session:
             msg = SMSMessage(
-                tenant_id=tenant_id,
+                caller_id=_caller_id,
                 direction=SMSDirection.OUTBOUND,
                 from_number=from_number,
                 to_number=to_number,
                 body=body,
-                patient_phone=patient_phone,
-                is_test=is_test,
+                sender_type=sender_type,
             )
             session.add(msg)
             await session.commit()
@@ -238,7 +258,9 @@ def _log_outbound_sms(
     tenant_ctx: Any | None,
     to_number: str,
     body: str,
-    patient_phone: str,
+    caller_phone: str,
+    is_test: bool = False,
+    sender_type: str = "agent",
 ) -> None:
     """Schedule an outbound SMS log entry on the running async event loop.
 
@@ -251,7 +273,8 @@ def _log_outbound_sms(
         tenant_ctx: TenantContext (must have .tenant_id).
         to_number: The recipient phone number.
         body: The message text that was sent.
-        patient_phone: The patient phone used for conversation threading.
+        caller_phone: The caller phone used for conversation threading.
+        sender_type: 'agent' (AI), 'admin' (manual from UI), 'system' (automated).
     """
     if not tenant_ctx:
         logger.debug("[SMS Service] No tenant_ctx — skipping outbound SMS log")
@@ -271,8 +294,10 @@ def _log_outbound_sms(
                 tenant_id=tenant_id,
                 to_number=to_number,
                 body=body,
-                patient_phone=patient_phone,
+                caller_phone=caller_phone,
                 from_number=from_number,
+                is_test=is_test,
+                sender_type=sender_type,
             )
         )
     except RuntimeError:
@@ -284,8 +309,10 @@ def _log_outbound_sms(
                 tenant_id=tenant_id,
                 to_number=to_number,
                 body=body,
-                patient_phone=patient_phone,
+                caller_phone=caller_phone,
                 from_number=from_number,
+                is_test=is_test,
+                sender_type=sender_type,
             )
         )
 
@@ -294,13 +321,14 @@ def _log_outbound_sms(
 
 
 def send_confirmation(
-    patient_name: str,
+    caller_name: str,
     phone: str,
     appointment_type: str,
     scheduled_at: datetime,
     tenant_ctx: Any | None = None,
+    is_test: bool = False,
 ) -> bool:
-    """Send appointment confirmation SMS to the patient."""
+    """Send appointment confirmation SMS to the caller."""
     biz = _business_name(tenant_ctx)
     biz_phone = _business_phone_display(tenant_ctx)
     tz = _tz_abbrev(tenant_ctx)
@@ -309,45 +337,47 @@ def send_confirmation(
     time_str = local_dt.strftime("%I:%M %p").lstrip("0")
     contact = f" Questions? Call {biz_phone}." if biz_phone else ""
     body = (
-        f"Hi {patient_name}! Your {appointment_type} at {biz} is confirmed "
+        f"Hi {caller_name}! Your {appointment_type} at {biz} is confirmed "
         f"for {date_str} at {time_str} {tz}.{contact} See you soon!"
     )
-    ok = _send_sms(phone, body, tenant_ctx)
+    ok = _send_sms(phone, body, tenant_ctx, is_test=is_test)
     if ok:
-        _log_outbound_sms(tenant_ctx, to_number=phone, body=body, patient_phone=phone)
+        _log_outbound_sms(tenant_ctx, to_number=phone, body=body, caller_phone=phone, is_test=is_test)
     return ok
 
 
 def send_cancellation(
-    patient_name: str,
+    caller_name: str,
     phone: str,
     scheduled_at: datetime,
     tenant_ctx: Any | None = None,
+    is_test: bool = False,
 ) -> bool:
-    """Send appointment cancellation SMS to the patient."""
+    """Send appointment cancellation SMS to the caller."""
     biz = _business_name(tenant_ctx)
     biz_phone = _business_phone_display(tenant_ctx)
     local_dt = _to_local_time(scheduled_at, tenant_ctx)
     date_str = local_dt.strftime("%A, %B %d, %Y")
     contact = f" Call us anytime to reschedule: {biz_phone}" if biz_phone else " Reply to this message to reschedule."
     body = (
-        f"Hi {patient_name}, your {biz} appointment on {date_str} "
+        f"Hi {caller_name}, your {biz} appointment on {date_str} "
         f"has been cancelled.{contact}"
     )
-    ok = _send_sms(phone, body, tenant_ctx)
+    ok = _send_sms(phone, body, tenant_ctx, is_test=is_test)
     if ok:
-        _log_outbound_sms(tenant_ctx, to_number=phone, body=body, patient_phone=phone)
+        _log_outbound_sms(tenant_ctx, to_number=phone, body=body, caller_phone=phone, is_test=is_test)
     return ok
 
 
 def send_reschedule(
-    patient_name: str,
+    caller_name: str,
     phone: str,
     new_scheduled_at: datetime,
     appointment_type: str,
     tenant_ctx: Any | None = None,
+    is_test: bool = False,
 ) -> bool:
-    """Send reschedule confirmation SMS to the patient."""
+    """Send reschedule confirmation SMS to the caller."""
     biz = _business_name(tenant_ctx)
     biz_phone = _business_phone_display(tenant_ctx)
     tz = _tz_abbrev(tenant_ctx)
@@ -356,29 +386,29 @@ def send_reschedule(
     time_str = local_dt.strftime("%I:%M %p").lstrip("0")
     contact = f" Questions? Call {biz_phone}." if biz_phone else ""
     body = (
-        f"Hi {patient_name}! Your {appointment_type} at {biz} has been "
+        f"Hi {caller_name}! Your {appointment_type} at {biz} has been "
         f"rescheduled to {date_str} at {time_str} {tz}.{contact}"
     )
-    ok = _send_sms(phone, body, tenant_ctx)
+    ok = _send_sms(phone, body, tenant_ctx, is_test=is_test)
     if ok:
-        _log_outbound_sms(tenant_ctx, to_number=phone, body=body, patient_phone=phone)
+        _log_outbound_sms(tenant_ctx, to_number=phone, body=body, caller_phone=phone, is_test=is_test)
     return ok
 
 
 def send_waitlist_added(
-    patient_name: str,
+    caller_name: str,
     phone: str,
     appointment_type: str,
     preferred_date: str,
     preferred_time_start: str | None = None,
     preferred_time_end: str | None = None,
     tenant_ctx: Any | None = None,
+    is_test: bool = False,
 ) -> bool:
-    """Confirm to the patient that they were added to the waitlist."""
+    """Confirm to the caller that they were added to the waitlist."""
     biz = _business_name(tenant_ctx)
     biz_phone = _business_phone_display(tenant_ctx)
 
-    # Format the preferred date as a friendly string when possible
     try:
         date_str = datetime.strptime(preferred_date, "%Y-%m-%d").strftime("%A, %B %d")
     except (ValueError, TypeError):
@@ -394,24 +424,25 @@ def send_waitlist_added(
 
     contact = f" Questions? Call {biz_phone}." if biz_phone else ""
     body = (
-        f"Hi {patient_name}! You're on the {biz} waitlist for a "
+        f"Hi {caller_name}! You're on the {biz} waitlist for a "
         f"{appointment_type} on {date_str}{window}. We'll text you the moment "
         f"a matching slot opens up.{contact}"
     )
-    ok = _send_sms(phone, body, tenant_ctx)
+    ok = _send_sms(phone, body, tenant_ctx, is_test=is_test)
     if ok:
-        _log_outbound_sms(tenant_ctx, to_number=phone, body=body, patient_phone=phone)
+        _log_outbound_sms(tenant_ctx, to_number=phone, body=body, caller_phone=phone, is_test=is_test)
     return ok
 
 
 def send_waitlist_promoted(
-    patient_name: str,
+    caller_name: str,
     phone: str,
     appointment_type: str,
     scheduled_at: datetime,
     tenant_ctx: Any | None = None,
+    is_test: bool = False,
 ) -> bool:
-    """Notify the patient that their waitlist entry was promoted to a booked appointment."""
+    """Notify the caller that their waitlist entry was promoted to a booked appointment."""
     biz = _business_name(tenant_ctx)
     biz_phone = _business_phone_display(tenant_ctx)
     tz = _tz_abbrev(tenant_ctx)
@@ -420,24 +451,25 @@ def send_waitlist_promoted(
     time_str = local_dt.strftime("%I:%M %p").lstrip("0")
     contact = f" Need to change it? Call {biz_phone}." if biz_phone else ""
     body = (
-        f"Hi {patient_name}! Great news — a {appointment_type} slot opened at "
+        f"Hi {caller_name}! Great news — a {appointment_type} slot opened at "
         f"{biz} and we've booked it for you on {date_str} at {time_str} {tz}.{contact} "
         f"See you then!"
     )
-    ok = _send_sms(phone, body, tenant_ctx)
+    ok = _send_sms(phone, body, tenant_ctx, is_test=is_test)
     if ok:
-        _log_outbound_sms(tenant_ctx, to_number=phone, body=body, patient_phone=phone)
+        _log_outbound_sms(tenant_ctx, to_number=phone, body=body, caller_phone=phone, is_test=is_test)
     return ok
 
 
 def send_waitlist_cancelled(
-    patient_name: str,
+    caller_name: str,
     phone: str,
     appointment_type: str,
     preferred_date: str,
     tenant_ctx: Any | None = None,
+    is_test: bool = False,
 ) -> bool:
-    """Notify the patient that their waitlist entry was cancelled."""
+    """Notify the caller that their waitlist entry was cancelled."""
     biz = _business_name(tenant_ctx)
     biz_phone = _business_phone_display(tenant_ctx)
 
@@ -448,29 +480,29 @@ def send_waitlist_cancelled(
 
     contact = f" Want back on the list? Call {biz_phone}." if biz_phone else ""
     body = (
-        f"Hi {patient_name}, your {biz} waitlist request for a "
+        f"Hi {caller_name}, your {biz} waitlist request for a "
         f"{appointment_type} on {date_str} has been cancelled.{contact}"
     )
-    ok = _send_sms(phone, body, tenant_ctx)
+    ok = _send_sms(phone, body, tenant_ctx, is_test=is_test)
     if ok:
-        _log_outbound_sms(tenant_ctx, to_number=phone, body=body, patient_phone=phone)
+        _log_outbound_sms(tenant_ctx, to_number=phone, body=body, caller_phone=phone, is_test=is_test)
     return ok
 
 
 def send_escalation_notification(
-    patient_name: str,
+    caller_name: str,
     phone: str,
     tenant_ctx: Any | None = None,
 ) -> bool:
-    """Let the patient know a human will call them back."""
+    """Let the caller know a human will call them back."""
     biz = _business_name(tenant_ctx)
     body = (
-        f"Hi {patient_name}, you recently called {biz}. "
+        f"Hi {caller_name}, you recently called {biz}. "
         f"Our team will call you back within 30 minutes. Thank you!"
     )
     ok = _send_sms(phone, body, tenant_ctx)
     if ok:
-        _log_outbound_sms(tenant_ctx, to_number=phone, body=body, patient_phone=phone)
+        _log_outbound_sms(tenant_ctx, to_number=phone, body=body, caller_phone=phone)
     return ok
 
 
@@ -492,7 +524,7 @@ def send_office_alert(
     )
     ok = _send_sms(esc_phone, body, tenant_ctx)
     if ok:
-        _log_outbound_sms(tenant_ctx, to_number=esc_phone, body=body, patient_phone=caller_number)
+        _log_outbound_sms(tenant_ctx, to_number=esc_phone, body=body, caller_phone=caller_number)
     return ok
 
 
@@ -500,7 +532,7 @@ def send_office_alert(
 
 
 def send_reminder(
-    patient_name: str,
+    caller_name: str,
     phone: str,
     appointment_type: str,
     scheduled_at: datetime,
@@ -514,23 +546,23 @@ def send_reminder(
     time_str = local_dt.strftime("%I:%M %p").lstrip("0")
     contact = f" Need to reschedule? Call {biz_phone}." if biz_phone else ""
     body = (
-        f"Hi {patient_name}! Friendly reminder: your {appointment_type} at "
+        f"Hi {caller_name}! Friendly reminder: your {appointment_type} at "
         f"{biz} is coming up today at {time_str} {tz}.{contact} See you soon!"
     )
     ok = _send_sms(phone, body, tenant_ctx)
     if ok:
-        _log_outbound_sms(tenant_ctx, to_number=phone, body=body, patient_phone=phone)
+        _log_outbound_sms(tenant_ctx, to_number=phone, body=body, caller_phone=phone)
     return ok
 
 
 def send_no_show(
-    patient_name: str,
+    caller_name: str,
     phone: str,
     appointment_type: str,
     scheduled_at: datetime,
     tenant_ctx: Any | None = None,
 ) -> bool:
-    """Send a gentle no-show follow-up SMS inviting the patient to reschedule."""
+    """Send a gentle no-show follow-up SMS inviting the caller to reschedule."""
     biz = _business_name(tenant_ctx)
     biz_phone = _business_phone_display(tenant_ctx)
     local_dt = _to_local_time(scheduled_at, tenant_ctx)
@@ -538,17 +570,36 @@ def send_no_show(
     time_str = local_dt.strftime("%I:%M %p").lstrip("0")
     contact = f" Call {biz} at {biz_phone} to reschedule whenever you're ready." if biz_phone else f" Reply to this message to reschedule with {biz}."
     body = (
-        f"Hi {patient_name}, we missed you at your {appointment_type} on "
+        f"Hi {caller_name}, we missed you at your {appointment_type} on "
         f"{date_str} at {time_str}. We hope everything is okay.{contact}"
     )
     ok = _send_sms(phone, body, tenant_ctx)
     if ok:
-        _log_outbound_sms(tenant_ctx, to_number=phone, body=body, patient_phone=phone)
+        _log_outbound_sms(tenant_ctx, to_number=phone, body=body, caller_phone=phone)
+    return ok
+
+
+def send_custom_sms(
+    to: str,
+    message: str,
+    tenant_ctx: Any | None = None,
+    is_test: bool = False,
+    sender_type: str = "agent",
+) -> bool:
+    """
+    Send a fully custom SMS message.
+    Used by TenantCustomToolProvider (sms_send handler), CoachingToolProvider,
+    and admin manual send from the dashboard UI.
+    """
+    ok = _send_sms(to, message, tenant_ctx, is_test=is_test)
+    if ok:
+        _log_outbound_sms(tenant_ctx, to_number=to, body=message, caller_phone=to,
+                          is_test=is_test, sender_type=sender_type)
     return ok
 
 
 def send_followup(
-    patient_name: str,
+    caller_name: str,
     phone: str,
     tenant_ctx: Any | None = None,
 ) -> bool:
@@ -557,10 +608,10 @@ def send_followup(
     biz_phone = _business_phone_display(tenant_ctx)
     contact = f" If you have any questions or concerns, please call us at {biz_phone}." if biz_phone else ""
     body = (
-        f"Hi {patient_name}! Thank you for visiting {biz}. "
+        f"Hi {caller_name}! Thank you for visiting {biz}. "
         f"We hope everything went well!{contact} Have a great day!"
     )
     ok = _send_sms(phone, body, tenant_ctx)
     if ok:
-        _log_outbound_sms(tenant_ctx, to_number=phone, body=body, patient_phone=phone)
+        _log_outbound_sms(tenant_ctx, to_number=phone, body=body, caller_phone=phone)
     return ok

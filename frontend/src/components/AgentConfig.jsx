@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Power,
   Phone as PhoneIcon,
-  Clock,
   MessageSquare,
   Mic,
   Save,
@@ -11,13 +10,11 @@ import {
   Bot,
   CalendarCheck,
   Mail,
-  Building2,
   Eye,
   EyeOff,
   Link as LinkIcon,
   Plus,
   Trash2,
-  Stethoscope,
   Bell,
   Star,
   ToggleLeft,
@@ -26,29 +23,12 @@ import {
   Square,
   Volume2,
   Loader2,
-  AlertTriangle,
-  CalendarX,
   FlaskConical,
 } from 'lucide-react';
 import { apiFetch, API_BASE } from '../lib/api';
 import { getToken } from '../lib/api';
 import { useModal } from '../contexts/ModalContext';
 import { useAuth } from '../contexts/AuthContext';
-import ThemedDatePicker from './ui/ThemedDatePicker';
-import PhoneInput, { countryFromTimezone } from './ui/PhoneInput';
-
-const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
-
-// Convert an appointment-type display name into the lowercase underscored
-// "code" the backend stores internally. Strips non-alphanumerics so users
-// never have to think about slugs / IDs.
-function slugifyTypeName(name) {
-  return (name || '')
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '');
-}
 const VOICE_OPTIONS = [
   { id: '21m00Tcm4TlvDq8ikWAM', name: 'Rachel', description: 'Young female, warm and professional tone' },
   { id: 'AZnzlk1XvdvUeBnXmlld', name: 'Domi', description: 'Young female, confident and direct delivery' },
@@ -58,7 +38,7 @@ const VOICE_OPTIONS = [
 ];
 
 export default function AgentConfig() {
-  const { isAdmin } = useAuth();
+  const { isAdmin, user } = useAuth();
   const { confirm, prompt, toast } = useModal();
   const [config, setConfig] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -235,11 +215,11 @@ export default function AgentConfig() {
   }
 
   async function handleClearTestData() {
-    if (!window.confirm('Delete ALL test data (patients, appointments, waitlist, SMS) created via Test Agent? This cannot be undone.')) return;
+    if (!window.confirm('Delete ALL test data (contacts, appointments, waitlist, SMS) created via Test Agent? This cannot be undone.')) return;
     setClearingTestData(true);
     setTestDataResult(null);
     try {
-      const result = await apiFetch('/api/patients/test-data', { method: 'DELETE' });
+      const result = await apiFetch('/api/callers/test-data', { method: 'DELETE' });
       setTestDataResult(result);
       setTimeout(() => setTestDataResult(null), 6000);
     } catch (err) {
@@ -252,7 +232,7 @@ export default function AgentConfig() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500"></div>
+        <div className="w-8 h-8 border-2 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin" />
       </div>
     );
   }
@@ -266,17 +246,17 @@ export default function AgentConfig() {
   }
 
   return (
-    <div className="p-4 md:p-8 space-y-4 md:space-y-6 max-w-4xl mx-auto">
+    <div className="p-5 md:p-8 space-y-5 max-w-4xl mx-auto animate-fade-in">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sticky top-0 bg-gray-50 dark:bg-gray-900 -mx-4 md:-mx-8 px-4 md:px-8 py-3 md:py-4 border-b border-gray-200 dark:border-gray-700 z-10">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sticky top-0 bg-gray-50 dark:bg-[#0a0a0f] -mx-5 md:-mx-8 px-5 md:px-8 py-4 border-b border-gray-200/60 dark:border-white/5 z-10">
         <div>
-          <h2 className="text-xl md:text-2xl font-bold text-gray-900 dark:text-white">Agent Configuration</h2>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Manage your AI receptionist settings</p>
+          <h1 className="text-xl md:text-2xl font-bold text-gray-900 dark:text-white">AI Agent</h1>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">Manage your AI agent settings</p>
         </div>
         <button
           onClick={saveConfig}
           disabled={saving}
-          className="flex items-center gap-2 px-5 py-2.5 bg-primary-500 text-white rounded-lg text-sm font-medium hover:bg-primary-600 disabled:opacity-50 transition-colors shadow-sm"
+          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold text-white bg-indigo-500 hover:bg-indigo-600 disabled:opacity-50 transition-all btn-press"
         >
           {saved ? (
             <>
@@ -284,7 +264,7 @@ export default function AgentConfig() {
             </>
           ) : (
             <>
-              <Save className="w-4 h-4" /> {saving ? 'Saving...' : 'Save Settings'}
+              <Save className="w-4 h-4" /> {saving ? 'Saving…' : 'Save Settings'}
             </>
           )}
         </button>
@@ -298,14 +278,14 @@ export default function AgentConfig() {
       )}
 
       {/* Agent status — toggleable with double confirm */}
-      <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
+      <div className="bg-white dark:bg-gray-900/60 rounded-2xl border border-gray-200/80 dark:border-white/5 p-6">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div
-              className={`p-3 rounded-lg ${config.agent_active ? 'bg-green-50 dark:bg-green-900/30' : 'bg-red-50 dark:bg-red-900/30'}`}
+              className={`p-3 rounded-lg ${config.agent_active ? 'bg-indigo-50 dark:bg-indigo-900/30' : 'bg-red-50 dark:bg-red-900/30'}`}
             >
               <Power
-                className={`w-6 h-6 ${config.agent_active ? 'text-green-600' : 'text-red-600'}`}
+                className={`w-6 h-6 ${config.agent_active ? 'text-indigo-500' : 'text-red-600'}`}
               />
             </div>
             <div>
@@ -395,67 +375,19 @@ export default function AgentConfig() {
         </div>
       </div>
 
-      {/* Business info */}
-      <Section icon={Building2} title="Business Information">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Field label="Business Name">
-            <input
-              type="text"
-              value={config.business_name || ''}
-              onChange={(e) => update('business_name', e.target.value)}
-              className="input"
-            />
-          </Field>
-          <Field label="Business Phone">
-            <PhoneInput
-              value={config.business_phone || ''}
-              onChange={(v) => update('business_phone', v)}
-              defaultCountry={countryFromTimezone(config.timezone)}
-              placeholder="(512) 555-0100"
-            />
-          </Field>
-          <Field label="Business Address" className="md:col-span-2">
-            <input
-              type="text"
-              value={config.business_address || ''}
-              onChange={(e) => update('business_address', e.target.value)}
-              placeholder="123 Main St, Austin, TX"
-              className="input"
-            />
-          </Field>
-          <Field
-            label="Timezone"
-            help="Timezone is set at registration and cannot be changed here. Contact support if you need to relocate."
-          >
-            <input
-              type="text"
-              value={config.timezone || ''}
-              readOnly
-              disabled
-              tabIndex={-1}
-              aria-readonly="true"
-              className="input cursor-not-allowed bg-gray-100 dark:bg-gray-700/50 text-gray-500 dark:text-gray-400"
-            />
-          </Field>
-        </div>
-      </Section>
-
       {/* Agent persona */}
       <Section icon={Bot} title="Agent Persona">
         <div className="grid grid-cols-1 gap-4">
-          <Field label="Agent Name">
+          <Field label="Agent Name" help="What your AI agent introduces itself as on calls.">
             <input
               type="text"
               value={config.agent_name || ''}
               onChange={(e) => update('agent_name', e.target.value)}
-              placeholder="Sarah"
+              placeholder="e.g. Aria, Nova, Echo"
               className="input"
             />
           </Field>
-          <Field
-            label="Greeting Message"
-            help="The first thing the AI agent says when answering a call."
-          >
+          <Field label="Greeting Message" help="The first thing the AI agent says when answering a call.">
             <textarea
               value={config.greeting_message || ''}
               onChange={(e) => update('greeting_message', e.target.value)}
@@ -464,252 +396,6 @@ export default function AgentConfig() {
               className="input resize-none"
             />
           </Field>
-          {/* Voice is managed by the platform — show help card instead */}
-          <div className="bg-violet-50 dark:bg-violet-900/20 border border-violet-200 dark:border-violet-800 rounded-xl p-4">
-            <div className="flex items-start gap-3">
-              <Mic className="w-5 h-5 text-violet-500 mt-0.5 shrink-0" />
-              <div>
-                <p className="text-sm font-semibold text-violet-900 dark:text-violet-300">Voice Configuration</p>
-                <p className="text-xs text-violet-700 dark:text-violet-400 mt-1">
-                  Voice settings are managed by the FrontDesk AI platform. Your agent's voice is automatically configured when your account is provisioned.
-                  Need help or want to change your voice? Submit a support ticket.
-                </p>
-                <a
-                  href="/support"
-                  className="inline-flex items-center gap-1.5 mt-2 text-xs font-medium text-violet-600 dark:text-violet-400 hover:text-violet-800 dark:hover:text-violet-300 transition-colors"
-                >
-                  <MessageSquare className="w-3.5 h-3.5" />
-                  Go to Support
-                </a>
-              </div>
-            </div>
-          </div>
-        </div>
-      </Section>
-
-      {/* Escalation */}
-      <Section icon={PhoneIcon} title="Escalation & Emergencies">
-        <div className="space-y-4">
-          {/* Prompt the owner to fill in emergency guidance when it's still blank.
-              Escalation phone is now collected at signup, so it should already
-              be populated — but emergency guidance is optional at signup and
-              should be filled in here. */}
-          {!config.emergency_guidance?.trim() && (
-            <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl p-4 flex items-start gap-3">
-              <AlertTriangle className="w-5 h-5 text-amber-500 dark:text-amber-400 mt-0.5 shrink-0" />
-              <div className="text-sm">
-                <p className="font-medium text-amber-900 dark:text-amber-300">
-                  Add emergency guidance below
-                </p>
-                <p className="text-amber-700 dark:text-amber-400 mt-1">
-                  Your agent doesn't have any emergency instructions yet. Without
-                  this, callers describing a medical emergency may not get
-                  appropriate first-aid steps. Add a short list of common
-                  scenarios and what the agent should say or do — for example,
-                  knocked-out tooth, severe bleeding, chest pain, or trouble
-                  breathing.
-                </p>
-              </div>
-            </div>
-          )}
-
-          <Field
-            label={
-              <>
-                Escalation Phone Number <span className="text-red-400">*</span>
-              </>
-            }
-            help="When the AI escalates a call, it transfers to this number. Set during signup; update here if it changes."
-          >
-            <PhoneInput
-              value={config.escalation_phone || ''}
-              onChange={(v) => update('escalation_phone', v)}
-              defaultCountry={countryFromTimezone(config.timezone)}
-              placeholder="(512) 555-0100"
-            />
-          </Field>
-          <Field
-            label="Emergency Guidance"
-            help="First-aid instructions the agent gives callers in emergencies, before transferring. Recommended."
-          >
-            <textarea
-              value={config.emergency_guidance || ''}
-              onChange={(e) => update('emergency_guidance', e.target.value)}
-              rows={5}
-              placeholder={
-                '- Knocked-out tooth: keep moist in milk or saliva, come in within 30 minutes, do not touch the root\n' +
-                '- Severe bleeding: apply firm pressure with clean gauze, ER if it does not stop\n' +
-                '- Chest pain or trouble breathing: call 911 immediately\n' +
-                '- Severe swelling or abscess: same-day visit, advise ER if breathing affected'
-              }
-              className="input resize-none font-mono text-xs"
-            />
-          </Field>
-        </div>
-      </Section>
-
-      {/* Business hours */}
-      <Section icon={Clock} title="Business Hours">
-        <div className="space-y-3">
-          {DAYS.map((day) => {
-            const hours = config.business_hours?.[day];
-            const isOpen = hours !== null && hours !== undefined;
-            return (
-              <div key={day} className="flex flex-wrap items-center gap-2 md:gap-4">
-                <div className="w-20 md:w-24">
-                  <span className="text-sm font-medium text-gray-700 dark:text-gray-300 capitalize">{day}</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const bh = { ...(config.business_hours || {}) };
-                    bh[day] = isOpen ? null : { open: '08:00', close: '18:00' };
-                    update('business_hours', bh);
-                  }}
-                  className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
-                    isOpen
-                      ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 hover:bg-green-200 dark:hover:bg-green-900/50'
-                      : 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
-                  }`}
-                >
-                  {isOpen ? 'Open' : 'Closed'}
-                </button>
-                {isOpen && (
-                  <>
-                    <input
-                      type="time"
-                      value={hours.open}
-                      onChange={(e) => {
-                        const bh = { ...config.business_hours };
-                        bh[day] = { ...bh[day], open: e.target.value };
-                        update('business_hours', bh);
-                      }}
-                      className="px-3 py-1.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 dark:text-white focus:ring-2 focus:ring-primary-500 outline-none"
-                    />
-                    <span className="text-gray-400">to</span>
-                    <input
-                      type="time"
-                      value={hours.close}
-                      onChange={(e) => {
-                        const bh = { ...config.business_hours };
-                        bh[day] = { ...bh[day], close: e.target.value };
-                        update('business_hours', bh);
-                      }}
-                      className="px-3 py-1.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 dark:text-white focus:ring-2 focus:ring-primary-500 outline-none"
-                    />
-                  </>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </Section>
-
-      {/* Holidays / Office Closures */}
-      <Section icon={CalendarX} title="Holidays & Office Closures">
-        <p className="text-sm text-gray-500 dark:text-gray-400 -mt-2 mb-3">
-          One-off days the office is closed (in addition to your weekly schedule above).
-          The agent will refuse bookings and proactively tell callers we're closed for the named holiday.
-          Add as many as you like, edit any time.
-        </p>
-        <HolidaysEditor
-          holidays={config.holidays || []}
-          onChange={(list) => update('holidays', list)}
-        />
-      </Section>
-
-      {/* Appointment Types */}
-      <Section icon={Stethoscope} title="Appointment Types">
-        <p className="text-sm text-gray-500 dark:text-gray-400 -mt-2 mb-3">
-          Define the types of appointments your agent can book. <strong>Max Concurrent</strong> controls
-          how many overlapping bookings are allowed per time slot (e.g. 3 means three patients can be
-          booked at 10:00 AM simultaneously).
-        </p>
-        <div className="space-y-3">
-          {(config.appointment_types || []).map((at, idx) => (
-            <div key={idx} className="flex items-start gap-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3 border border-gray-100 dark:border-gray-700">
-              <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-                <Field label="Name">
-                  <input
-                    type="text"
-                    value={at.name || ''}
-                    onChange={(e) => {
-                      const types = [...(config.appointment_types || [])];
-                      const newName = e.target.value;
-                      // Auto-generate the internal code from the display name so
-                      // the clinic owner never has to think about developer slugs.
-                      // We only regenerate when the existing code looks
-                      // auto-generated (matches the previous slugified name) or
-                      // is empty — preserves any custom code already in place.
-                      const prev = types[idx] || {};
-                      const prevSlug = slugifyTypeName(prev.name || '');
-                      const shouldAutoCode = !prev.code || prev.code === prevSlug;
-                      const nextCode = shouldAutoCode ? slugifyTypeName(newName) : prev.code;
-                      types[idx] = { ...prev, name: newName, code: nextCode };
-                      update('appointment_types', types);
-                    }}
-                    placeholder="Consultation"
-                    className="input"
-                  />
-                </Field>
-                <Field label="Duration (min)">
-                  <input
-                    type="number"
-                    min="5"
-                    max="480"
-                    value={at.duration_minutes || 60}
-                    onChange={(e) => {
-                      const types = [...(config.appointment_types || [])];
-                      types[idx] = { ...types[idx], duration_minutes: parseInt(e.target.value, 10) || 60 };
-                      update('appointment_types', types);
-                    }}
-                    className="input"
-                  />
-                </Field>
-                <Field label="Max Concurrent">
-                  <input
-                    type="number"
-                    min="1"
-                    max="50"
-                    value={at.max_concurrent || 1}
-                    onChange={(e) => {
-                      const types = [...(config.appointment_types || [])];
-                      types[idx] = { ...types[idx], max_concurrent: parseInt(e.target.value, 10) || 1 };
-                      update('appointment_types', types);
-                    }}
-                    className="input"
-                  />
-                </Field>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  const types = (config.appointment_types || []).filter((_, i) => i !== idx);
-                  update('appointment_types', types);
-                }}
-                className="mt-6 p-1.5 text-gray-400 dark:text-gray-500 hover:text-red-500 transition-colors"
-                title="Remove appointment type"
-              >
-                <Trash2 className="w-4 h-4" />
-              </button>
-            </div>
-          ))}
-          <button
-            type="button"
-            onClick={() => {
-              const types = [...(config.appointment_types || [])];
-              types.push({ code: '', name: '', duration_minutes: 60, max_concurrent: 1 });
-              update('appointment_types', types);
-            }}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-primary-600 bg-primary-50 dark:bg-primary-900/20 rounded-lg hover:bg-primary-100 dark:hover:bg-primary-900/40 transition-colors"
-          >
-            <Plus className="w-4 h-4" />
-            Add Appointment Type
-          </button>
-          <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">
-            Tip: the internal short code is generated for you from the name.
-            Existing custom codes are preserved.
-          </p>
         </div>
       </Section>
 
@@ -723,7 +409,7 @@ export default function AgentConfig() {
       {/* Appointment Reminders */}
       <Section icon={Bell} title="Appointment Reminders">
         <p className="text-sm text-gray-500 dark:text-gray-400 -mt-2 mb-3">
-          Automated SMS reminders sent before appointments. Patients can reply <strong>C</strong> to confirm,
+          Automated SMS reminders sent before appointments. Callers can reply <strong>C</strong> to confirm,
           <strong> R</strong> to reschedule, or <strong>X</strong> to cancel — all handled by the AI agent.
         </p>
         <div className="space-y-4">
@@ -740,7 +426,7 @@ export default function AgentConfig() {
           />
           <Toggle
             label="Confirmation Tracking"
-            help="Track patient reply confirmations and show status on appointments."
+            help="Track caller reply confirmations and show status on appointments."
             checked={config.reminder_settings?.confirmation_reply_enabled !== false}
             onChange={(v) =>
               update('reminder_settings', {
@@ -755,13 +441,13 @@ export default function AgentConfig() {
       {/* Google Review Solicitation */}
       <Section icon={Star} title="Google Review Solicitation">
         <p className="text-sm text-gray-500 dark:text-gray-400 -mt-2 mb-3">
-          Automatically send a friendly SMS asking patients to leave a Google review after their appointment.
+          Automatically send a friendly SMS asking callers to leave a Google review after their appointment.
           Only sent after the follow-up message, with a configurable delay.
         </p>
         <div className="space-y-4">
           <Toggle
             label="Enable Review Requests"
-            help="When enabled, patients will receive a review request SMS after their appointment."
+            help="When enabled, callers will receive a review request SMS after their appointment."
             checked={config.review_settings?.enabled === true}
             onChange={(v) =>
               update('review_settings', {
@@ -772,7 +458,7 @@ export default function AgentConfig() {
           />
           {config.review_settings?.enabled && (
             <>
-              <Field label="Google Review Link" help="Your Google Business profile review URL. Patients tap this link to leave a review.">
+              <Field label="Google Review Link" help="Your Google Business profile review URL. Callers tap this link to leave a review.">
                 <input
                   type="url"
                   value={config.review_settings?.google_review_link || ''}
@@ -788,16 +474,16 @@ export default function AgentConfig() {
               </Field>
               <Field label="Delay After Appointment (hours)" help="How many hours after the appointment to send the review request.">
                 <input
-                  type="number"
-                  min="1"
-                  max="168"
-                  value={config.review_settings?.delay_hours || 24}
-                  onChange={(e) =>
+                  type="text"
+                  inputMode="numeric"
+                  value={config.review_settings?.delay_hours ?? ''}
+                  onChange={(e) => {
+                    const raw = e.target.value.replace(/[^0-9]/g, '');
                     update('review_settings', {
                       ...(config.review_settings || {}),
-                      delay_hours: parseInt(e.target.value, 10) || 24,
-                    })
-                  }
+                      delay_hours: raw === '' ? '' : parseInt(raw, 10),
+                    });
+                  }}
                   className="input"
                   style={{ maxWidth: '120px' }}
                 />
@@ -818,7 +504,7 @@ export default function AgentConfig() {
                         .filter(Boolean),
                     })
                   }
-                  placeholder="cleaning, checkup (leave empty for all)"
+                  placeholder="consultation, demo (leave empty for all)"
                   className="input"
                 />
               </Field>
@@ -828,21 +514,16 @@ export default function AgentConfig() {
       </Section>
 
       {/* Clear Test Data */}
-      <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4 md:p-6">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div>
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
-              <FlaskConical className="w-5 h-5 text-amber-500" />
-              Test Data
-            </h3>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-              Remove all patients, appointments, waitlist entries, and SMS created via the Test Agent chat.
-            </p>
-          </div>
+      <div className="bg-white dark:bg-gray-900/60 rounded-2xl border border-gray-200/80 dark:border-white/5 px-4 py-3 md:px-6 md:py-4">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="text-base font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+            <FlaskConical className="w-4 h-4 text-amber-500" />
+            Test Data
+          </h3>
           <button
             onClick={handleClearTestData}
             disabled={clearingTestData}
-            className="flex items-center gap-2 px-4 py-2.5 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 rounded-lg text-sm font-medium hover:bg-red-100 dark:hover:bg-red-900/40 disabled:opacity-50 transition-colors"
+            className="flex items-center gap-2 px-4 py-2.5 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 rounded-lg text-sm font-medium hover:bg-red-100 dark:hover:bg-red-900/40 disabled:opacity-50 transition-colors shrink-0"
           >
             <Trash2 className="w-4 h-4" />
             {clearingTestData ? 'Clearing...' : 'Clear Test Data'}
@@ -852,7 +533,7 @@ export default function AgentConfig() {
           <div className="mt-3 p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
             <p className="text-sm text-green-700 dark:text-green-400">
               <CheckCircle className="w-4 h-4 inline mr-1" />
-              Cleared {testDataResult.total} test records: {testDataResult.deleted?.patients || 0} patients, {testDataResult.deleted?.appointments || 0} appointments, {testDataResult.deleted?.waitlist_entries || 0} waitlist, {testDataResult.deleted?.sms_messages || 0} SMS
+              Cleared {testDataResult.total} test records: {testDataResult.deleted?.callers || 0} contacts, {testDataResult.deleted?.appointments || 0} appointments, {testDataResult.deleted?.waitlist_entries || 0} waitlist, {testDataResult.deleted?.sms_messages || 0} SMS
             </p>
           </div>
         )}
@@ -905,7 +586,7 @@ function UsageBar({ label, used, limit, unit, color = 'primary' }) {
       </div>
       <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2.5">
         <div
-          className={`h-2.5 rounded-full transition-all duration-500 ${isDanger ? 'bg-red-500' : isWarning ? 'bg-amber-500' : 'bg-primary-500'}`}
+          className={`h-2.5 rounded-full transition-all duration-500 ${isDanger ? 'bg-red-500' : isWarning ? 'bg-amber-500' : 'bg-indigo-500'}`}
           style={{ width: `${Math.min(100, percent)}%` }}
         />
       </div>
@@ -945,14 +626,14 @@ function UsagePlanSection() {
   };
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 space-y-5">
+    <div className="bg-white dark:bg-gray-900/60 rounded-2xl border border-gray-200/80 dark:border-white/5 p-6 space-y-5">
       <div className="flex items-center justify-between">
         <h3 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
-          <Bot className="w-5 h-5 text-primary-500" />
+          <Bot className="w-5 h-5 text-indigo-500" />
           Usage & Plan
         </h3>
         {usage && (
-          <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-primary-100 text-primary-700 dark:bg-primary-900/30 dark:text-primary-300 uppercase tracking-wide">
+          <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300 uppercase tracking-wide">
             {planLabels[usage.plan] || usage.plan}
           </span>
         )}
@@ -989,12 +670,6 @@ function UsagePlanSection() {
         <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Connections</h4>
         <div className="space-y-1.5">
           <div className="flex items-center gap-2 text-sm">
-            <PhoneIcon className="w-4 h-4 text-gray-400" />
-            <span className="text-gray-600 dark:text-gray-300">Voice Agent (Vapi)</span>
-            <CheckCircle className="w-4 h-4 text-green-500 ml-auto" />
-            <span className="text-xs text-green-600 dark:text-green-400">Managed by platform</span>
-          </div>
-          <div className="flex items-center gap-2 text-sm">
             <Mail className="w-4 h-4 text-gray-400" />
             <span className="text-gray-600 dark:text-gray-300">SMS (Twilio)</span>
             <CheckCircle className="w-4 h-4 text-green-500 ml-auto" />
@@ -1010,9 +685,9 @@ function UsagePlanSection() {
 
 function Section({ icon: Icon, title, children }) {
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4 md:p-6 space-y-4">
+    <div className="bg-white dark:bg-gray-900/60 rounded-2xl border border-gray-200/80 dark:border-white/5 p-4 md:p-6 space-y-4">
       <h3 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
-        <Icon className="w-5 h-5 text-primary-500" />
+        <Icon className="w-5 h-5 text-indigo-500" />
         {title}
       </h3>
       {children}
@@ -1026,389 +701,6 @@ function Field({ label, help, children, className = '' }) {
       <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">{label}</label>
       {children}
       {help && <p className="text-xs text-gray-400 mt-1">{help}</p>}
-    </div>
-  );
-}
-
-// Convert a "YYYY-MM-DD" string into a local-time Date (no TZ shift) so the
-// themed calendar lands on the same day the user typed. Returns null for
-// empty/invalid strings so the picker shows its placeholder state.
-function isoToLocalDate(iso) {
-  if (!iso || typeof iso !== 'string') return null;
-  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!m) return null;
-  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-}
-
-// Inverse of isoToLocalDate — formats a Date back to "YYYY-MM-DD" in local
-// time. Used when persisting the picker's selection.
-function localDateToIso(d) {
-  if (!d) return '';
-  const y = d.getFullYear();
-  const mo = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${mo}-${day}`;
-}
-
-// Editor for tenant.holidays — array of {date: 'YYYY-MM-DD', name: string}.
-// Normalizes (dedupes + sorts ascending) on every change so the persisted
-// shape always matches what the backend expects.
-function HolidaysEditor({ holidays, onChange }) {
-  const [newDate, setNewDate] = useState('');
-  const [newName, setNewName] = useState('');
-  const [err, setErr] = useState(null);
-
-  // Always render in chronological order — caller may pass unsorted data.
-  const sorted = React.useMemo(() => {
-    return [...(holidays || [])]
-      .filter((h) => h && h.date)
-      .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
-  }, [holidays]);
-
-  function add() {
-    setErr(null);
-    const date = (newDate || '').trim();
-    const name = (newName || '').trim();
-    if (!date) {
-      setErr('Pick a date.');
-      return;
-    }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      setErr('Date must be YYYY-MM-DD.');
-      return;
-    }
-    if (!name) {
-      setErr('Give the holiday a name (e.g. "Christmas Day").');
-      return;
-    }
-    // Dedupe by date — later add for same date wins on name.
-    const next = [
-      ...sorted.filter((h) => h.date !== date),
-      { date, name },
-    ].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
-    onChange(next);
-    setNewDate('');
-    setNewName('');
-  }
-
-  function remove(date) {
-    onChange(sorted.filter((h) => h.date !== date));
-  }
-
-  function updateName(date, name) {
-    onChange(
-      sorted.map((h) => (h.date === date ? { ...h, name } : h))
-    );
-  }
-
-  // Friendly display label — falls back to the raw ISO date if parsing fails.
-  function fmtDate(iso) {
-    try {
-      // Parse as local date to avoid TZ off-by-one shifts.
-      const [y, m, d] = iso.split('-').map((v) => parseInt(v, 10));
-      const dt = new Date(y, m - 1, d);
-      return dt.toLocaleDateString(undefined, {
-        weekday: 'short',
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-      });
-    } catch {
-      return iso;
-    }
-  }
-
-  // Today (local) — used to dim past entries so admins can spot stale rows.
-  const todayIso = (() => {
-    const d = new Date();
-    const yyyy = d.getFullYear();
-    const mm = String(d.getMonth() + 1).padStart(2, '0');
-    const dd = String(d.getDate()).padStart(2, '0');
-    return `${yyyy}-${mm}-${dd}`;
-  })();
-
-  return (
-    <div className="space-y-3">
-      {/* Existing entries */}
-      {sorted.length === 0 ? (
-        <p className="text-sm text-gray-400 italic">No holidays configured yet.</p>
-      ) : (
-        <div className="space-y-2">
-          {sorted.map((h) => {
-            const isPast = h.date < todayIso;
-            return (
-              <div
-                key={h.date}
-                className={`flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3 border border-gray-100 dark:border-gray-700 ${
-                  isPast ? 'opacity-60' : ''
-                }`}
-              >
-                <div className="sm:w-44 shrink-0">
-                  <div className="text-sm font-medium text-gray-900 dark:text-white">
-                    {fmtDate(h.date)}
-                  </div>
-                  <div className="text-xs text-gray-400 font-mono">{h.date}</div>
-                </div>
-                <input
-                  type="text"
-                  value={h.name || ''}
-                  onChange={(e) => updateName(h.date, e.target.value)}
-                  className="flex-1 px-3 py-1.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 dark:text-white focus:ring-2 focus:ring-primary-500 outline-none"
-                  placeholder="Holiday name"
-                />
-                <button
-                  type="button"
-                  onClick={() => remove(h.date)}
-                  className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
-                  title="Remove holiday"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Add new row */}
-      <div className="flex flex-col sm:flex-row sm:items-end gap-3 pt-2 border-t border-gray-100 dark:border-gray-700">
-        <div className="sm:min-w-[12rem]">
-          <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
-            Date
-          </label>
-          <ThemedDatePicker
-            value={isoToLocalDate(newDate)}
-            onChange={(d) => setNewDate(localDateToIso(d))}
-            onClear={() => setNewDate('')}
-            placeholder="Pick a date"
-            min={isoToLocalDate(todayIso)}
-            accent="primary"
-          />
-        </div>
-        <div className="flex-1">
-          <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
-            Holiday name
-          </label>
-          <input
-            type="text"
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                add();
-              }
-            }}
-            placeholder='e.g. "Christmas Day", "Thanksgiving"'
-            className="w-full px-3 py-1.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 dark:text-white focus:ring-2 focus:ring-primary-500 outline-none"
-          />
-        </div>
-        <button
-          type="button"
-          onClick={add}
-          className="px-4 py-1.5 bg-primary-500 hover:bg-primary-600 text-white rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5"
-        >
-          <Plus className="w-4 h-4" />
-          Add
-        </button>
-      </div>
-
-      {err && (
-        <p className="text-xs text-red-600 dark:text-red-400 flex items-center gap-1">
-          <AlertCircle className="w-3 h-3" />
-          {err}
-        </p>
-      )}
-
-      <p className="text-xs text-gray-400">
-        Don't forget to click <span className="font-medium">Save Changes</span> at the top to apply.
-      </p>
-    </div>
-  );
-}
-
-function VapiConnectionRow({ connected, onConnected }) {
-  const { toast, confirm } = useModal();
-  const [open, setOpen] = useState(false);
-  const [apiKey, setApiKey] = useState('');
-  const [phoneNumberId, setPhoneNumberId] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const [err, setErr] = useState(null);
-  const [okMsg, setOkMsg] = useState(null);
-
-  async function handleConnect() {
-    if (!apiKey.trim()) {
-      setErr('Paste your Vapi API key first.');
-      return;
-    }
-    setSubmitting(true);
-    setErr(null);
-    setOkMsg(null);
-    try {
-      const body = { api_key: apiKey.trim() };
-      if (phoneNumberId.trim()) body.phone_number_id = phoneNumberId.trim();
-      const data = await apiFetch('/api/integrations/vapi/connect', {
-        method: 'POST',
-        body,
-      });
-      setOkMsg(data.message || 'Connected!');
-      setApiKey('');
-      setPhoneNumberId('');
-      // Give the user a second to see the success message before closing.
-      setTimeout(() => {
-        setOpen(false);
-        setOkMsg(null);
-        onConnected?.();
-      }, 1500);
-    } catch (e) {
-      setErr(e.message || 'Connection failed.');
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  async function handleDisconnect() {
-    const ok = await confirm({
-      title: 'Disconnect Vapi?',
-      message: 'Your phone agent will stop answering calls until reconnected.',
-      confirmText: 'Disconnect',
-      variant: 'danger',
-    });
-    if (!ok) return;
-    setSubmitting(true);
-    setErr(null);
-    try {
-      await apiFetch('/api/integrations/vapi/disconnect', { method: 'POST' });
-      onConnected?.();
-    } catch (e) {
-      setErr(e.message || 'Disconnect failed.');
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  return (
-    <div
-      className={`rounded-lg border ${
-        connected
-          ? 'bg-green-50/50 dark:bg-green-900/10 border-green-200 dark:border-green-800'
-          : 'bg-gray-50 dark:bg-gray-700/50 border-gray-200 dark:border-gray-700'
-      }`}
-    >
-      <div className="flex items-center gap-3 p-3">
-        <div
-          className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
-            connected
-              ? 'bg-green-100 dark:bg-green-900/30 text-green-600'
-              : 'bg-gray-200 dark:bg-gray-600 text-gray-500'
-          }`}
-        >
-          <PhoneIcon className="w-4 h-4" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium text-gray-900 dark:text-white">Vapi (Voice Calls)</p>
-          <p className="text-xs text-gray-500 dark:text-gray-400">
-            {connected
-              ? 'Phone agent is live — your Vapi number is answering calls.'
-              : 'Phone agent is not configured yet. Click "Connect" to provision one.'}
-          </p>
-        </div>
-        {connected ? (
-          <>
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-full text-xs font-medium shrink-0">
-              <CheckCircle className="w-3 h-3" />
-              Connected
-            </span>
-            <button
-              type="button"
-              onClick={handleDisconnect}
-              disabled={submitting}
-              className="text-xs font-medium text-red-600 dark:text-red-400 hover:underline shrink-0 disabled:opacity-50"
-            >
-              Disconnect
-            </button>
-          </>
-        ) : (
-          <button
-            type="button"
-            onClick={() => setOpen((o) => !o)}
-            className="px-3 py-1.5 bg-primary-500 text-white rounded-lg text-xs font-medium hover:bg-primary-600 shrink-0 transition-colors"
-          >
-            {open ? 'Cancel' : 'Connect with Vapi'}
-          </button>
-        )}
-      </div>
-
-      {open && !connected && (
-        <div className="border-t border-gray-200 dark:border-gray-700 p-4 space-y-3 bg-white/60 dark:bg-gray-800/60">
-          <p className="text-xs text-gray-600 dark:text-gray-400">
-            Paste your Vapi API key. We'll create a new assistant pre-configured
-            with your greeting, voice, and business info. Get the key at{' '}
-            <a
-              href="https://dashboard.vapi.ai/account"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-primary-600 hover:underline"
-            >
-              dashboard.vapi.ai → Account → API Keys
-            </a>.
-          </p>
-          <div>
-            <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Vapi API Key <span className="text-red-400">*</span>
-            </label>
-            <input
-              type="password"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder="vapi_sk_..."
-              className="input"
-              autoComplete="off"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Vapi Phone Number ID (optional)
-            </label>
-            <input
-              type="text"
-              value={phoneNumberId}
-              onChange={(e) => setPhoneNumberId(e.target.value)}
-              placeholder="Leave blank to set up later"
-              className="input"
-            />
-            <p className="text-[11px] text-gray-400 mt-1">
-              Only needed if you've already bought a phone number on Vapi.
-            </p>
-          </div>
-          {err && (
-            <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg p-2.5 text-xs text-red-700 dark:text-red-400">
-              {err}
-            </div>
-          )}
-          {okMsg && (
-            <div className="bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 rounded-lg p-2.5 text-xs text-green-700 dark:text-green-400 flex items-start gap-2">
-              <CheckCircle className="w-4 h-4 mt-0.5 shrink-0" />
-              <span>{okMsg}</span>
-            </div>
-          )}
-          <button
-            type="button"
-            onClick={handleConnect}
-            disabled={submitting || !apiKey.trim()}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-primary-500 text-white rounded-lg text-sm font-medium hover:bg-primary-600 disabled:opacity-50 transition-colors"
-          >
-            {submitting ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                Provisioning your AI agent…
-              </>
-            ) : (
-              'Provision Assistant'
-            )}
-          </button>
-        </div>
-      )}
     </div>
   );
 }
@@ -1508,10 +800,29 @@ function IntegrationSection({
 
 function GoogleCalendarSection({ config, onUpdate }) {
   const { toast, confirm } = useModal();
-  const [disconnecting, setDisconnecting] = useState(false);
   const [connecting, setConnecting] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
   const connected = config?.google_calendar_connected;
   const email = config?.google_calendar_email;
+
+  async function handleDisconnect() {
+    const ok = await confirm({
+      title: 'Disconnect Google Calendar?',
+      message: 'Your agent will fall back to the built-in scheduler until reconnected.',
+      confirmText: 'Disconnect',
+      variant: 'danger',
+    });
+    if (!ok) return;
+    setDisconnecting(true);
+    try {
+      await apiFetch('/api/integrations/google/disconnect', { method: 'POST' });
+      onUpdate();
+    } catch (err) {
+      toast.error('Failed to disconnect: ' + (err.message || err));
+    } finally {
+      setDisconnecting(false);
+    }
+  }
 
   async function handleConnect() {
     setConnecting(true);
@@ -1527,27 +838,8 @@ function GoogleCalendarSection({ config, onUpdate }) {
     }
   }
 
-  async function handleDisconnect() {
-    const ok = await confirm({
-      title: 'Disconnect Google Calendar?',
-      message: 'Your agent will fall back to the built-in scheduler until reconnected.',
-      confirmText: 'Disconnect',
-      variant: 'danger',
-    });
-    if (!ok) return;
-    setDisconnecting(true);
-    try {
-      await apiFetch('/api/integrations/google/disconnect', { method: 'POST' });
-      onUpdate(); // refresh config
-    } catch (err) {
-      toast.error('Failed to disconnect: ' + (err.message || err));
-    } finally {
-      setDisconnecting(false);
-    }
-  }
-
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-xl border border-blue-200 dark:border-blue-800 p-6 space-y-4">
+    <div className="bg-white dark:bg-gray-900/60 rounded-2xl border border-gray-200/80 dark:border-white/5 p-6 space-y-4">
       <div className="flex items-start gap-3">
         <div className="w-10 h-10 rounded-lg bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center shrink-0">
           <CalendarCheck className="w-5 h-5 text-blue-600" />
@@ -1574,20 +866,20 @@ function GoogleCalendarSection({ config, onUpdate }) {
       </div>
 
       {connected ? (
-        <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-800 rounded-lg p-4 space-y-3">
+        <div className="space-y-3">
           <div className="flex items-center gap-2">
-            <Mail className="w-4 h-4 text-blue-600" />
+            <Mail className="w-4 h-4 text-gray-400" />
             <span className="text-sm font-medium text-gray-900 dark:text-white">{email}</span>
           </div>
           <p className="text-xs text-gray-500 dark:text-gray-400">
             Your AI agent is using this Google Calendar for availability checks and bookings.
-            Appointments will appear directly in your calendar.
           </p>
           <button
             onClick={handleDisconnect}
             disabled={disconnecting}
-            className="px-4 py-2 bg-white dark:bg-gray-800 border border-red-200 dark:border-red-700 text-red-600 rounded-lg text-sm font-medium hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50 transition-colors"
+            className="flex items-center gap-2 px-4 py-2.5 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 rounded-lg text-sm font-medium hover:bg-red-100 dark:hover:bg-red-900/40 disabled:opacity-50 transition-colors shrink-0"
           >
+            <Trash2 className="w-4 h-4" />
             {disconnecting ? 'Disconnecting...' : 'Disconnect Google Calendar'}
           </button>
         </div>
@@ -1629,7 +921,7 @@ function Toggle({ label, help, checked, onChange }) {
         aria-label={label}
       >
         {checked ? (
-          <ToggleRight className="w-8 h-8 text-primary-500" />
+          <ToggleRight className="w-8 h-8 text-indigo-500" />
         ) : (
           <ToggleLeft className="w-8 h-8 text-gray-300 dark:text-gray-500" />
         )}

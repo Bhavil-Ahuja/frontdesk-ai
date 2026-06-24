@@ -1,5 +1,5 @@
 """
-Inbound SMS handling service — processes incoming text messages from patients
+Inbound SMS handling service — processes incoming text messages from callers
 and routes them to the appropriate handler.
 
 Flow:
@@ -23,11 +23,12 @@ from sqlalchemy import select, and_
 
 from backend.database import async_session
 from backend.models.tenant import Tenant, TenantStatus
+from backend.models.caller import Caller
 from backend.models.sms_message import SMSMessage, SMSDirection
 from backend.models.appointment import Appointment, AppointmentStatus
 from backend.models.waitlist import WaitlistEntry, WaitlistStatus
 from backend.services import sms_service, llm_service, waitlist_service
-from backend.services.patient_service import _phone_digits_tail, _phone_col_clean
+from backend.services.caller_service import _phone_digits_tail, _phone_col_clean, upsert_caller
 from backend.services.tenant_service import _tenant_to_context, TenantContext
 
 
@@ -77,7 +78,7 @@ async def resolve_tenant_by_phone(to_number: str) -> tuple[Tenant | None, Tenant
     (e.g. '+1 555 123 4567' vs '+15551234567').
 
     Args:
-        to_number: The Twilio phone number the patient texted (the clinic's number).
+        to_number: The Twilio phone number the caller texted (the institute's number).
 
     Returns:
         (Tenant, TenantContext) if an active tenant is found, (None, None) otherwise.
@@ -119,10 +120,13 @@ async def _log_sms(
     from_number: str,
     to_number: str,
     body: str,
-    patient_phone: str,
+    caller_phone: str,
     twilio_sid: str = "",
 ) -> None:
     """Persist an SMS message record for audit and conversation threading.
+
+    Upserts a caller record for caller_phone (required — SMSMessage.caller_id
+    is NOT NULL). The tenant_id is stored on the caller, not on SMSMessage.
 
     Args:
         tenant_id: The tenant this message belongs to.
@@ -130,26 +134,35 @@ async def _log_sms(
         from_number: The sender's phone number.
         to_number: The recipient's phone number.
         body: The message text.
-        patient_phone: The patient's phone (used for threading/grouping).
+        caller_phone: The caller's phone (used to look up / create caller).
         twilio_sid: Twilio's MessageSid for delivery tracking.
     """
     try:
+        # Upsert caller so caller_id is always set (is_test derived from stored flag)
+        caller_rec = await upsert_caller(
+            name="",
+            phone=caller_phone,
+            email="",
+            tenant_id=tenant_id,
+            is_test=caller_phone.startswith("+1555"),
+        )
+        caller_id = caller_rec.id if caller_rec else None
+
         async with async_session() as session:
             msg = SMSMessage(
-                tenant_id=tenant_id,
+                caller_id=caller_id,
                 direction=direction,
                 from_number=from_number,
                 to_number=to_number,
                 body=body,
-                patient_phone=patient_phone,
                 twilio_sid=twilio_sid,
             )
             session.add(msg)
             await session.commit()
     except Exception as exc:
         logger.error(
-            "[SMS Inbound] Failed to log %s SMS (tenant=%s, patient=%s): %s",
-            direction.value, tenant_id, patient_phone, exc,
+            "[SMS Inbound] Failed to log %s SMS (tenant=%s, caller=%s): %s",
+            direction.value, tenant_id, caller_phone, exc,
         )
 
 
@@ -161,13 +174,13 @@ async def _handle_confirmation(
     tenant_id: uuid.UUID,
     tenant_ctx: TenantContext,
 ) -> str:
-    """Handle a patient confirming their upcoming appointment via SMS reply.
+    """Handle a caller confirming their upcoming appointment via SMS reply.
 
     Finds the next upcoming CONFIRMED appointment for the given phone + tenant
-    and sets confirmed_by_patient = True.
+    and sets confirmed_by_student = True.
 
     Args:
-        from_number: The patient's phone number.
+        from_number: The caller's phone number.
         tenant_id: The tenant UUID.
         tenant_ctx: TenantContext for business name etc.
 
@@ -181,10 +194,12 @@ async def _handle_confirmation(
 
     async with async_session() as session:
         result = await session.execute(
-            select(Appointment).where(
+            select(Appointment)
+            .join(Caller, Appointment.caller_id == Caller.id)
+            .where(
                 and_(
-                    Appointment.tenant_id == tenant_id,
-                    _phone_col_clean(Appointment.patient_phone).endswith(phone_tail),
+                    Caller.tenant_id == tenant_id,
+                    _phone_col_clean(Appointment.student_phone).endswith(phone_tail),
                     Appointment.status == AppointmentStatus.CONFIRMED,
                     Appointment.scheduled_at >= now,
                 )
@@ -203,7 +218,7 @@ async def _handle_confirmation(
                 f"{_contact_line(tenant_ctx)} if you need assistance."
             )
 
-        appt.confirmed_by_patient = True
+        appt.confirmed_by_student = True
         await session.commit()
 
     date_str = appt.scheduled_at.strftime("%A, %B %d")
@@ -211,7 +226,7 @@ async def _handle_confirmation(
     biz_name = tenant_ctx.business_name
 
     logger.info(
-        "[SMS Inbound] Appointment confirmed by patient (appt=%s, phone=%s, tenant=%s)",
+        "[SMS Inbound] Appointment confirmed by caller (appt=%s, phone=%s, tenant=%s)",
         appt.id, from_number, tenant_id,
     )
     return (
@@ -225,14 +240,14 @@ async def _handle_cancel_request(
     tenant_id: uuid.UUID,
     tenant_ctx: TenantContext,
 ) -> str:
-    """Handle a patient requesting cancellation of their upcoming appointment.
+    """Handle a caller requesting cancellation of their upcoming appointment.
 
     Finds the next upcoming appointment (CONFIRMED or RESCHEDULED) for the given
     phone + tenant, cancels it, and checks the waitlist for anyone who could
     fill the opening.
 
     Args:
-        from_number: The patient's phone number.
+        from_number: The caller's phone number.
         tenant_id: The tenant UUID.
         tenant_ctx: TenantContext for business name and waitlist notifications.
 
@@ -243,12 +258,14 @@ async def _handle_cancel_request(
     now = datetime.now(timezone.utc)
 
     async with async_session() as session:
-        # Find the next upcoming appointment for this patient
+        # Find the next upcoming appointment for this caller
         result = await session.execute(
-            select(Appointment).where(
+            select(Appointment)
+            .join(Caller, Appointment.caller_id == Caller.id)
+            .where(
                 and_(
-                    Appointment.tenant_id == tenant_id,
-                    Appointment.patient_phone.in_([normalized_phone, from_number]),
+                    Caller.tenant_id == tenant_id,
+                    Appointment.student_phone.in_([normalized_phone, from_number]),
                     Appointment.status.in_([
                         AppointmentStatus.CONFIRMED,
                         AppointmentStatus.RESCHEDULED,
@@ -273,7 +290,7 @@ async def _handle_cancel_request(
         # Save details before cancelling (for SMS and waitlist)
         appt_type = appt.appointment_type
         scheduled_at = appt.scheduled_at
-        patient_name = appt.patient_name
+        student_name = appt.student_name
         cancelled_provider_id = appt.provider_id
         date_str = scheduled_at.strftime("%Y-%m-%d")
         slot_str = scheduled_at.isoformat()
@@ -289,7 +306,7 @@ async def _handle_cancel_request(
 
     # Send cancellation confirmation SMS
     sms_service.send_cancellation(
-        patient_name=patient_name,
+        caller_name=student_name,
         phone=from_number,
         scheduled_at=scheduled_at,
         tenant_ctx=tenant_ctx,
@@ -332,7 +349,7 @@ async def _has_notified_waitlist_entry(phone: str, tenant_id: uuid.UUID) -> bool
     a waitlist slot acceptance.
 
     Args:
-        phone: The patient's phone number.
+        phone: The caller's phone number.
         tenant_id: The tenant UUID.
 
     Returns:
@@ -341,10 +358,12 @@ async def _has_notified_waitlist_entry(phone: str, tenant_id: uuid.UUID) -> bool
     normalized = _normalize_phone(phone)
     async with async_session() as session:
         result = await session.execute(
-            select(WaitlistEntry.id).where(
+            select(WaitlistEntry.id)
+            .join(Caller, WaitlistEntry.caller_id == Caller.id)
+            .where(
                 and_(
-                    WaitlistEntry.patient_phone.in_([normalized, phone]),
-                    WaitlistEntry.tenant_id == tenant_id,
+                    WaitlistEntry.student_phone.in_([normalized, phone]),
+                    Caller.tenant_id == tenant_id,
                     WaitlistEntry.status == WaitlistStatus.NOTIFIED,
                 )
             ).limit(1)
@@ -361,7 +380,7 @@ async def handle_inbound_sms(
     body: str,
     twilio_sid: str = "",
 ) -> str:
-    """Process an inbound SMS from a patient and return the response text.
+    """Process an inbound SMS from a caller and return the response text.
 
     This is the main entry point called by the Twilio webhook route. The caller
     wraps the returned string in a TwiML <Message> response.
@@ -376,13 +395,13 @@ async def handle_inbound_sms(
       5. All other messages -> LLM agent
 
     Args:
-        from_number: The patient's phone number (Twilio 'From').
-        to_number: The clinic's Twilio phone number (Twilio 'To').
+        from_number: The caller's phone number (Twilio 'From').
+        to_number: The institute's Twilio phone number (Twilio 'To').
         body: The message text (Twilio 'Body').
         twilio_sid: Twilio's MessageSid for tracking.
 
     Returns:
-        The reply text to send back to the patient. Empty string means no reply
+        The reply text to send back to the caller. Empty string means no reply
         (e.g. for STOP messages).
     """
     text = body.strip()
@@ -405,7 +424,7 @@ async def handle_inbound_sms(
                 from_number=from_number,
                 to_number=to_number,
                 body=text,
-                patient_phone=from_number,
+                caller_phone=from_number,
                 twilio_sid=twilio_sid,
             )
         return ""
@@ -428,7 +447,7 @@ async def handle_inbound_sms(
         from_number=from_number,
         to_number=to_number,
         body=text,
-        patient_phone=from_number,
+        caller_phone=from_number,
         twilio_sid=twilio_sid,
     )
 
@@ -454,7 +473,7 @@ async def handle_inbound_sms(
 
     elif keyword in ("X", "CANCEL"):
         # First step of two-step cancellation: ask for confirmation.
-        # When the patient replies YES, the LLM agent (else branch below)
+        # When the caller replies YES, the LLM agent (else branch below)
         # will see the conversation context and handle the actual cancellation.
         # We also support "CANCEL YES" as a single-message shortcut.
         reply = (
@@ -464,7 +483,7 @@ async def handle_inbound_sms(
         logger.info("[SMS Inbound] Cancel keyword from %s (tenant=%s) — awaiting confirmation", from_number, tenant_id)
 
     elif keyword == "CANCEL YES":
-        # Single-message shortcut: patient sent "CANCEL YES" to skip the two-step flow.
+        # Single-message shortcut: caller sent "CANCEL YES" to skip the two-step flow.
         reply = await _handle_cancel_request(from_number, tenant_id, tenant_ctx)
 
     else:
@@ -505,7 +524,7 @@ async def handle_inbound_sms(
         from_number=to_number,
         to_number=from_number,
         body=reply,
-        patient_phone=from_number,
+        caller_phone=from_number,
     )
 
     logger.info(
@@ -524,13 +543,13 @@ async def _handle_waitlist_confirmation(
     tenant_id: uuid.UUID,
     tenant_ctx: TenantContext,
 ) -> str:
-    """Handle a patient confirming a waitlist slot via YES reply.
+    """Handle a caller confirming a waitlist slot via YES reply.
 
     Calls waitlist_service.confirm_waitlist_booking() to mark the entry as
-    BOOKED and returns a confirmation message to the patient.
+    BOOKED and returns a confirmation message to the caller.
 
     Args:
-        from_number: The patient's phone number.
+        from_number: The caller's phone number.
         tenant_id: The tenant UUID.
         tenant_ctx: TenantContext for business name.
 
@@ -539,14 +558,14 @@ async def _handle_waitlist_confirmation(
     """
     try:
         booking = await waitlist_service.confirm_waitlist_booking(
-            patient_phone=_normalize_phone(from_number),
+            student_phone=_normalize_phone(from_number),
             tenant_id=tenant_id,
         )
 
         if not booking:
             # Fallback: try with the raw phone number
             booking = await waitlist_service.confirm_waitlist_booking(
-                patient_phone=from_number,
+                student_phone=from_number,
                 tenant_id=tenant_id,
             )
 
@@ -563,7 +582,7 @@ async def _handle_waitlist_confirmation(
 
         appt_type = booking.get("appointment_type", "appointment").replace("_", " ").title()
         preferred_date = booking.get("preferred_date", "")
-        patient_name = booking.get("patient_name", "")
+        student_name = booking.get("student_name", "")
         biz_name = tenant_ctx.business_name
 
         # Format the date for display
@@ -577,11 +596,11 @@ async def _handle_waitlist_confirmation(
 
         logger.info(
             "[SMS Inbound] Waitlist booking confirmed for %s — %s on %s (tenant=%s)",
-            patient_name, appt_type, preferred_date, tenant_id,
+            student_name, appt_type, preferred_date, tenant_id,
         )
 
         return (
-            f"Great news, {patient_name}! Your {appt_type} at {biz_name} "
+            f"Great news, {student_name}! Your {appt_type} at {biz_name} "
             f"on {display_date} has been confirmed. We'll see you then!"
         )
 

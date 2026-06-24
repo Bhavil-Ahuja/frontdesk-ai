@@ -177,8 +177,9 @@ async def get_ticket(
 async def update_ticket(
     ticket_id: uuid.UUID,
     data: dict[str, Any],
+    changed_by: str = "admin",
 ) -> dict[str, Any] | None:
-    """Update a ticket (admin only). Handles status transitions and resolved_at."""
+    """Update a ticket (admin only). Handles status transitions, resolved_at, and audit trail."""
     async with async_session() as session:
         query = select(SupportTicket).where(SupportTicket.id == ticket_id)
         query = query.options(selectinload(SupportTicket.messages))
@@ -186,6 +187,8 @@ async def update_ticket(
         ticket = result.scalar_one_or_none()
         if not ticket:
             return None
+
+        old_status = ticket.status
 
         allowed_fields = {"status", "admin_notes", "resolved_by", "priority"}
         for field, value in data.items():
@@ -201,6 +204,17 @@ async def update_ticket(
             TicketStatus.REOPENED.value,
         ):
             ticket.resolved_at = None  # Re-opened
+
+        # Record SYSTEM audit message whenever status changes
+        new_status = data.get("status")
+        if new_status and new_status != old_status:
+            audit_msg = SupportTicketMessage(
+                ticket_id=ticket_id,
+                sender_type=MessageSender.SYSTEM.value,
+                sender_name="system",
+                body=f"Status changed from {old_status} to {new_status} by {changed_by}",
+            )
+            session.add(audit_msg)
 
         ticket.updated_at = datetime.now(timezone.utc)
         await session.commit()
@@ -239,11 +253,21 @@ async def reopen_ticket(
         if ticket.status not in (TicketStatus.RESOLVED.value, TicketStatus.CLOSED.value):
             return {"error": "only_resolved_can_reopen"}
 
+        old_status = ticket.status
         ticket.status = TicketStatus.REOPENED.value
         ticket.resolved_at = None
         ticket.updated_at = datetime.now(timezone.utc)
 
-        # Add a message explaining why the ticket was reopened
+        # SYSTEM audit entry for the status change
+        audit_msg = SupportTicketMessage(
+            ticket_id=ticket_id,
+            sender_type=MessageSender.SYSTEM.value,
+            sender_name="system",
+            body=f"Status changed from {old_status} to REOPENED by tenant ({tenant_name})",
+        )
+        session.add(audit_msg)
+
+        # Tenant's reason message
         msg = SupportTicketMessage(
             ticket_id=ticket_id,
             sender_type=MessageSender.TENANT.value,
@@ -304,11 +328,25 @@ async def add_message(
         # If admin replies and ticket was OPEN, auto-move to IN_PROGRESS
         if sender_type == MessageSender.ADMIN.value and ticket.status == TicketStatus.OPEN.value:
             ticket.status = TicketStatus.IN_PROGRESS.value
+            auto_msg = SupportTicketMessage(
+                ticket_id=ticket_id,
+                sender_type=MessageSender.SYSTEM.value,
+                sender_name="system",
+                body="Status automatically changed from OPEN to IN_PROGRESS (admin replied)",
+            )
+            session.add(auto_msg)
 
         # If tenant replies and ticket was RESOLVED, auto-reopen
         if sender_type == MessageSender.TENANT.value and ticket.status == TicketStatus.RESOLVED.value:
             ticket.status = TicketStatus.REOPENED.value
             ticket.resolved_at = None
+            auto_msg = SupportTicketMessage(
+                ticket_id=ticket_id,
+                sender_type=MessageSender.SYSTEM.value,
+                sender_name="system",
+                body="Status automatically changed from RESOLVED to REOPENED (tenant replied)",
+            )
+            session.add(auto_msg)
 
         ticket.updated_at = datetime.now(timezone.utc)
         await session.commit()

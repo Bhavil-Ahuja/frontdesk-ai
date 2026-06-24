@@ -1,7 +1,7 @@
 from backend.models.tenant import Tenant, TenantStatus, BusinessType, PlanTier
 from backend.models.call import Call, CallOutcome
 from backend.models.appointment import Appointment, AppointmentStatus, BookedVia
-from backend.models.patient import Patient
+from backend.models.caller import Caller
 from backend.models.provider import Provider
 from backend.models.waitlist import WaitlistEntry, WaitlistStatus
 from backend.models.sms_message import SMSMessage, SMSDirection
@@ -10,6 +10,7 @@ from backend.models.support_ticket import (
     SupportTicket, SupportTicketMessage,
     TicketCategory, TicketStatus, TicketPriority, MessageSender,
 )
+from backend.models.tenant_tool import TenantTool, HandlerType
 
 __all__ = [
     "Tenant",
@@ -21,7 +22,7 @@ __all__ = [
     "Appointment",
     "AppointmentStatus",
     "BookedVia",
-    "Patient",
+    "Caller",
     "Provider",
     "WaitlistEntry",
     "WaitlistStatus",
@@ -34,4 +35,6 @@ __all__ = [
     "TicketStatus",
     "TicketPriority",
     "MessageSender",
+    "TenantTool",
+    "HandlerType",
 ]

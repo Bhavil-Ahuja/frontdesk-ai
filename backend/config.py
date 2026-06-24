@@ -36,11 +36,11 @@ class Settings:
     # TTL (seconds) for explicit context caches. Default 1 hour.
     GEMINI_CACHE_TTL_SECONDS: int = int(os.getenv("GEMINI_CACHE_TTL_SECONDS", "3600"))
 
-    # ── Vapi ──────────────────────────────────────────────────────────────
-    VAPI_API_KEY: str = os.getenv("VAPI_API_KEY", "")
-    VAPI_PHONE_NUMBER_ID: str = os.getenv("VAPI_PHONE_NUMBER_ID", "")
-    VAPI_ASSISTANT_ID: str = os.getenv("VAPI_ASSISTANT_ID", "")
-    VAPI_WEBHOOK_SECRET: str = os.getenv("VAPI_WEBHOOK_SECRET", "")
+    # ── Bolna AI (global outbound calling — admin-configured) ─────────────
+    # These are fallback env-var values.  The live values are stored in the
+    # platform_config DB table and editable via the admin portal at runtime.
+    BOLNA_API_KEY: str = os.getenv("BOLNA_API_KEY", "")
+    BOLNA_AGENT_ID: str = os.getenv("BOLNA_AGENT_ID", "")
 
     # ── ElevenLabs (voice preview) ───────────────────────────────────────
     ELEVENLABS_API_KEY: str = os.getenv("ELEVENLABS_API_KEY", "")
@@ -62,7 +62,7 @@ class Settings:
     # ESCALATION_TRANSFER_NUMBER → if set, Vapi will live-transfer the caller
     #   to this number via the `transferCall` predefined tool. Leave blank to
     #   instead end the call gracefully with a "we'll call you back" message
-    #   (recommended unless you have a real receptionist on the other end).
+    #   (recommended unless you have a real staff member on the other end).
     ESCALATION_PHONE_NUMBER: str = os.getenv("ESCALATION_PHONE_NUMBER", "")
     ESCALATION_TRANSFER_NUMBER: str = os.getenv("ESCALATION_TRANSFER_NUMBER", "")
     OFFICE_TIMEZONE: str = os.getenv("OFFICE_TIMEZONE", "America/Chicago")
@@ -80,15 +80,13 @@ class Settings:
     # ── Feature flags (global kill switches) ────────────────────────────
     # When False, the feature is unavailable for ALL tenants regardless of
     # their own per-tenant setting. Useful for running the platform in
-    # text-only mode when voice/SMS aren't licensed.
-    FEATURE_VAPI_ENABLED: bool = os.getenv("FEATURE_VAPI_ENABLED", "true").lower() == "true"
+    # text-only mode when SMS isn't licensed.
     FEATURE_TWILIO_ENABLED: bool = os.getenv("FEATURE_TWILIO_ENABLED", "true").lower() == "true"
 
     # ── Local chat mode ───────────────────────────────────────────────────
     # When True, the frontend exposes a /chat page that talks to the same
-    # LLM + tool pipeline Vapi uses, but via text instead of voice. Useful
-    # for local dev when you don't have/want Vapi configured. Responses are
-    # streamed back as SSE so the wire format matches Vapi exactly.
+    # LLM + tool pipeline, but via text instead of voice. Useful for local
+    # dev. Responses are streamed back as SSE.
     LOCAL_CHAT_MODE: bool = os.getenv("LOCAL_CHAT_MODE", "false").lower() == "true"
 
     # ── Derived ───────────────────────────────────────────────────────────

@@ -20,9 +20,9 @@ def slugify_appointment_type(value: str) -> str:
     Converts any input — display name, mixed-case code, or raw user text —
     into the lowercase, underscore-separated code used throughout the system.
 
-        "Dental Cleaning"  → "dental_cleaning"
+        "Initial Consultation" → "initial_consultation"
         "Follow-up"        → "follow_up"
-        "NEW PATIENT VISIT" → "new_patient_visit"
+        "NEW STUDENT VISIT" → "new_student_visit"
         "consultation"     → "consultation"
 
     Every place that compares, stores, or resolves an appointment type code
@@ -50,4 +50,4 @@ DEFAULT_BUSINESS_HOURS = {
 }
 
 # Test data
-DEFAULT_TEST_PATIENT_NAME = "Alex Johnson"
+DEFAULT_TEST_STUDENT_NAME = "Alex Johnson"

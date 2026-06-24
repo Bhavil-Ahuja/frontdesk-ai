@@ -1,10 +1,10 @@
 """
-Waitlist management service — manages the patient waitlist for cancellation
+Waitlist management service — manages the caller waitlist for cancellation
 fill-ins across all tenants.
 
-When no slots are available, the AI agent offers to add the patient to the
+When no slots are available, the AI agent offers to add the caller to the
 waitlist. When a cancellation opens a slot, the system automatically notifies
-the highest-priority matching patient via SMS. If they reply YES, the slot
+the highest-priority matching caller via SMS. If they reply YES, the slot
 is booked for them; otherwise, the next person on the list is offered the slot.
 
 Multi-tenant: every operation is scoped to a tenant_id. SMS notifications
@@ -20,9 +20,10 @@ from sqlalchemy import select, and_, update, func
 
 from backend.database import async_session
 from backend.defaults import DEFAULT_TIMEZONE, slugify_appointment_type
+from backend.models.caller import Caller
 from backend.models.waitlist import WaitlistEntry, WaitlistStatus
 from backend.services import sms_service
-from backend.services.patient_service import _phone_digits_tail, _phone_col_clean, _normalise_phone
+from backend.services.caller_service import _phone_digits_tail, _phone_col_clean, _normalise_phone, upsert_caller
 
 logger = logging.getLogger(__name__)
 
@@ -32,11 +33,11 @@ logger = logging.getLogger(__name__)
 
 async def add_to_waitlist(
     tenant_id: uuid.UUID,
-    patient_name: str,
-    patient_phone: str,
+    student_name: str,
+    student_phone: str,
     appointment_type: str,
     preferred_date: str,
-    patient_email: str | None = None,
+    student_email: str | None = None,
     preferred_time_start: str | None = None,
     preferred_time_end: str | None = None,
     provider_id: uuid.UUID | None = None,
@@ -44,19 +45,19 @@ async def add_to_waitlist(
     is_test: bool = False,
 ) -> dict:
     """
-    Add a patient to the waitlist for a specific date and appointment type.
+    Add a caller to the waitlist for a specific date and appointment type.
 
     The entry is created with status=WAITING and expires_at set to 23:59:59 UTC
-    on the preferred_date. When a matching cancellation occurs, the patient will
+    on the preferred_date. When a matching cancellation occurs, the caller will
     be notified via SMS.
 
     Args:
         tenant_id: Tenant this waitlist entry belongs to.
-        patient_name: Full name of the patient.
-        patient_phone: Phone number for SMS notification.
+        student_name: Full name of the caller.
+        student_phone: Phone number for SMS notification.
         appointment_type: Type of appointment (e.g. "consultation", "follow_up").
         preferred_date: Desired date in YYYY-MM-DD format.
-        patient_email: Optional email address.
+        student_email: Optional email address.
         preferred_time_start: Optional preferred window start (HH:MM).
         preferred_time_end: Optional preferred window end (HH:MM).
         provider_id: Optional preferred provider UUID.
@@ -67,13 +68,22 @@ async def add_to_waitlist(
     try:
         target_date = datetime.strptime(preferred_date, "%Y-%m-%d").date()
     except (ValueError, TypeError):
-        logger.error("[Waitlist] Invalid preferred_date format: %s", preferred_date)
-        return {"error": "Invalid date format. Expected YYYY-MM-DD."}
+        logger.error("[Waitlist] Invalid preferred_date format: %r", preferred_date)
+        return {
+            "ok": False,
+            "error": "missing_date",
+            "summary_for_assistant": (
+                "You need a specific date (YYYY-MM-DD) to add someone to the waitlist. "
+                "Ask the caller which day they'd prefer — e.g. 'Which day would work best for you?' "
+                "Then call add_to_waitlist again with that date. "
+                "Do NOT tell the caller they have been added to the waitlist yet."
+            ),
+        }
 
     # ── Past-date guard ────────────────────────────────────────────────
-    # Adding a patient to the waitlist for a date that has already passed
+    # Adding a caller to the waitlist for a date that has already passed
     # is never useful — we'd just create an entry that immediately expires.
-    # Refuse with a clear message so the LLM tells the patient to pick a
+    # Refuse with a clear message so the LLM tells the caller to pick a
     # future date instead of silently confirming a useless waitlist entry.
     try:
         from zoneinfo import ZoneInfo
@@ -91,8 +101,8 @@ async def add_to_waitlist(
     if target_date < today_local:
         friendly = target_date.strftime("%A, %B %d")
         logger.warning(
-            "[Waitlist] Refused add for past date %s (today=%s, patient=%s)",
-            preferred_date, today_local.isoformat(), patient_name,
+            "[Waitlist] Refused add for past date %s (today=%s, caller=%s)",
+            preferred_date, today_local.isoformat(), student_name,
         )
         return {
             "ok": False,
@@ -101,7 +111,7 @@ async def add_to_waitlist(
             "today": today_local.isoformat(),
             "summary_for_assistant": (
                 f"That date ({friendly}) has already passed — today is "
-                f"{today_local.strftime('%A, %B %d, %Y')}. Tell the patient the date "
+                f"{today_local.strftime('%A, %B %d, %Y')}. Tell the caller the date "
                 f"is in the past and ask which upcoming day they'd prefer. Do NOT add "
                 f"them to the waitlist for a past date."
             ),
@@ -111,7 +121,7 @@ async def add_to_waitlist(
     # If the preferred date is a configured tenant holiday, the office is
     # closed — adding a waitlist entry would never resolve since no slots
     # exist. Refuse with a clear message naming the holiday so the LLM can
-    # explain the closure to the patient.
+    # explain the closure to the caller.
     holiday_match: dict | None = None
     try:
         holidays = (
@@ -131,8 +141,8 @@ async def add_to_waitlist(
         friendly = target_date.strftime("%A, %B %d")
         holiday_name = holiday_match["name"]
         logger.info(
-            "[Waitlist] Refused add for holiday %s (%s) — patient=%s",
-            preferred_date, holiday_name, patient_name,
+            "[Waitlist] Refused add for holiday %s (%s) — caller=%s",
+            preferred_date, holiday_name, student_name,
         )
         return {
             "ok": False,
@@ -141,7 +151,7 @@ async def add_to_waitlist(
             "holiday": holiday_match,
             "summary_for_assistant": (
                 f"The office is CLOSED on {friendly} for {holiday_name}. "
-                f"Tell the patient we're closed that day for {holiday_name} and ask "
+                f"Tell the caller we're closed that day for {holiday_name} and ask "
                 f"which other day works. Do NOT add them to the waitlist for a holiday."
             ),
         }
@@ -152,20 +162,21 @@ async def add_to_waitlist(
     )
 
     # Normalise the phone before storing — prevents dirty data (dashes, spaces)
-    norm_phone = _normalise_phone(patient_phone)
+    norm_phone = _normalise_phone(student_phone)
 
     # Canonicalize so waitlist matching uses the same slug as booking
     appointment_type = slugify_appointment_type(appointment_type)
 
     # ── Duplicate guard ───────────────────────────────────────────────
-    norm_tail = _phone_digits_tail(norm_phone or patient_phone)
+    norm_tail = _phone_digits_tail(norm_phone or student_phone)
     async with async_session() as session:
         dup_result = await session.execute(
             select(WaitlistEntry)
+            .join(Caller, WaitlistEntry.caller_id == Caller.id)
             .where(
                 and_(
-                    _phone_col_clean(WaitlistEntry.patient_phone).endswith(norm_tail),
-                    WaitlistEntry.tenant_id == tenant_id,
+                    _phone_col_clean(WaitlistEntry.student_phone).endswith(norm_tail),
+                    Caller.tenant_id == tenant_id,
                     WaitlistEntry.appointment_type == appointment_type,
                     WaitlistEntry.preferred_date == preferred_date,
                     WaitlistEntry.status == WaitlistStatus.WAITING,
@@ -179,24 +190,34 @@ async def add_to_waitlist(
             friendly_type = appointment_type.replace("_", " ").title()
             logger.info(
                 "[Waitlist] Duplicate detected: %s already on waitlist for %s on %s",
-                patient_name, appointment_type, preferred_date,
+                student_name, appointment_type, preferred_date,
             )
             return {
                 "ok": False,
                 "error": "duplicate",
                 "summary_for_assistant": (
-                    f"{patient_name} is already on the waitlist for {friendly_type} on {friendly_date}. "
-                    f"Let the patient know they're already on the list — no need to add them again. "
+                    f"{student_name} is already on the waitlist for {friendly_type} on {friendly_date}. "
+                    f"Let the caller know they're already on the list — no need to add them again. "
                     f"If they want to check their position, use the check_waitlist_status tool."
                 ),
             }
 
+    # Upsert caller so we can link caller_id (is_test lives on the caller)
+    _norm_phone = norm_phone or student_phone
+    caller_rec = await upsert_caller(
+        name=student_name,
+        phone=_norm_phone,
+        email=student_email or "",
+        tenant_id=tenant_id,
+        is_test=is_test,
+    )
+
     entry = WaitlistEntry(
         id=uuid.uuid4(),
-        tenant_id=tenant_id,
-        patient_name=patient_name,
-        patient_phone=norm_phone or patient_phone,
-        patient_email=patient_email,
+        caller_id=caller_rec.id if caller_rec else None,
+        student_name=student_name,
+        student_phone=_norm_phone,
+        student_email=student_email,
         appointment_type=appointment_type,
         preferred_date=preferred_date,
         preferred_time_start=preferred_time_start,
@@ -204,7 +225,6 @@ async def add_to_waitlist(
         provider_id=provider_id,
         status=WaitlistStatus.WAITING,
         expires_at=expires_at,
-        is_test=is_test,
     )
 
     async with async_session() as session:
@@ -213,55 +233,64 @@ async def add_to_waitlist(
 
     logger.info(
         "[Waitlist] Added %s to waitlist for %s on %s (id=%s)",
-        patient_name,
+        student_name,
         appointment_type,
         preferred_date,
         entry.id,
     )
 
-    # Notify the patient by SMS that they've been added to the waitlist
+    # Notify the caller by SMS that they've been added to the waitlist
     try:
         sms_service.send_waitlist_added(
-            patient_name=patient_name,
-            phone=patient_phone,
+            caller_name=student_name,
+            phone=student_phone,
             appointment_type=appointment_type,
             preferred_date=preferred_date,
             preferred_time_start=preferred_time_start,
             preferred_time_end=preferred_time_end,
             tenant_ctx=tenant_ctx,
+            is_test=is_test,
         )
     except Exception as exc:
         logger.error("[Waitlist] Failed to send 'added' SMS for entry %s: %s", entry.id, exc)
 
+    friendly_date = target_date.strftime("%A, %B %d")
     return {
+        "ok": True,
         "id": str(entry.id),
         "status": WaitlistStatus.WAITING.value,
         "preferred_date": preferred_date,
         "appointment_type": appointment_type,
-        "message": f"{patient_name} has been added to the waitlist for {appointment_type} on {preferred_date}.",
+        "message": f"{student_name} has been added to the waitlist for {appointment_type} on {preferred_date}.",
+        "summary_for_assistant": (
+            f"{student_name} has been added to the waitlist for {appointment_type} on {friendly_date}. "
+            f"Tell them they're on the list and will be notified by SMS if a slot opens up. "
+            f"Do NOT promise a specific time or slot."
+        ),
     }
 
 
-# ── Check waitlist status (patient-facing) ─────────────────────────────────
+# ── Check waitlist status (caller-facing) ─────────────────────────────────
 
 
 async def check_waitlist_status(
-    patient_phone: str,
+    student_phone: str,
     tenant_id: uuid.UUID,
 ) -> dict:
     """
-    Check a patient's waitlist entries — called by LLM when patient asks
+    Check a caller's waitlist entries — called by LLM when caller asks
     about their waitlist status.
     """
-    phone_tail = _phone_digits_tail(patient_phone)
+    phone_tail = _phone_digits_tail(student_phone)
 
     async with async_session() as session:
         result = await session.execute(
             select(WaitlistEntry)
+            .join(Caller, WaitlistEntry.caller_id == Caller.id)
             .where(
                 and_(
-                    _phone_col_clean(WaitlistEntry.patient_phone).endswith(phone_tail),
-                    WaitlistEntry.tenant_id == tenant_id,
+                    _phone_col_clean(WaitlistEntry.student_phone).endswith(phone_tail),
+                    Caller.tenant_id == tenant_id,
                     WaitlistEntry.status.notin_([WaitlistStatus.EXPIRED, WaitlistStatus.CANCELLED]),
                 )
             )
@@ -275,7 +304,7 @@ async def check_waitlist_status(
                 "ok": True,
                 "entries": [],
                 "summary_for_assistant": (
-                    "This patient has no active waitlist entries. "
+                    "This caller has no active waitlist entries. "
                     "If they'd like to be added to the waitlist for a specific date, offer to do so."
                 ),
             }
@@ -297,9 +326,10 @@ async def check_waitlist_status(
                 pos_result = await session.execute(
                     select(func.count())
                     .select_from(WaitlistEntry)
+                    .join(Caller, WaitlistEntry.caller_id == Caller.id)
                     .where(
                         and_(
-                            WaitlistEntry.tenant_id == tenant_id,
+                            Caller.tenant_id == tenant_id,
                             WaitlistEntry.appointment_type == e.appointment_type,
                             WaitlistEntry.preferred_date == e.preferred_date,
                             WaitlistEntry.status == WaitlistStatus.WAITING,
@@ -332,9 +362,9 @@ async def check_waitlist_status(
             "ok": True,
             "entries": entry_dicts,
             "summary_for_assistant": (
-                f"Patient has {len(entry_dicts)} active waitlist entry/entries: "
+                f"Caller has {len(entry_dicts)} active waitlist entry/entries: "
                 + "; ".join(lines) + ". "
-                "Tell the patient their waitlist status naturally. "
+                "Tell the caller their waitlist status naturally. "
                 "If they've been NOTIFIED, remind them to check their SMS and reply YES to confirm."
             ),
         }
@@ -362,11 +392,13 @@ async def get_waitlist_entries(
     Returns:
         List of dicts, each containing full entry details.
     """
-    filters = [WaitlistEntry.tenant_id == tenant_id]
+    filters = [Caller.tenant_id == tenant_id]
 
-    # Exclude test data by default
+    # Real data only (default) or test data only when include_test is set
     if not include_test:
         filters.append(WaitlistEntry.is_test == False)  # noqa: E712
+    else:
+        filters.append(WaitlistEntry.is_test == True)  # noqa: E712
 
     if status is not None:
         filters.append(WaitlistEntry.status == status)
@@ -377,6 +409,7 @@ async def get_waitlist_entries(
     async with async_session() as session:
         result = await session.execute(
             select(WaitlistEntry)
+            .join(Caller, WaitlistEntry.caller_id == Caller.id)
             .where(and_(*filters))
             .order_by(WaitlistEntry.priority.asc(), WaitlistEntry.created_at.asc())
         )
@@ -393,9 +426,9 @@ async def get_waitlist_entries(
     return [
         {
             "id": str(e.id),
-            "patient_name": e.patient_name,
-            "patient_phone": e.patient_phone,
-            "patient_email": e.patient_email,
+            "student_name": e.student_name,
+            "student_phone": e.student_phone,
+            "student_email": e.student_email,
             "appointment_type": e.appointment_type,
             "preferred_date": e.preferred_date,
             "preferred_time_start": e.preferred_time_start,
@@ -434,7 +467,7 @@ async def check_waitlist_for_opening(
       - preferred_date must match the given date.
       - PROVIDER MATCH: If the cancelled slot has a provider_id, only notify
         entries that requested either that same provider OR no provider at
-        all. We never push a patient onto a provider they didn't request.
+        all. We never push a caller onto a provider they didn't request.
       - If the entry has a preferred time window (preferred_time_start /
         preferred_time_end), the available_slot time must fall within that
         window. Entries with no time preference always match.
@@ -452,7 +485,7 @@ async def check_waitlist_for_opening(
             provider) are eligible.
 
     Returns:
-        True if a waitlisted patient was notified, False otherwise.
+        True if a waitlisted caller was notified, False otherwise.
     """
     # Parse the slot time for window-matching
     try:
@@ -474,7 +507,7 @@ async def check_waitlist_for_opening(
     appointment_type = slugify_appointment_type(appointment_type)
 
     filters = [
-        WaitlistEntry.tenant_id == tenant_id,
+        Caller.tenant_id == tenant_id,
         WaitlistEntry.status == WaitlistStatus.WAITING,
         WaitlistEntry.appointment_type == appointment_type,
         WaitlistEntry.preferred_date == date,
@@ -490,6 +523,7 @@ async def check_waitlist_for_opening(
     async with async_session() as session:
         result = await session.execute(
             select(WaitlistEntry)
+            .join(Caller, WaitlistEntry.caller_id == Caller.id)
             .where(and_(*filters))
             .order_by(WaitlistEntry.priority.asc(), WaitlistEntry.created_at.asc())
         )
@@ -559,28 +593,28 @@ async def check_waitlist_for_opening(
     display_type = appointment_type.replace("_", " ").title()
 
     sms_body = (
-        f"Hi {matched_entry.patient_name}! Great news — a {display_type} slot "
+        f"Hi {matched_entry.student_name}! Great news — a {display_type} slot "
         f"just opened up on {display_date} at {display_time}. Reply YES to "
         f"book it or it will go to the next person on our waitlist."
     )
 
     ok = sms_service._send_sms(
-        to=matched_entry.patient_phone,
+        to=matched_entry.student_phone,
         body=sms_body,
         tenant_ctx=tenant_ctx,
     )
     if ok:
         sms_service._log_outbound_sms(
             tenant_ctx,
-            to_number=matched_entry.patient_phone,
+            to_number=matched_entry.student_phone,
             body=sms_body,
-            patient_phone=matched_entry.patient_phone,
+            caller_phone=matched_entry.student_phone,
         )
 
     logger.info(
         "[Waitlist] Notified %s (%s) about %s slot on %s at %s (entry %s)",
-        matched_entry.patient_name,
-        matched_entry.patient_phone,
+        matched_entry.student_name,
+        matched_entry.student_phone,
         appointment_type,
         date,
         display_time,
@@ -594,17 +628,17 @@ async def check_waitlist_for_opening(
 
 
 async def confirm_waitlist_booking(
-    patient_phone: str,
+    student_phone: str,
     tenant_id: uuid.UUID,
 ) -> dict | None:
     """
-    Confirm a waitlist booking when a patient replies YES to the SMS
+    Confirm a waitlist booking when a caller replies YES to the SMS
     notification. Finds the most recently notified entry for this phone
     number and tenant, then marks it as BOOKED.
 
     Args:
-        patient_phone: The phone number that replied YES.
-        tenant_id: The tenant the patient belongs to.
+        student_phone: The phone number that replied YES.
+        tenant_id: The tenant the caller belongs to.
 
     Returns:
         Dict with the booked entry details (so the caller can create the
@@ -612,13 +646,14 @@ async def confirm_waitlist_booking(
     """
     async with async_session() as session:
         # Suffix match on last 10 digits to handle phone format variations
-        phone_tail = _phone_digits_tail(patient_phone)
+        phone_tail = _phone_digits_tail(student_phone)
         result = await session.execute(
             select(WaitlistEntry)
+            .join(Caller, WaitlistEntry.caller_id == Caller.id)
             .where(
                 and_(
-                    _phone_col_clean(WaitlistEntry.patient_phone).endswith(phone_tail),
-                    WaitlistEntry.tenant_id == tenant_id,
+                    _phone_col_clean(WaitlistEntry.student_phone).endswith(phone_tail),
+                    Caller.tenant_id == tenant_id,
                     WaitlistEntry.status == WaitlistStatus.NOTIFIED,
                 )
             )
@@ -630,7 +665,7 @@ async def confirm_waitlist_booking(
         if not entry:
             logger.info(
                 "[Waitlist] No NOTIFIED entry found for phone %s (tenant %s)",
-                patient_phone,
+                student_phone,
                 tenant_id,
             )
             return None
@@ -642,7 +677,7 @@ async def confirm_waitlist_booking(
 
     logger.info(
         "[Waitlist] Confirmed booking for %s — %s on %s (entry %s)",
-        entry.patient_name,
+        entry.student_name,
         entry.appointment_type,
         entry.preferred_date,
         entry.id,
@@ -650,9 +685,9 @@ async def confirm_waitlist_booking(
 
     return {
         "id": str(entry.id),
-        "patient_name": entry.patient_name,
-        "patient_phone": entry.patient_phone,
-        "patient_email": entry.patient_email,
+        "student_name": entry.student_name,
+        "student_phone": entry.student_phone,
+        "student_email": entry.student_email,
         "appointment_type": entry.appointment_type,
         "preferred_date": entry.preferred_date,
         "preferred_time_start": entry.preferred_time_start,
@@ -675,7 +710,7 @@ async def cancel_waitlist_entry(
 
     Args:
         entry_id: The UUID of the waitlist entry to cancel.
-        tenant_ctx: Optional TenantContext for sending the patient SMS.
+        tenant_ctx: Optional TenantContext for sending the caller SMS.
 
     Returns:
         True if the entry was found and cancelled, False otherwise.
@@ -701,29 +736,31 @@ async def cancel_waitlist_entry(
         entry.status = WaitlistStatus.CANCELLED
 
         # Snapshot fields we need for the SMS before the session closes
-        patient_name = entry.patient_name
-        patient_phone = entry.patient_phone
+        student_name = entry.student_name
+        student_phone = entry.student_phone
         appointment_type = entry.appointment_type
         preferred_date = entry.preferred_date
+        entry_is_test = entry.is_test or False
 
         await session.commit()
 
     logger.info(
         "[Waitlist] Cancelled entry %s (%s, %s on %s)",
         entry_id,
-        patient_name,
+        student_name,
         appointment_type,
         preferred_date,
     )
 
-    # Notify the patient that their waitlist entry was cancelled
+    # Notify the caller that their waitlist entry was cancelled
     try:
         sms_service.send_waitlist_cancelled(
-            patient_name=patient_name,
-            phone=patient_phone,
+            caller_name=student_name,
+            phone=student_phone,
             appointment_type=appointment_type,
             preferred_date=preferred_date,
             tenant_ctx=tenant_ctx,
+            is_test=entry_is_test,
         )
     except Exception as exc:
         logger.error("[Waitlist] Failed to send 'cancelled' SMS for entry %s: %s", entry_id, exc)
@@ -793,7 +830,7 @@ async def find_promote_conflicts(
         window_end = target_dt + window
 
         filters = [
-            Appointment.tenant_id == tenant_id,
+            Caller.tenant_id == tenant_id,
             Appointment.status.in_(
                 [AppointmentStatus.CONFIRMED, AppointmentStatus.RESCHEDULED]
             ),
@@ -806,7 +843,10 @@ async def find_promote_conflicts(
             filters.append(Appointment.provider_id == entry_provider_id)
 
         appt_rows = await session.execute(
-            select(Appointment).where(and_(*filters)).order_by(Appointment.scheduled_at.asc())
+            select(Appointment)
+            .join(Caller, Appointment.caller_id == Caller.id)
+            .where(and_(*filters))
+            .order_by(Appointment.scheduled_at.asc())
         )
         appts = list(appt_rows.scalars().all())
 
@@ -823,8 +863,8 @@ async def find_promote_conflicts(
     conflicts = [
         {
             "id": str(a.id),
-            "patient_name": a.patient_name,
-            "patient_phone": a.patient_phone,
+            "student_name": a.student_name,
+            "student_phone": a.student_phone,
             "appointment_type": a.appointment_type,
             "scheduled_at": a.scheduled_at.isoformat() if a.scheduled_at else None,
             "duration_minutes": a.duration_minutes,
@@ -859,9 +899,9 @@ async def promote_to_appointment(
     """
     Promote a waitlist entry to a booked appointment.
 
-    Books the appointment via calendar_service using the entry's patient info
+    Books the appointment via calendar_service using the entry's caller info
     and the admin-supplied start time, then marks the entry as BOOKED and
-    sends the patient a confirmation SMS.
+    sends the caller a confirmation SMS.
 
     Args:
         entry_id: UUID of the waitlist entry to promote.
@@ -897,26 +937,28 @@ async def promote_to_appointment(
             return None
 
         # Snapshot the fields we need outside the session
-        patient_info = {
-            "name": entry.patient_name,
-            "phone": entry.patient_phone,
-            "email": entry.patient_email or "",
+        caller_info = {
+            "name": entry.student_name,
+            "phone": entry.student_phone,
+            "email": entry.student_email or "",
         }
         appointment_type = entry.appointment_type
         preferred_date = entry.preferred_date
-        patient_name = entry.patient_name
-        patient_phone = entry.patient_phone
+        student_name = entry.student_name
+        student_phone = entry.student_phone
         entry_provider_id = entry.provider_id
+        entry_is_test = entry.is_test or False
 
     # Book the appointment through the same path the AI uses
     booking_start = scheduled_at
     try:
         booking = await calendar_service.book_appointment(
-            patient_info=patient_info,
+            caller_info=caller_info,
             start_time=booking_start,
             tenant_ctx=tenant_ctx,
             appointment_type_key=appointment_type,
             provider_id=entry_provider_id,
+            is_test=entry_is_test,
         )
     except Exception as exc:
         logger.error("[Waitlist] Booking failed during promote of %s: %s", entry_id, exc)
@@ -929,7 +971,7 @@ async def promote_to_appointment(
     # The native path returns CONFLICT when the unique-index races. When the
     # admin has explicitly opted to force the double-book, retry with a tiny
     # offset (a few seconds) so the partial unique index on
-    # (tenant_id, provider_id, scheduled_at) doesn't fire — the doctor has
+    # (tenant_id, provider_id, scheduled_at) doesn't fire — the faculty member has
     # explicitly agreed to take an overlapping appointment.
     if isinstance(booking, dict) and booking.get("status") == "CONFLICT":
         if force:
@@ -946,11 +988,12 @@ async def promote_to_appointment(
                     nudged_iso = nudged.isoformat()
                     try:
                         booking = await calendar_service.book_appointment(
-                            patient_info=patient_info,
+                            caller_info=caller_info,
                             start_time=nudged_iso,
                             tenant_ctx=tenant_ctx,
                             appointment_type_key=appointment_type,
                             provider_id=entry_provider_id,
+                            is_test=entry_is_test,
                         )
                     except Exception as exc:
                         logger.error(
@@ -1001,7 +1044,7 @@ async def promote_to_appointment(
             entry.booked_at = now
             await session.commit()
 
-    # SMS the patient about the promotion (use the time we actually booked,
+    # SMS the caller about the promotion (use the time we actually booked,
     # which may be nudged a few seconds from `scheduled_at` for force-promote)
     try:
         sms_start = booking_start
@@ -1013,14 +1056,25 @@ async def promote_to_appointment(
         else:
             start_dt = sms_start
         if start_dt.tzinfo is None:
-            start_dt = start_dt.replace(tzinfo=timezone.utc)
+            # The admin-supplied time is in the tenant's LOCAL timezone (no UTC shift).
+            # Attach the tenant tz so _to_local_time doesn't re-convert it.
+            try:
+                from zoneinfo import ZoneInfo as _ZI
+                _tz_name = getattr(tenant_ctx, "timezone", None) if tenant_ctx else None
+                from backend.defaults import DEFAULT_TIMEZONE as _DT
+                _tz = _ZI(_tz_name or _DT)
+            except Exception:
+                from datetime import timezone as _tz_mod
+                _tz = _tz_mod.utc
+            start_dt = start_dt.replace(tzinfo=_tz)
 
         sms_service.send_waitlist_promoted(
-            patient_name=patient_name,
-            phone=patient_phone,
+            caller_name=student_name,
+            phone=student_phone,
             appointment_type=appointment_type,
             scheduled_at=start_dt,
             tenant_ctx=tenant_ctx,
+            is_test=entry_is_test,
         )
     except Exception as exc:
         logger.error("[Waitlist] Failed to send 'promoted' SMS for entry %s: %s", entry_id, exc)
@@ -1028,7 +1082,7 @@ async def promote_to_appointment(
     logger.info(
         "[Waitlist] Promoted entry %s (%s, %s on %s) → booking %s",
         entry_id,
-        patient_name,
+        student_name,
         appointment_type,
         preferred_date,
         booking.get("uid") or booking.get("id"),
@@ -1039,8 +1093,8 @@ async def promote_to_appointment(
         "status": WaitlistStatus.BOOKED.value,
         "booked_at": now.isoformat(),
         "appointment_type": appointment_type,
-        "patient_name": patient_name,
-        "patient_phone": patient_phone,
+        "student_name": student_name,
+        "student_phone": student_phone,
         "scheduled_at": booking_start,
         "forced": bool(force),
         "booking": booking,

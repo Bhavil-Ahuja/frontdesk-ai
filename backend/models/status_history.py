@@ -3,9 +3,9 @@ Appointment status history — audit trail for every status change.
 
 Records who changed the status, when, and optionally why. This provides
 a complete timeline of each appointment's lifecycle:
-  CONFIRMED → COMPLETED (attended by patient)
-  CONFIRMED → NO_SHOW (patient didn't show)
-  CONFIRMED → CANCELLED (cancelled by patient or clinic)
+  CONFIRMED → COMPLETED (attended by caller)
+  CONFIRMED → NO_SHOW (caller didn't show)
+  CONFIRMED → CANCELLED (cancelled by caller or institute)
 """
 
 import uuid

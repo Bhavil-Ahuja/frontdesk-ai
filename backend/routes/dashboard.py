@@ -22,13 +22,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.config import settings
 from backend.defaults import (
     DEFAULT_AGENT_NAME,
-    DEFAULT_TEST_PATIENT_NAME,
+    DEFAULT_TEST_STUDENT_NAME,
     DEFAULT_TIMEZONE,
     slugify_appointment_type,
 )
 from backend.database import async_session, get_db
 from backend.models.call import Call, CallOutcome
 from backend.models.appointment import Appointment, BookedVia
+from backend.models.caller import Caller
 from backend.models.tenant import Tenant
 from backend.services import auth_service, tenant_service, calendar_service
 from backend.services.tenant_service import _generate_test_phone
@@ -105,6 +106,12 @@ class DashboardStats(BaseModel):
     outcomes_breakdown: dict[str, int]
     calls_per_day: list[dict[str, Any]]
     agent_active: bool
+    # Extended metrics
+    total_calls_30d: int
+    today_appointments: int
+    new_contacts_week: int
+    new_callers_per_day: list[dict[str, Any]]
+    appointments_per_day: list[dict[str, Any]]
 
 
 # ── Dashboard stats ───────────────────────────────────────────────────────────
@@ -113,6 +120,7 @@ class DashboardStats(BaseModel):
 @router.get("/api/dashboard/stats", response_model=DashboardStats)
 async def get_dashboard_stats(
     tenant_id: Optional[str] = Query(None, description="Admin-only override"),
+    include_test: bool = Query(False, description="Include test/demo data in stats"),
     db: AsyncSession = Depends(get_db),
     current_user: Tenant = Depends(auth_service.get_current_user),
 ):
@@ -143,6 +151,18 @@ async def get_dashboard_stats(
             return model_class.tenant_id == tid
         return True
 
+    def _appt_test_filter():
+        """Real data only (default) or test data only when include_test is set."""
+        if not include_test:
+            return Appointment.is_test == False  # noqa: E712
+        return Appointment.is_test == True  # noqa: E712
+
+    def _caller_test_filter():
+        """Real data only (default) or test data only when include_test is set."""
+        if not include_test:
+            return Caller.is_test == False  # noqa: E712
+        return Caller.is_test == True  # noqa: E712
+
     # Today's calls
     today_count_q = select(func.count()).where(and_(Call.started_at >= today_start, _tenant_filter(Call)))
     today_calls = (await db.execute(today_count_q)).scalar() or 0
@@ -153,6 +173,7 @@ async def get_dashboard_stats(
             Appointment.created_at >= week_start,
             Appointment.booked_via == BookedVia.AI,
             _tenant_filter(Appointment),
+            _appt_test_filter(),
         )
     )
     week_appointments = (await db.execute(week_appts_q)).scalar() or 0
@@ -203,6 +224,70 @@ async def get_dashboard_stats(
             "count": count,
         })
 
+    # Today's scheduled appointments
+    tomorrow = today_start + timedelta(days=1)
+    today_appts_q = select(func.count()).where(
+        and_(
+            Appointment.scheduled_at >= today_start,
+            Appointment.scheduled_at < tomorrow,
+            _tenant_filter(Appointment),
+            _appt_test_filter(),
+        )
+    )
+    today_appointments = (await db.execute(today_appts_q)).scalar() or 0
+
+    # New contacts this week
+    new_contacts_week_q = select(func.count()).where(
+        and_(
+            Caller.first_seen_at >= week_start,
+            _caller_test_filter(),
+            _tenant_filter(Caller),
+        )
+    )
+    new_contacts_week = (await db.execute(new_contacts_week_q)).scalar() or 0
+
+    # New callers per day — last 14 days
+    fourteen_days_ago = today_start - timedelta(days=13)
+    new_callers_per_day = []
+    for i in range(14):
+        day = fourteen_days_ago + timedelta(days=i)
+        day_end = day + timedelta(days=1)
+        cnt_q = select(func.count()).where(
+            and_(
+                Caller.first_seen_at >= day,
+                Caller.first_seen_at < day_end,
+                _caller_test_filter(),
+                _tenant_filter(Caller),
+            )
+        )
+        count = (await db.execute(cnt_q)).scalar() or 0
+        new_callers_per_day.append({
+            "date": day.strftime("%Y-%m-%d"),
+            "day": day.strftime("%b %d"),
+            "count": count,
+        })
+
+    # Appointments per day — this week (by booking date, AI-booked only)
+    appointments_per_day = []
+    for i in range(7):
+        day = week_start + timedelta(days=i)
+        day_end = day + timedelta(days=1)
+        cnt_q = select(func.count()).where(
+            and_(
+                Appointment.created_at >= day,
+                Appointment.created_at < day_end,
+                Appointment.booked_via == BookedVia.AI,
+                _tenant_filter(Appointment),
+                _appt_test_filter(),
+            )
+        )
+        count = (await db.execute(cnt_q)).scalar() or 0
+        appointments_per_day.append({
+            "date": day.strftime("%Y-%m-%d"),
+            "day": day.strftime("%a"),
+            "count": count,
+        })
+
     # Agent status — from the dedicated agent_active column (owner-toggleable)
     if tid:
         ten = await tenant_service.get_tenant(tid)
@@ -221,6 +306,11 @@ async def get_dashboard_stats(
         outcomes_breakdown=outcomes,
         calls_per_day=calls_per_day,
         agent_active=agent_active,
+        total_calls_30d=total_calls,
+        today_appointments=today_appointments,
+        new_contacts_week=new_contacts_week,
+        new_callers_per_day=new_callers_per_day,
+        appointments_per_day=appointments_per_day,
     )
 
 
@@ -280,9 +370,9 @@ async def get_config(current_user: Tenant = Depends(auth_service.get_current_use
             logger.info("Auto-persisting default business_hours for tenant %s", t.slug)
             t.business_hours = _DEFAULT_BUSINESS_HOURS
             needs_commit = True
-        if not t.test_patient_names:
-            t.test_patient_names = [DEFAULT_TEST_PATIENT_NAME]
-            t.test_patient_name = DEFAULT_TEST_PATIENT_NAME
+        if not t.test_student_names:
+            t.test_student_names = [DEFAULT_TEST_STUDENT_NAME]
+            t.test_student_name = DEFAULT_TEST_STUDENT_NAME
             needs_commit = True
         if needs_commit:
             await session.commit()
@@ -309,11 +399,7 @@ async def get_config(current_user: Tenant = Depends(auth_service.get_current_use
         "holidays": t.holidays or [],
         # Integration credentials — never return raw secrets, only:
         # (a) booleans so the UI can show "Connected", and
-        # (b) non-sensitive identifiers (assistant ID, phone number, username, event slug)
-        "vapi_configured": bool(t.vapi_api_key and t.vapi_assistant_id),
-        "vapi_assistant_id": t.vapi_assistant_id or "",
-        "vapi_phone_number_id": t.vapi_phone_number_id or "",
-        "vapi_api_key_masked": _mask_secret(t.vapi_api_key),
+        # (b) non-sensitive identifiers (phone number, username, event slug)
         "twilio_configured": bool(t.twilio_account_sid and t.twilio_auth_token),
         "twilio_account_sid": t.twilio_account_sid or "",
         "twilio_phone_number": t.twilio_phone_number or "",
@@ -322,15 +408,14 @@ async def get_config(current_user: Tenant = Depends(auth_service.get_current_use
         "google_calendar_connected": bool(t.google_calendar_connected),
         "google_calendar_email": t.google_calendar_email or "",
         # Feature flags — effective state (global AND per-tenant)
-        "vapi_enabled": settings.FEATURE_VAPI_ENABLED and (t.feature_vapi_enabled if t.feature_vapi_enabled is not None else True),
         "twilio_enabled": settings.FEATURE_TWILIO_ENABLED and (t.feature_twilio_enabled if t.feature_twilio_enabled is not None else True),
         # Test Agent — unified callers (phone + name pairs)
         "test_callers": tenant_service._merge_test_callers(t),
         # Legacy fields (kept for backwards compat)
         "test_caller_phone": t.test_caller_phone or "",
         "test_caller_phones": t.test_caller_phones or [],
-        "test_patient_name": t.test_patient_name or DEFAULT_TEST_PATIENT_NAME,
-        "test_patient_names": t.test_patient_names or [DEFAULT_TEST_PATIENT_NAME],
+        "test_student_name": t.test_student_name or DEFAULT_TEST_STUDENT_NAME,
+        "test_student_names": t.test_student_names or [DEFAULT_TEST_STUDENT_NAME],
         # Reminder & review settings
         "reminder_settings": t.reminder_settings or {
             "2h_enabled": True,
@@ -342,6 +427,10 @@ async def get_config(current_user: Tenant = Depends(auth_service.get_current_use
             "delay_hours": 24,
             "appointment_types": [],
         },
+        # Coaching-institute courses (stored under knowledge_base.courses)
+        "courses": (t.knowledge_base or {}).get("courses", []),
+        # Business type — read-only, set at registration
+        "business_type": t.business_type.value if t.business_type else "general",
     }
 
 
@@ -385,16 +474,15 @@ async def update_config(
         "business_hours", "holidays", "greeting_message", "business_name",
         "business_phone", "business_address",
         "demo_mode", "appointment_types", "emergency_guidance",
-        # Integration credentials — accept as plain text from authenticated tenant
-        "vapi_api_key", "vapi_assistant_id", "vapi_phone_number_id",
-        "vapi_webhook_secret",
+        # Twilio credentials — per-tenant
         "twilio_account_sid", "twilio_auth_token", "twilio_phone_number",
         "reminder_settings", "review_settings",
+        # Coaching-specific (processed separately below — placed here to be accepted)
+        "courses",
     ):
         if k in data:
-            # Skip empty strings for credential fields so users can clear by sending null,
-            # but masked round-trip values (containing •) shouldn't overwrite real secrets.
-            if k in {"vapi_api_key", "twilio_auth_token", "vapi_webhook_secret"}:
+            # Skip masked round-trip values (containing •) to avoid overwriting real secrets.
+            if k in {"twilio_auth_token"}:
                 v = data[k]
                 if isinstance(v, str) and "•" in v:
                     continue  # Don't overwrite with masked value
@@ -404,6 +492,18 @@ async def update_config(
     # The user enters display names; the server owns the codes.
     if "appointment_types" in update_fields and isinstance(update_fields["appointment_types"], list):
         update_fields["appointment_types"] = _normalise_appointment_types(update_fields["appointment_types"])
+
+    # Merge courses into knowledge_base JSONB (stored at knowledge_base.courses)
+    if "courses" in data and isinstance(data["courses"], list):
+        del update_fields["courses"]  # not a direct column; merge into knowledge_base
+        async with async_session() as _s:
+            from backend.models.tenant import Tenant as _Tenant
+            _res = await _s.execute(select(_Tenant).where(_Tenant.id == current_user.id))
+            _t = _res.scalar_one_or_none()
+            if _t is not None:
+                existing_kb = dict(_t.knowledge_base or {})
+                existing_kb["courses"] = data["courses"]
+                update_fields["knowledge_base"] = existing_kb
 
     if "voice_id" in data or "voice_provider" in data:
         update_fields["voice_config"] = {
@@ -432,35 +532,9 @@ async def update_config(
         calendar_service.invalidate_slot_cache(current_user.slug)
         logger.info("Slot cache cleared for %s due to config change", current_user.slug)
 
-    # If anything that affects the Vapi assistant changed (voice, greeting, agent
-    # name), patch the live assistant so the phone agent matches what the user
-    # just saved. Best-effort — failures are logged and don't break the save.
-    _vapi_relevant = {"voice_config", "greeting_message", "agent_name", "business_name"}
-    vapi_synced = False
-    if _vapi_relevant & set(update_fields.keys()):
-        try:
-            tenant_ctx = await tenant_service.resolve_by_id(current_user.id)
-            if tenant_ctx and tenant_ctx.vapi_api_key and tenant_ctx.vapi_assistant_id:
-                from backend.services import vapi_service
-                new_id = await vapi_service.register_assistant(tenant_ctx=tenant_ctx)
-                vapi_synced = bool(new_id)
-                logger.info(
-                    "[Config] Vapi assistant sync for %s: %s",
-                    current_user.slug,
-                    "ok" if vapi_synced else "skipped/failed",
-                )
-            else:
-                logger.info(
-                    "[Config] Skipping Vapi sync for %s — credentials missing",
-                    current_user.slug,
-                )
-        except Exception as exc:
-            logger.warning("[Config] Vapi assistant sync error: %s", exc)
-
     return {
         "status": "saved",
         "updated_fields": list(update_fields.keys()),
-        "vapi_synced": vapi_synced,
     }
 
 
@@ -617,15 +691,15 @@ async def delete_test_phone(
     return {"status": "deleted", "test_caller_phones": phones}
 
 
-# ── Test patient name management ─────────────────────────────────────────────
+# ── Test student name management ─────────────────────────────────────────────
 
 
-@router.post("/api/config/test-patient-names")
-async def add_test_patient_name(
+@router.post("/api/config/test-student-names")
+async def add_test_student_name(
     body: dict,
     current_user: Tenant = Depends(auth_service.get_current_user),
 ):
-    """Add a new test patient name to the tenant's list."""
+    """Add a new test student name to the tenant's list."""
     name = (body.get("name") or "").strip()
     if not name or len(name) < 2:
         raise HTTPException(status_code=400, detail="Name must be at least 2 characters.")
@@ -638,33 +712,33 @@ async def add_test_patient_name(
         if not t:
             raise HTTPException(status_code=404, detail="Tenant not found.")
 
-        names = list(t.test_patient_names or [DEFAULT_TEST_PATIENT_NAME])
+        names = list(t.test_student_names or [DEFAULT_TEST_STUDENT_NAME])
         if len(names) >= 10:
-            raise HTTPException(status_code=400, detail="Maximum 10 test patient names allowed.")
+            raise HTTPException(status_code=400, detail="Maximum 10 test student names allowed.")
         if name in names:
             raise HTTPException(status_code=400, detail="This name already exists.")
 
         names.append(name)
-        t.test_patient_names = names
+        t.test_student_names = names
 
         # If no default yet, set this as default
-        if not t.test_patient_name:
-            t.test_patient_name = name
+        if not t.test_student_name:
+            t.test_student_name = name
 
         await session.commit()
         tenant_service.invalidate_cache(str(t.id))
 
-    logger.info("Added test patient name '%s' for tenant %s (total: %d)",
+    logger.info("Added test student name '%s' for tenant %s (total: %d)",
                 name, current_user.owner_email, len(names))
-    return {"name": name, "test_patient_names": names}
+    return {"name": name, "test_student_names": names}
 
 
-@router.delete("/api/config/test-patient-names/{name}")
-async def delete_test_patient_name(
+@router.delete("/api/config/test-student-names/{name}")
+async def delete_test_student_name(
     name: str,
     current_user: Tenant = Depends(auth_service.get_current_user),
 ):
-    """Remove a test patient name from the tenant's list."""
+    """Remove a test student name from the tenant's list."""
     from urllib.parse import unquote
     name = unquote(name)
 
@@ -674,25 +748,25 @@ async def delete_test_patient_name(
         if not t:
             raise HTTPException(status_code=404, detail="Tenant not found.")
 
-        names = list(t.test_patient_names or [])
+        names = list(t.test_student_names or [])
         if name not in names:
-            raise HTTPException(status_code=404, detail="Name not found in your test patient names list.")
+            raise HTTPException(status_code=404, detail="Name not found in your test student names list.")
         if len(names) <= 1:
-            raise HTTPException(status_code=400, detail="Must keep at least one test patient name.")
+            raise HTTPException(status_code=400, detail="Must keep at least one test student name.")
 
         names.remove(name)
-        t.test_patient_names = names
+        t.test_student_names = names
 
         # If we deleted the default, switch to the first remaining
-        if t.test_patient_name == name:
-            t.test_patient_name = names[0]
+        if t.test_student_name == name:
+            t.test_student_name = names[0]
 
         await session.commit()
         tenant_service.invalidate_cache(str(t.id))
 
-    logger.info("Deleted test patient name '%s' for tenant %s (remaining: %d)",
+    logger.info("Deleted test student name '%s' for tenant %s (remaining: %d)",
                 name, current_user.owner_email, len(names))
-    return {"status": "deleted", "test_patient_names": names}
+    return {"status": "deleted", "test_student_names": names}
 
 
 # ── Unified test callers management (phone + name pairs) ────────────────────
@@ -741,10 +815,10 @@ async def add_test_caller(
 
         # Also update legacy fields for backwards compat
         t.test_caller_phones = [c["phone"] for c in callers]
-        t.test_patient_names = [c["name"] for c in callers]
+        t.test_student_names = [c["name"] for c in callers]
         if not t.test_caller_phone:
             t.test_caller_phone = phone
-            t.test_patient_name = name
+            t.test_student_name = name
 
         await session.commit()
         tenant_service.invalidate_cache(str(t.id))
@@ -787,7 +861,7 @@ async def update_test_caller(
 
         t.test_callers = callers
         # Update legacy
-        t.test_patient_names = [c["name"] for c in callers]
+        t.test_student_names = [c["name"] for c in callers]
 
         await session.commit()
         tenant_service.invalidate_cache(str(t.id))
@@ -823,12 +897,12 @@ async def delete_test_caller(
         t.test_callers = callers
         # Update legacy
         t.test_caller_phones = [c["phone"] for c in callers]
-        t.test_patient_names = [c["name"] for c in callers]
+        t.test_student_names = [c["name"] for c in callers]
 
         # If we deleted the default, switch to the first remaining
         if t.test_caller_phone == phone:
             t.test_caller_phone = callers[0]["phone"]
-            t.test_patient_name = callers[0]["name"]
+            t.test_student_name = callers[0]["name"]
 
         await session.commit()
         tenant_service.invalidate_cache(str(t.id))

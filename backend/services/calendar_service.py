@@ -4,7 +4,7 @@ Calendar service — slot availability, booking, rescheduling, cancellation.
 Architecture: the Postgres-backed native scheduler is the **source of truth**
 for availability and bookings. Google Calendar is an optional sync layer —
 when connected, we create/update/delete calendar events as reminders for the
-patient and staff, but the DB always drives slot availability.
+caller and staff, but the DB always drives slot availability.
 
 Routing (checked in priority order):
   1. Native scheduler — Postgres-backed, uses business_hours + appointment_types
@@ -85,7 +85,7 @@ def _resolve_appointment_config(
 
     The inner ``.get("duration_minutes", DEFAULT)`` calls are pure data-integrity
     safety nets — they only fire if the tenant's JSON is malformed (missing the
-    ``duration_minutes`` key). In normal operation, the clinic owner's config
+    ``duration_minutes`` key). In normal operation, the tenant's config
     always drives the value.
     """
     duration = DEFAULT_APPOINTMENT_DURATION_MINUTES
@@ -157,7 +157,7 @@ async def get_available_slots(
         provider_id: Optional provider UUID — uses their calendar_id and
             business hours override if set.
         exclude_booking_uid: If provided, excludes this booking from the
-            overlap check. Used during rescheduling so the patient's own
+            overlap check. Used during rescheduling so the caller's own
             appointment doesn't block the new time they want to move to.
 
     Returns:
@@ -230,7 +230,7 @@ async def get_available_slots(
 
 
 async def book_appointment(
-    patient_info: dict[str, Any],
+    caller_info: dict[str, Any],
     start_time: str,
     tenant_ctx: Any | None = None,
     appointment_type_key: str = "",
@@ -246,7 +246,7 @@ async def book_appointment(
     Routes to Google Calendar, native scheduler, or demo mode.
 
     Args:
-        patient_info: Dict with name, email, phone, dob.
+        caller_info: Dict with name, email, phone, dob.
         start_time: ISO datetime string for the slot.
         tenant_ctx: TenantContext for multi-tenant routing.
         appointment_type_key: Raw appointment type key (e.g. "consultation")
@@ -291,7 +291,7 @@ async def book_appointment(
 
         result = await native_scheduling.create_native_booking(
             tenant_id=tenant_ctx.tenant_id,
-            patient_info=patient_info,
+            caller_info=caller_info,
             appointment_type=appt_type_key,
             start_time=start_time,
             duration_minutes=duration,
@@ -306,7 +306,7 @@ async def book_appointment(
                 _gcal_sync_booking(
                     slug=slug,
                     refresh_token=tenant_ctx.google_calendar_refresh_token,
-                    patient_info=patient_info,
+                    caller_info=caller_info,
                     start_time=start_time,
                     duration_minutes=duration,
                     timezone=tz,
@@ -318,7 +318,7 @@ async def book_appointment(
 
     # ── Priority 3: Demo mode fallback (no real calendar configured) ────
     if _is_demo(tenant_ctx):
-        result = _demo_booking(patient_info, start_time)
+        result = _demo_booking(caller_info, start_time)
         logger.info("[Calendar DEMO] Booking created: %s", result)
         return result
 
@@ -427,7 +427,7 @@ async def cancel_appointment(
 async def _gcal_sync_booking(
     slug: str,
     refresh_token: str,
-    patient_info: dict[str, Any],
+    caller_info: dict[str, Any],
     start_time: str,
     duration_minutes: int,
     timezone: str,
@@ -446,7 +446,7 @@ async def _gcal_sync_booking(
                 pass
         gcal_event = await gcal.book_appointment(
             refresh_token=refresh_token,
-            patient_info=patient_info,
+            caller_info=caller_info,
             start_time=start_time,
             duration_minutes=duration_minutes,
             timezone=timezone,
@@ -512,7 +512,7 @@ def _demo_slots(date_from: str) -> list[str]:
     return slots
 
 
-def _demo_booking(patient_info: dict, start_time: str) -> dict[str, Any]:
+def _demo_booking(caller_info: dict, start_time: str) -> dict[str, Any]:
     """Return a fake booking response for demo purposes."""
     import uuid
 

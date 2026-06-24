@@ -219,7 +219,7 @@ function ModalOverlay({ modal, onConfirm, onCancel }) {
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
               placeholder={modal.placeholder}
-              className="w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none dark:bg-gray-700 dark:text-white"
+              className="w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none dark:bg-gray-700 dark:text-white"
               autoComplete="off"
             />
           </form>
@@ -238,7 +238,7 @@ function ModalOverlay({ modal, onConfirm, onCancel }) {
             className={`flex-1 px-4 py-2.5 text-sm font-medium text-white rounded-lg transition-colors ${
               isDanger
                 ? 'bg-red-500 hover:bg-red-600'
-                : 'bg-primary-500 hover:bg-primary-600'
+                : 'bg-indigo-500 hover:bg-indigo-600'
             }`}
           >
             {modal.confirmText}

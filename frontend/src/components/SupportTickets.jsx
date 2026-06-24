@@ -41,6 +41,23 @@ const PRIORITY_COLORS = {
   URGENT: 'text-red-500',
 };
 
+const PRIORITY_LABELS = {
+  LOW: 'Low',
+  MEDIUM: 'Medium',
+  HIGH: 'High',
+  URGENT: 'Urgent',
+};
+
+const CATEGORY_LABELS = {
+  GENERAL: 'General',
+  BILLING: 'Billing',
+  TECHNICAL: 'Technical',
+  ACCOUNT: 'Account',
+  FEATURE_REQUEST: 'Feature Request',
+  VOICE_SETUP: 'Voice Setup',
+  OTHER: 'Other',
+};
+
 const CATEGORIES = [
   { value: 'GENERAL', label: 'General' },
   { value: 'BILLING', label: 'Billing' },
@@ -128,8 +145,8 @@ export default function SupportTickets() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-primary-50 dark:bg-primary-900/30 rounded-xl flex items-center justify-center">
-            <HelpCircle className="w-5 h-5 text-primary-500" />
+          <div className="w-10 h-10 bg-indigo-50 dark:bg-indigo-900/30 rounded-xl flex items-center justify-center">
+            <HelpCircle className="w-5 h-5 text-indigo-500" />
           </div>
           <div>
             <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Support</h1>
@@ -140,7 +157,7 @@ export default function SupportTickets() {
         </div>
         <button
           onClick={() => setShowForm(!showForm)}
-          className="inline-flex items-center gap-2 px-4 py-2 bg-primary-500 text-white rounded-lg text-sm font-medium hover:bg-primary-600 transition-colors"
+          className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-500 text-white rounded-lg text-sm font-medium hover:bg-indigo-600 transition-colors"
         >
           {showForm ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
           {showForm ? 'Cancel' : 'New Ticket'}
@@ -149,9 +166,9 @@ export default function SupportTickets() {
 
       {/* Create ticket form */}
       {showForm && (
-        <form onSubmit={handleSubmit} className="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 p-6 space-y-4">
+        <form onSubmit={handleSubmit} className="bg-white dark:bg-gray-900/60 rounded-2xl border border-gray-200/80 dark:border-white/5 p-6 space-y-4">
           <h3 className="font-semibold text-gray-900 dark:text-white flex items-center gap-2">
-            <Send className="w-4 h-4 text-primary-500" />
+            <Send className="w-4 h-4 text-indigo-500" />
             Submit a Support Ticket
           </h3>
           <div>
@@ -162,7 +179,7 @@ export default function SupportTickets() {
               onChange={(e) => setForm({ ...form, subject: e.target.value })}
               placeholder="Brief description of your issue"
               maxLength={200}
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
               required
             />
           </div>
@@ -196,7 +213,7 @@ export default function SupportTickets() {
               placeholder="Describe your issue in detail..."
               rows={4}
               maxLength={5000}
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white text-sm resize-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white text-sm resize-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
               required
             />
           </div>
@@ -204,7 +221,7 @@ export default function SupportTickets() {
             <button
               type="submit"
               disabled={submitting || !form.subject.trim() || !form.body.trim()}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-primary-500 text-white rounded-lg text-sm font-medium hover:bg-primary-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-500 text-white rounded-lg text-sm font-medium hover:bg-indigo-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
               Submit Ticket
@@ -233,7 +250,7 @@ export default function SupportTickets() {
       {/* Ticket list */}
       {loading ? (
         <div className="flex items-center justify-center py-12">
-          <Loader2 className="w-6 h-6 animate-spin text-primary-500" />
+          <Loader2 className="w-6 h-6 animate-spin text-indigo-500" />
         </div>
       ) : tickets.length === 0 ? (
         <div className="text-center py-12">
@@ -250,7 +267,7 @@ export default function SupportTickets() {
             return (
               <div
                 key={ticket.id}
-                className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden"
+                className="bg-white dark:bg-gray-900/60 rounded-2xl border border-gray-200/80 dark:border-white/5 overflow-hidden"
               >
                 {/* Ticket header */}
                 <button
@@ -266,7 +283,7 @@ export default function SupportTickets() {
                         {STATUS_LABELS[ticket.status] || ticket.status}
                       </span>
                       <span className={`text-[10px] font-medium ${PRIORITY_COLORS[ticket.priority] || ''}`}>
-                        {ticket.priority}
+                        {PRIORITY_LABELS[ticket.priority] || ticket.priority}
                       </span>
                       {(ticket.message_count > 0) && (
                         <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-gray-100 dark:bg-gray-700 rounded text-[10px] text-gray-500 dark:text-gray-400">
@@ -277,7 +294,7 @@ export default function SupportTickets() {
                     </div>
                     <div className="flex items-center gap-3 mt-1">
                       <span className="text-xs text-gray-400">
-                        {ticket.category === 'FEATURE_REQUEST' ? 'Feature Request' : ticket.category === 'VOICE_SETUP' ? 'Voice Setup' : ticket.category.charAt(0) + ticket.category.slice(1).toLowerCase()}
+                        {CATEGORY_LABELS[ticket.category] || ticket.category?.replace(/_/g, ' ')}
                       </span>
                       <span className="text-xs text-gray-400 flex items-center gap-1">
                         <Clock className="w-3 h-3" />
@@ -394,10 +411,10 @@ function TicketThread({ ticket, tz, onUpdate }) {
                   <div className={`max-w-[80%] rounded-2xl px-3.5 py-2.5 ${
                     isAdmin
                       ? 'bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-bl-md'
-                      : 'bg-primary-500 text-white rounded-br-md'
+                      : 'bg-indigo-500 text-white rounded-br-md'
                   }`}>
                     <div className={`flex items-center gap-1.5 mb-1 text-[10px] font-medium ${
-                      isAdmin ? 'text-blue-600 dark:text-blue-400' : 'text-primary-100'
+                      isAdmin ? 'text-blue-600 dark:text-blue-400' : 'text-indigo-100'
                     }`}>
                       {isAdmin ? <Shield className="w-2.5 h-2.5" /> : <User className="w-2.5 h-2.5" />}
                       {msg.sender_name}
@@ -408,7 +425,7 @@ function TicketThread({ ticket, tz, onUpdate }) {
                       {msg.body}
                     </p>
                     <p className={`text-[10px] mt-1.5 ${
-                      isAdmin ? 'text-blue-400 dark:text-blue-500' : 'text-primary-200'
+                      isAdmin ? 'text-blue-400 dark:text-blue-500' : 'text-indigo-200'
                     }`}>
                       {formatTicketDate(msg.created_at, tz)}
                     </p>
@@ -429,12 +446,12 @@ function TicketThread({ ticket, tz, onUpdate }) {
             onChange={(e) => setMsgText(e.target.value)}
             placeholder="Type a message..."
             maxLength={5000}
-            className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+            className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
           />
           <button
             type="submit"
             disabled={sending || !msgText.trim()}
-            className="px-3 py-2 bg-primary-500 text-white rounded-lg text-sm font-medium hover:bg-primary-600 disabled:opacity-50 transition-colors"
+            className="px-3 py-2 bg-indigo-500 text-white rounded-lg text-sm font-medium hover:bg-indigo-600 disabled:opacity-50 transition-colors"
           >
             {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
           </button>

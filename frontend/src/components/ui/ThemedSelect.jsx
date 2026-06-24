@@ -91,7 +91,7 @@ export default function ThemedSelect({
         className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-lg border text-sm transition-colors ${
           disabled
             ? 'border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-400 cursor-not-allowed'
-            : 'border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:border-primary-300 dark:hover:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-400'
+            : 'border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:border-indigo-300 dark:hover:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-400'
         }`}
       >
         <span className="flex items-center gap-2 min-w-0 flex-1">
@@ -118,7 +118,7 @@ export default function ThemedSelect({
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder={searchPlaceholder}
-                  className="w-full pl-8 pr-3 py-1.5 border border-gray-200 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:ring-1 focus:ring-primary-400 focus:border-primary-400 outline-none"
+                  className="w-full pl-8 pr-3 py-1.5 border border-gray-200 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:ring-1 focus:ring-indigo-400 focus:border-indigo-400 outline-none"
                 />
               </div>
             </div>
@@ -144,7 +144,7 @@ export default function ThemedSelect({
                     }}
                     className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors ${
                       isSelected
-                        ? 'text-primary-700 dark:text-primary-300 font-medium bg-primary-50/40 dark:bg-primary-900/20'
+                        ? 'text-indigo-700 dark:text-indigo-300 font-medium bg-indigo-50/40 dark:bg-indigo-900/20'
                         : 'text-gray-700 dark:text-gray-300'
                     }`}
                   >
@@ -155,7 +155,7 @@ export default function ThemedSelect({
                         <p className="text-[11px] text-gray-400 dark:text-gray-500 truncate">{opt.sublabel}</p>
                       )}
                     </div>
-                    {isSelected && <Check className="w-4 h-4 text-primary-500 shrink-0" />}
+                    {isSelected && <Check className="w-4 h-4 text-indigo-500 shrink-0" />}
                   </button>
                 );
               })

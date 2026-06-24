@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.database import async_session, get_db
 from backend.defaults import DEFAULT_APPOINTMENT_DURATION_MINUTES, DEFAULT_TIMEZONE, slugify_appointment_type
 from backend.models.appointment import Appointment, AppointmentStatus, BookedVia
+from backend.models.caller import Caller
 from backend.models.provider import Provider
 from backend.models.status_history import AppointmentStatusHistory
 from backend.models.tenant import Tenant
@@ -38,9 +39,9 @@ router = APIRouter(prefix="/api/appointments", tags=["Appointments"])
 class AppointmentOut(BaseModel):
     id: str
     cal_booking_uid: Optional[str]
-    patient_name: str
-    patient_phone: str
-    patient_email: Optional[str]
+    student_name: str
+    student_phone: str
+    student_email: Optional[str]
     date_of_birth: Optional[str]
     appointment_type: str
     appointment_type_display: Optional[str] = None
@@ -77,19 +78,21 @@ async def list_appointments(
     logger.info("Listing appointments for user=%s admin=%s status=%s type=%s include_test=%s",
                 current_user.owner_email, current_user.is_admin, status, appointment_type, include_test)
 
-    query = select(Appointment)
+    query = select(Appointment).join(Caller, Appointment.caller_id == Caller.id)
 
-    # Exclude test data by default
+    # When include_test=False → real data only; include_test=True → test data only
     if not include_test:
         query = query.where(Appointment.is_test == False)  # noqa: E712
+    else:
+        query = query.where(Appointment.is_test == True)  # noqa: E712
 
-    # Tenant scoping: non-admins only see their own
+    # Tenant scoping: non-admins only see their own (derived via caller.tenant_id)
     if not current_user.is_admin:
-        query = query.where(Appointment.tenant_id == current_user.id)
+        query = query.where(Caller.tenant_id == current_user.id)
     elif tenant_id:
         try:
             tid = uuid.UUID(tenant_id)
-            query = query.where(Appointment.tenant_id == tid)
+            query = query.where(Caller.tenant_id == tid)
         except ValueError:
             pass
 
@@ -143,9 +146,9 @@ async def list_appointments(
         AppointmentOut(
             id=str(a.id),
             cal_booking_uid=a.cal_booking_uid,
-            patient_name=a.patient_name,
-            patient_phone=a.patient_phone,
-            patient_email=a.patient_email,
+            student_name=a.student_name,
+            student_phone=a.student_phone,
+            student_email=a.student_email,
             date_of_birth=a.date_of_birth,
             appointment_type=a.appointment_type,
             appointment_type_display=type_display_map.get(
@@ -204,11 +207,12 @@ async def cancel_appointment(
 
     # Send cancellation SMS with tenant context for correct Twilio credentials
     tenant_ctx = None
-    if apt.tenant_id:
-        tenant_ctx = await tenant_service.resolve_by_id(apt.tenant_id)
+    _tenant_id = apt.tenant_id  # derived @property → caller.tenant_id
+    if _tenant_id:
+        tenant_ctx = await tenant_service.resolve_by_id(_tenant_id)
     sms_service.send_cancellation(
-        patient_name=apt.patient_name,
-        phone=apt.patient_phone,
+        caller_name=apt.student_name,
+        phone=apt.student_phone,
         scheduled_at=apt.scheduled_at,
         tenant_ctx=tenant_ctx,
     )
@@ -243,6 +247,7 @@ async def cancel_appointment(
 class AppointmentUpdateRequest(BaseModel):
     status: Optional[str] = None
     notes: Optional[str] = None
+    scheduled_at: Optional[datetime] = None
 
 
 _ALLOWED_STATUS_TRANSITIONS = {
@@ -268,7 +273,8 @@ async def update_appointment(
 ):
     """
     Update an appointment's status and/or notes.
-    Used by clinic owners to mark past appointments as attended / no-show
+    Update an appointment's status and/or notes.
+    Used by staff to mark past sessions as attended / no-show
     and to add visit notes that the AI will reference on future calls.
     """
     try:
@@ -315,52 +321,52 @@ async def update_appointment(
         )
         db.add(history_entry)
 
-        # Side effects: update patient record based on outcome
+        # Side effects: update caller record based on outcome
         try:
-            from backend.models.patient import Patient
-            patient_result = await db.execute(
-                select(Patient).where(
-                    Patient.phone == apt.patient_phone,
-                    Patient.tenant_id == apt.tenant_id,
+            from backend.models.caller import Caller
+            caller_result = await db.execute(
+                select(Caller).where(
+                    Caller.phone == apt.student_phone,
+                    Caller.tenant_id == apt.tenant_id,
                 )
             )
-            patient = patient_result.scalar_one_or_none()
-            if patient:
+            caller_rec = caller_result.scalar_one_or_none()
+            if caller_rec:
                 if new_status == AppointmentStatus.NO_SHOW:
-                    patient.no_show_count = (patient.no_show_count or 0) + 1
+                    caller_rec.no_show_count = (caller_rec.no_show_count or 0) + 1
                     # If correcting from COMPLETED back to NO_SHOW, undo the visit_count
                     if old_status == AppointmentStatus.COMPLETED:
-                        patient.visit_count = max(0, (patient.visit_count or 1) - 1)
-                    logger.info("Patient %s no-show count → %d", patient.name, patient.no_show_count)
+                        caller_rec.visit_count = max(0, (caller_rec.visit_count or 1) - 1)
+                    logger.info("Caller %s no-show count → %d", caller_rec.name, caller_rec.no_show_count)
                 elif new_status == AppointmentStatus.COMPLETED:
-                    patient.visit_count = (patient.visit_count or 0) + 1
-                    patient.last_appointment_at = apt.scheduled_at
-                    patient.is_new_patient = False
+                    caller_rec.visit_count = (caller_rec.visit_count or 0) + 1
+                    caller_rec.last_appointment_at = apt.scheduled_at
+                    caller_rec.is_new_caller = False
                     # If correcting from NO_SHOW back to COMPLETED, undo the no-show count
                     if old_status == AppointmentStatus.NO_SHOW:
-                        patient.no_show_count = max(0, (patient.no_show_count or 1) - 1)
-                    logger.info("Patient %s visit count → %d", patient.name, patient.visit_count)
+                        caller_rec.no_show_count = max(0, (caller_rec.no_show_count or 1) - 1)
+                    logger.info("Caller %s visit count → %d", caller_rec.name, caller_rec.visit_count)
         except Exception as exc:
-            logger.warning("Patient record update on status change failed: %s", exc)
+            logger.warning("Caller record update on status change failed: %s", exc)
 
         # ── Outbound SMS for status change (no-show / completed) ────────
         try:
             tenant_ctx_sms = None
             if apt.tenant_id:
                 tenant_ctx_sms = await tenant_service.resolve_by_id(apt.tenant_id)
-            if apt.patient_phone:
+            if apt.student_phone:
                 if new_status == AppointmentStatus.NO_SHOW and old_status != AppointmentStatus.NO_SHOW:
                     sms_service.send_no_show(
-                        patient_name=apt.patient_name,
-                        phone=apt.patient_phone,
+                        caller_name=apt.student_name,
+                        phone=apt.student_phone,
                         appointment_type=apt.appointment_type,
                         scheduled_at=apt.scheduled_at,
                         tenant_ctx=tenant_ctx_sms,
                     )
                 elif new_status == AppointmentStatus.COMPLETED and old_status != AppointmentStatus.COMPLETED:
                     sms_service.send_followup(
-                        patient_name=apt.patient_name,
-                        phone=apt.patient_phone,
+                        caller_name=apt.student_name,
+                        phone=apt.student_phone,
                         tenant_ctx=tenant_ctx_sms,
                     )
         except Exception as exc:
@@ -371,8 +377,71 @@ async def update_appointment(
         apt.notes = body.notes.strip() if body.notes.strip() else None
         updated.append("notes")
 
+    # ── Reschedule (change scheduled_at) ─────────────────────────────────
+    if body.scheduled_at is not None:
+        allowed_reschedule_statuses = {AppointmentStatus.CONFIRMED, AppointmentStatus.RESCHEDULED}
+        if apt.status not in allowed_reschedule_statuses:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Can only reschedule CONFIRMED or RESCHEDULED appointments (current: {apt.status.value}).",
+            )
+
+        old_scheduled_at = apt.scheduled_at
+        new_scheduled_at = body.scheduled_at
+        if new_scheduled_at.tzinfo is None:
+            new_scheduled_at = new_scheduled_at.replace(tzinfo=timezone.utc)
+
+        apt.scheduled_at = new_scheduled_at
+        apt.reminder_2h_sent_at = None  # Reset so the reminder fires again at the new time
+        updated.append(f"scheduled_at: {old_scheduled_at.isoformat()} → {new_scheduled_at.isoformat()}")
+
+        # Audit trail entry
+        reschedule_history = AppointmentStatusHistory(
+            appointment_id=apt.id,
+            old_status=apt.status.value,
+            new_status=apt.status.value,
+            changed_by=current_user.owner_email or "dashboard",
+            note=f"Rescheduled from {old_scheduled_at.isoformat()} to {new_scheduled_at.isoformat()}",
+        )
+        db.add(reschedule_history)
+
+        # SMS notification (non-fatal)
+        try:
+            _tenant_id = apt.tenant_id
+            tenant_ctx_sms = await tenant_service.resolve_by_id(_tenant_id) if _tenant_id else None
+            sms_service.send_reschedule(
+                caller_name=apt.student_name,
+                phone=apt.student_phone,
+                new_scheduled_at=new_scheduled_at,
+                appointment_type=apt.appointment_type,
+                tenant_ctx=tenant_ctx_sms,
+                is_test=apt.is_test,
+            )
+        except Exception as exc:
+            logger.warning("Reschedule SMS failed (non-fatal): %s", exc)
+
+        # Google Calendar update (non-fatal)
+        if (
+            apt.cal_booking_uid
+            and apt.cal_booking_uid.startswith("gcal-")
+            and current_user.google_calendar_connected
+            and current_user.google_calendar_refresh_token
+        ):
+            try:
+                tenant_tz = getattr(current_user, "timezone", DEFAULT_TIMEZONE) or DEFAULT_TIMEZONE
+                await gcal.reschedule_appointment(
+                    refresh_token=current_user.google_calendar_refresh_token,
+                    event_id=apt.cal_booking_uid,
+                    new_start_time=new_scheduled_at.isoformat(),
+                    duration_minutes=apt.duration_minutes or DEFAULT_APPOINTMENT_DURATION_MINUTES,
+                    timezone=tenant_tz,
+                )
+                logger.info("Appointment %s also rescheduled in Google Calendar.", appointment_id)
+            except Exception as exc:
+                logger.warning("Appointment %s — GCal reschedule failed (non-fatal): %s", appointment_id, exc)
+
     if not updated:
-        raise HTTPException(status_code=400, detail="Nothing to update. Provide status and/or notes.")
+        raise HTTPException(status_code=400, detail="Nothing to update. Provide status, notes, and/or scheduled_at.")
 
     await db.flush()
     logger.info("Appointment %s updated: %s", appointment_id, ", ".join(updated))
@@ -381,6 +450,7 @@ async def update_appointment(
         "id": appointment_id,
         "changes": updated,
         "current_status": apt.status.value,
+        "scheduled_at": apt.scheduled_at.isoformat() if apt.scheduled_at else None,
         "notes": apt.notes,
     }
 
@@ -509,9 +579,11 @@ async def sync_google_calendar(
             if gcal_status == "cancelled":
                 existing = (
                     await db.execute(
-                        select(Appointment).where(
+                        select(Appointment)
+                        .join(Caller, Appointment.caller_id == Caller.id)
+                        .where(
                             Appointment.cal_booking_uid == gcal_uid,
-                            Appointment.tenant_id == current_user.id,
+                            Caller.tenant_id == current_user.id,
                         )
                     )
                 ).scalar_one_or_none()
@@ -525,7 +597,7 @@ async def sync_google_calendar(
                         logger.info(
                             "[GCalSync] GCal event cancelled but DB is CONFIRMED for %s (%s) — "
                             "clearing gcal UID so it will be re-pushed",
-                            gcal_uid, existing.patient_name,
+                            gcal_uid, existing.student_name,
                         )
                         existing.cal_booking_uid = None
                 continue
@@ -554,34 +626,36 @@ async def sync_google_calendar(
             description = event.get("description", "")
             local_status = AppointmentStatus.CONFIRMED
 
-            # Parse patient info from event summary/description
-            patient_name = summary
+            # Parse student/caller info from event summary/description
+            student_name = summary
             # If summary follows our format "Appointment: Name", extract the name
             if summary.startswith("Appointment:"):
-                patient_name = summary.replace("Appointment:", "").strip()
+                student_name = summary.replace("Appointment:", "").strip()
 
-            patient_phone = ""
-            patient_email = ""
+            student_phone = ""
+            student_email = ""
             if description:
                 # Try to extract phone/email from the description we write
                 phone_match = re.search(r"Phone:\s*(\+?[\d\-\s()]+)", description)
                 if phone_match:
-                    patient_phone = phone_match.group(1).strip()
+                    student_phone = phone_match.group(1).strip()
                 email_match = re.search(r"Email:\s*(\S+@\S+)", description)
                 if email_match:
-                    patient_email = email_match.group(1).strip()
+                    student_email = email_match.group(1).strip()
 
             # Also check attendees for email
             attendees = event.get("attendees", [])
-            if attendees and not patient_email:
-                patient_email = attendees[0].get("email", "")
+            if attendees and not student_email:
+                student_email = attendees[0].get("email", "")
 
             # Upsert by gcal uid
             existing = (
                 await db.execute(
-                    select(Appointment).where(
+                    select(Appointment)
+                    .join(Caller, Appointment.caller_id == Caller.id)
+                    .where(
                         Appointment.cal_booking_uid == gcal_uid,
-                        Appointment.tenant_id == current_user.id,
+                        Caller.tenant_id == current_user.id,
                     )
                 )
             ).scalar_one_or_none()
@@ -601,19 +675,30 @@ async def sync_google_calendar(
                 existing.scheduled_at = scheduled_at
                 existing.duration_minutes = duration
                 existing.status = local_status
-                if patient_name and patient_name != "Appointment":
-                    existing.patient_name = patient_name
-                if patient_email:
-                    existing.patient_email = patient_email
-                if patient_phone:
-                    existing.patient_phone = patient_phone
+                if student_name and student_name != "Appointment":
+                    existing.student_name = student_name
+                if student_email:
+                    existing.student_email = student_email
+                if student_phone:
+                    existing.student_phone = student_phone
             else:
-                new_apt = Appointment(
+                # Upsert caller (required — caller_id is NOT NULL).
+                # Use a synthetic phone when GCal event has no phone.
+                from backend.services.caller_service import upsert_caller as _upsert_caller
+                _phone = student_phone or f"gcal-{event_id[:16]}"
+                _caller = await _upsert_caller(
+                    name=student_name or "Unknown",
+                    phone=_phone,
+                    email=student_email or "",
                     tenant_id=current_user.id,
+                    is_test=False,
+                )
+                new_apt = Appointment(
+                    caller_id=_caller.id if _caller else None,
                     cal_booking_uid=gcal_uid,
-                    patient_name=patient_name or "Unknown",
-                    patient_phone=patient_phone,
-                    patient_email=patient_email,
+                    student_name=student_name or "Unknown",
+                    student_phone=student_phone,
+                    student_email=student_email,
                     appointment_type=summary,
                     scheduled_at=scheduled_at,
                     duration_minutes=duration,
@@ -637,8 +722,10 @@ async def sync_google_calendar(
     gcal_uids_in_calendar = {f"gcal-{e.get('id', '')}" for e in gcal_events if e.get("id")}
 
     result = await db.execute(
-        select(Appointment).where(
-            Appointment.tenant_id == current_user.id,
+        select(Appointment)
+        .join(Caller, Appointment.caller_id == Caller.id)
+        .where(
+            Caller.tenant_id == current_user.id,
             Appointment.scheduled_at >= now,
             Appointment.status == AppointmentStatus.CONFIRMED,
             Appointment.cal_booking_uid.ilike("gcal-%"),
@@ -651,7 +738,7 @@ async def sync_google_calendar(
             logger.info(
                 "[GCalSync] GCal event missing for confirmed DB appointment %s (%s) — "
                 "clearing gcal UID so it will be re-pushed",
-                apt.cal_booking_uid, apt.patient_name,
+                apt.cal_booking_uid, apt.student_name,
             )
             apt.cal_booking_uid = None  # PUSH step will re-create in GCal
 
@@ -660,8 +747,10 @@ async def sync_google_calendar(
     # ── PUSH: DB → Google Calendar ────────────────────────────────────────
     # Find future CONFIRMED appointments that don't have a gcal- uid
     result = await db.execute(
-        select(Appointment).where(
-            Appointment.tenant_id == current_user.id,
+        select(Appointment)
+        .join(Caller, Appointment.caller_id == Caller.id)
+        .where(
+            Caller.tenant_id == current_user.id,
             Appointment.scheduled_at >= now,
             Appointment.status == AppointmentStatus.CONFIRMED,
         )
@@ -677,15 +766,15 @@ async def sync_google_calendar(
             pass  # Still push these — they were created in demo mode but GCal is now connected
 
         try:
-            patient_info = {
-                "name": apt.patient_name,
-                "email": apt.patient_email or "",
-                "phone": apt.patient_phone or "",
+            caller_info = {
+                "name": apt.student_name,
+                "email": apt.student_email or "",
+                "phone": apt.student_phone or "",
                 "dob": apt.date_of_birth or "",
             }
             booking = await gcal.book_appointment(
                 refresh_token=refresh_token,
-                patient_info=patient_info,
+                caller_info=caller_info,
                 start_time=apt.scheduled_at.isoformat(),
                 duration_minutes=apt.duration_minutes,
                 timezone=tenant_tz,
@@ -705,8 +794,10 @@ async def sync_google_calendar(
     # Find appointments cancelled in DB that still have a gcal- uid (not yet deleted from GCal)
     cancelled_count = 0
     result = await db.execute(
-        select(Appointment).where(
-            Appointment.tenant_id == current_user.id,
+        select(Appointment)
+        .join(Caller, Appointment.caller_id == Caller.id)
+        .where(
+            Caller.tenant_id == current_user.id,
             Appointment.status == AppointmentStatus.CANCELLED,
             Appointment.cal_booking_uid.ilike("gcal-%"),
         )
@@ -730,7 +821,7 @@ async def sync_google_calendar(
             if ok:
                 cancelled_count += 1
                 logger.info("[GCalSync] Pushed cancellation → GCal: %s (%s)",
-                            apt.cal_booking_uid, apt.patient_name)
+                            apt.cal_booking_uid, apt.student_name)
         except Exception as exc:
             logger.warning("[GCalSync] Cancel push error for %s: %s", apt.cal_booking_uid, exc)
             errors += 1

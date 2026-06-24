@@ -66,8 +66,8 @@ class RegisterRequest(BaseModel):
     # in an emergency / escalation scenario. Emergency guidance text is
     # collected later from the Agent Config page.
     escalation_phone: str = Field(..., min_length=5, max_length=20)
-    # Required: a Google Maps link to the clinic location. We use this for
-    # admin approval review (iframe preview) and to send patients a verified
+    # Required: a Google Maps link to the office location. We use this for
+    # admin approval review (iframe preview) and to send callers a verified
     # map link inside SMS / email templates.
     google_maps_url: str = Field(..., min_length=10, max_length=2048)
     timezone: str = Field(..., min_length=1)
@@ -117,7 +117,6 @@ class UserResponse(BaseModel):
     timezone: str
     plan: Optional[str]
     # Integration setup status
-    vapi_configured: bool
     twilio_configured: bool
 
 
@@ -133,10 +132,8 @@ def _user_to_dict(t: Tenant) -> dict:
         "business_type": t.business_type.value if t.business_type else None,
         "timezone": t.timezone or DEFAULT_TIMEZONE,
         "plan": t.plan.value if t.plan else None,
-        "vapi_configured": bool(t.vapi_api_key and t.vapi_assistant_id),
         "twilio_configured": bool(t.twilio_account_sid and t.twilio_auth_token),
         # Feature flags — effective state (global AND per-tenant)
-        "vapi_enabled": settings.FEATURE_VAPI_ENABLED and (t.feature_vapi_enabled if t.feature_vapi_enabled is not None else True),
         "twilio_enabled": settings.FEATURE_TWILIO_ENABLED and (t.feature_twilio_enabled if t.feature_twilio_enabled is not None else True),
     }
 

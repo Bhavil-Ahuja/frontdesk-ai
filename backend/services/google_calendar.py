@@ -362,7 +362,7 @@ async def get_available_slots(
 
 async def book_appointment(
     refresh_token: str,
-    patient_info: dict[str, Any],
+    caller_info: dict[str, Any],
     start_time: str,
     duration_minutes: int = DEFAULT_APPOINTMENT_DURATION_MINUTES,
     timezone: str = DEFAULT_TIMEZONE,
@@ -374,7 +374,7 @@ async def book_appointment(
 
     Args:
         refresh_token: Tenant's stored Google OAuth refresh token.
-        patient_info: Dict with name, email, phone, etc.
+        caller_info: Dict with name, email, phone, etc.
         start_time: ISO datetime string for the slot.
         duration_minutes: Appointment length.
         timezone: IANA timezone.
@@ -391,23 +391,23 @@ async def book_appointment(
     start_dt = datetime.fromisoformat(start_time)
     end_dt = start_dt + timedelta(minutes=duration_minutes)
 
-    patient_name = patient_info.get("name", "Patient")
-    patient_email = patient_info.get("email", "")
-    patient_phone = patient_info.get("phone", "")
+    caller_name = caller_info.get("name", "Caller")
+    caller_email = caller_info.get("email", "")
+    caller_phone = caller_info.get("phone", "")
 
     provider_line = f"Provider: {provider_name}\n" if provider_name else ""
     summary = (
-        f"Appointment: {patient_name} ({provider_name})"
+        f"Appointment: {caller_name} ({provider_name})"
         if provider_name
-        else f"Appointment: {patient_name}"
+        else f"Appointment: {caller_name}"
     )
 
     event_body = {
         "summary": summary,
         "description": (
-            f"Patient: {patient_name}\n"
-            f"Phone: {patient_phone}\n"
-            f"DOB: {patient_info.get('dob', 'N/A')}\n"
+            f"Caller: {caller_name}\n"
+            f"Phone: {caller_phone}\n"
+            f"DOB: {caller_info.get('dob', 'N/A')}\n"
             f"{provider_line}"
             f"\nBooked by FrontDesk AI voice agent"
         ),
@@ -420,8 +420,8 @@ async def book_appointment(
             "timeZone": timezone,
         },
         "attendees": (
-            [{"email": patient_email}]
-            if patient_email and "@" in patient_email and "noemail" not in patient_email
+            [{"email": caller_email}]  # attendees takes email — variable name doesn't matter
+            if caller_email and "@" in caller_email and "noemail" not in caller_email
             else []
         ),
         "reminders": {
@@ -434,7 +434,7 @@ async def book_appointment(
     }
 
     logger.info("[GoogleCal] Creating event: %s at %s (%d min)",
-                patient_name, start_time, duration_minutes)
+                caller_name, start_time, duration_minutes)
 
     try:
         resp = await http.post(

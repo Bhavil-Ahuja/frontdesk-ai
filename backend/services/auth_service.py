@@ -216,7 +216,7 @@ async def ensure_admin_exists() -> None:
         admin = Tenant(
             slug="admin",
             business_name="System Administrator",
-            business_type="custom",
+            business_type="coaching_institute",
             owner_name="Admin",
             owner_email=admin_email,
             password_hash=hash_password(admin_password),

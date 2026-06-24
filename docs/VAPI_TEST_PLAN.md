@@ -213,7 +213,7 @@ Plus optionally `escalate_to_human` if you trigger a transfer scenario.
 
 - **Empty/missing fields on `book_appointment`** — server rejects with a corrective message; LLM has to ask for what's missing.
 - **Wrong day-of-week → date** — server resolves "Monday" / "tomorrow" / "next Tuesday" from the user's actual message and overrides the model.
-- **Email asked of patient** — system prompt forbids it; server fills `noemail@<tenant>.scheduler.ai` automatically.
+- **Email asked of caller** — system prompt forbids it; server fills `noemail@<tenant>.scheduler.ai` automatically.
 - **Wrong year in slot_time** — server forces `datetime.now().year` and matches by hour-of-day.
 - **Wrong timezone format** — smart slot matcher finds the matching real calendar slot ignoring the timezone the LLM emitted.
 - **Explicit human request** — server short-circuits the LLM, calls `escalate_to_human` directly.

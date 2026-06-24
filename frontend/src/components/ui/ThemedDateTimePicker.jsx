@@ -34,6 +34,7 @@ export default function ThemedDateTimePicker({
   buttonClassName = '',
   formatLabel,
   timezoneHint,
+  dropUp = false,
 }) {
   const [open, setOpen] = useState(false);
 
@@ -84,11 +85,11 @@ export default function ThemedDateTimePicker({
       }
     : {
         button: value
-          ? 'border-primary-200 dark:border-primary-700 bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 hover:bg-primary-100 dark:hover:bg-primary-900/50'
+          ? 'border-indigo-200 dark:border-indigo-700 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/50'
           : 'border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600',
-        selectedDay: 'bg-primary-500 text-white font-semibold hover:bg-primary-600',
-        todayRing: 'ring-2 ring-primary-400',
-        timePill: 'bg-primary-500 text-white hover:bg-primary-600',
+        selectedDay: 'bg-indigo-500 text-white font-semibold hover:bg-indigo-600',
+        todayRing: 'ring-2 ring-indigo-400',
+        timePill: 'bg-indigo-500 text-white hover:bg-indigo-600',
       };
 
   // ── Trigger label ─────────────────────────────────────────────────────
@@ -209,7 +210,7 @@ export default function ThemedDateTimePicker({
       </button>
 
       {open && (
-        <div className="absolute z-50 mt-2 w-[22rem] max-w-[95vw] rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-xl p-3">
+        <div className={`absolute z-50 w-[22rem] max-w-[95vw] rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-xl p-3 ${dropUp ? 'bottom-full mb-2' : 'mt-2'}`}>
           {/* Header — month/year + nav */}
           <div className="flex items-center justify-between mb-2">
             <button
@@ -282,7 +283,7 @@ export default function ThemedDateTimePicker({
                 Time
               </span>
               <span className="ml-auto text-sm font-mono text-gray-700 dark:text-gray-200">
-                {pad2(parsed.hh ?? 9)}:{pad2(parsed.mm ?? 0)}
+                {to12h(parsed.hh ?? 9)}:{pad2(parsed.mm ?? 0)}
                 <span className="ml-1 text-xs text-gray-400">
                   {hour12Label(parsed.hh ?? 9)}
                 </span>
@@ -308,7 +309,7 @@ export default function ThemedDateTimePicker({
                             : 'text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700'
                         }`}
                       >
-                        {pad2(h)} {hour12Label(h)}
+                        {to12h(h)} {hour12Label(h)}
                       </button>
                     );
                   })}
@@ -352,7 +353,7 @@ export default function ThemedDateTimePicker({
             <button
               type="button"
               onClick={gotoNow}
-              className="text-xs font-medium text-primary-600 dark:text-primary-400 hover:underline"
+              className="text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:underline"
             >
               Now
             </button>
@@ -369,7 +370,7 @@ export default function ThemedDateTimePicker({
               <button
                 type="button"
                 onClick={() => setOpen(false)}
-                className="text-xs font-medium text-primary-600 dark:text-primary-400 hover:underline"
+                className="text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:underline"
               >
                 Done
               </button>
@@ -391,6 +392,12 @@ function hour12Label(h) {
   if (h === 0) return 'AM';
   if (h === 12) return 'PM';
   return h < 12 ? 'AM' : 'PM';
+}
+
+/** Convert 24-hour integer (0–23) to 12-hour display string ("12", "1"…"11") */
+function to12h(h) {
+  const h12 = h % 12;
+  return String(h12 === 0 ? 12 : h12);
 }
 
 /**

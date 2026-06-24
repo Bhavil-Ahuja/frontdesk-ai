@@ -1,22 +1,24 @@
 """
 SMS conversation history API routes.
 
-GET /api/sms/conversations  -> list unique patient phone conversations
-GET /api/sms/messages       -> list messages (optionally filtered by patient_phone)
+GET /api/sms/conversations  -> list unique caller phone conversations
+GET /api/sms/messages       -> list messages (optionally filtered by student_phone)
 """
 
 import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import select, func, desc, and_, case, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import async_session
 from backend.models.tenant import Tenant
-from backend.models.patient import Patient
+from backend.models.caller import Caller
 from backend.models.sms_message import SMSMessage, SMSDirection
 from backend.services import auth_service
+from backend.services.tenant_service import _tenant_to_context
 
 logger = logging.getLogger(__name__)
 
@@ -25,78 +27,60 @@ router = APIRouter(prefix="/api/sms", tags=["SMS"])
 
 @router.get("/conversations")
 async def list_conversations(
-    search: str = Query("", description="Search by patient name or phone number"),
+    search: str = Query("", description="Search by caller name or phone number"),
     include_test: bool = Query(False, description="Include test/demo SMS data"),
     current_user: Tenant = Depends(auth_service.get_current_user),
 ):
     """
-    List unique SMS conversations grouped by patient phone number.
-    Returns: patient_phone, patient_name, message_count, last_message_at,
+    List unique SMS conversations grouped by caller phone number.
+    Returns: student_phone, caller_name, message_count, last_message_at,
              last_message_body, last_direction
     """
     logger.info("[SMS] Listing conversations for tenant=%s include_test=%s search=%r",
                 current_user.slug, include_test, search)
     async with async_session() as session:
-        # Build base filters
-        sms_filters = [SMSMessage.tenant_id == current_user.id]
-        if not include_test:
-            sms_filters.append(SMSMessage.is_test == False)  # noqa: E712
+        # Base filters via JOIN — tenant scoped through caller
+        is_test_filter = (
+            Caller.is_test == False  # noqa: E712
+            if not include_test
+            else Caller.is_test == True  # noqa: E712
+        )
 
-        # Subquery to get per-phone aggregates
+        # Group by caller_id to get one row per conversation thread
         stmt = (
             select(
-                SMSMessage.patient_phone,
+                SMSMessage.caller_id,
+                Caller.phone.label("caller_phone"),
+                Caller.name.label("caller_name"),
                 func.count(SMSMessage.id).label("message_count"),
                 func.max(SMSMessage.created_at).label("last_message_at"),
             )
-            .where(and_(*sms_filters))
-            .group_by(SMSMessage.patient_phone)
+            .join(Caller, SMSMessage.caller_id == Caller.id)
+            .where(and_(Caller.tenant_id == current_user.id, is_test_filter))
+            .group_by(SMSMessage.caller_id, Caller.phone, Caller.name)
             .order_by(desc(func.max(SMSMessage.created_at)))
         )
         result = await session.execute(stmt)
         rows = result.all()
 
-        # Build a phone → patient_name mapping via a single query
-        phone_list = [row.patient_phone for row in rows]
-        patient_name_map: dict[str, str] = {}
-        if phone_list:
-            patient_stmt = (
-                select(Patient.phone, Patient.name)
-                .where(
-                    and_(
-                        Patient.tenant_id == current_user.id,
-                        Patient.phone.in_(phone_list),
-                    )
-                )
-            )
-            patient_result = await session.execute(patient_stmt)
-            for p_row in patient_result.all():
-                patient_name_map[p_row.phone] = p_row.name
-
-        # Apply search filter (by name or phone) after gathering data
+        # Apply search filter (by name or phone) in Python
         search_term = search.strip().lower() if search else ""
 
         conversations = []
         for row in rows:
-            patient_name = patient_name_map.get(row.patient_phone, None)
-
-            # Filter by search term if provided
             if search_term:
-                phone_match = search_term in (row.patient_phone or "").lower()
-                name_match = patient_name and search_term in patient_name.lower()
+                phone_match = search_term in (row.caller_phone or "").lower()
+                name_match = row.caller_name and search_term in row.caller_name.lower()
                 if not phone_match and not name_match:
                     continue
 
-            # Fetch the last message for preview (respecting test filter)
-            preview_filters = [
-                SMSMessage.tenant_id == current_user.id,
-                SMSMessage.patient_phone == row.patient_phone,
-            ]
-            if not include_test:
-                preview_filters.append(SMSMessage.is_test == False)  # noqa: E712
+            # Fetch the last message for preview
             last_msg_stmt = (
                 select(SMSMessage)
-                .where(and_(*preview_filters))
+                .where(and_(
+                    SMSMessage.caller_id == row.caller_id,
+                    is_test_filter,
+                ))
                 .order_by(desc(SMSMessage.created_at))
                 .limit(1)
             )
@@ -104,8 +88,8 @@ async def list_conversations(
             last_msg = last_msg_result.scalar_one_or_none()
 
             conversations.append({
-                "patient_phone": row.patient_phone,
-                "patient_name": patient_name,
+                "student_phone": row.caller_phone,
+                "caller_name": row.caller_name,
                 "message_count": row.message_count,
                 "last_message_at": row.last_message_at.isoformat() if row.last_message_at else None,
                 "last_message_body": (last_msg.body[:100] + "..." if len(last_msg.body) > 100 else last_msg.body) if last_msg else "",
@@ -117,23 +101,43 @@ async def list_conversations(
 
 @router.get("/messages")
 async def list_messages(
-    patient_phone: str = Query(..., description="Patient phone number to filter by"),
+    student_phone: str = Query(..., description="Caller phone number to filter by"),
     include_test: bool = Query(False, description="Include test/demo SMS data"),
     limit: int = Query(100, ge=1, le=500),
     current_user: Tenant = Depends(auth_service.get_current_user),
 ):
-    """List SMS messages for a specific patient phone, ordered oldest first."""
-    logger.info("[SMS] Listing messages for tenant=%s patient=%s include_test=%s", current_user.slug, patient_phone, include_test)
+    """List SMS messages for a specific caller phone, ordered oldest first."""
+    logger.info("[SMS] Listing messages for tenant=%s caller=%s include_test=%s", current_user.slug, student_phone, include_test)
     async with async_session() as session:
+        is_test_filter = (
+            Caller.is_test == False  # noqa: E712
+            if not include_test
+            else Caller.is_test == True  # noqa: E712
+        )
+        # Find caller by phone suffix match within this tenant
+        from backend.services.caller_service import _phone_digits_tail, _phone_col_clean
+        phone_tail = _phone_digits_tail(student_phone)
+        caller_result = await session.execute(
+            select(Caller).where(
+                and_(
+                    Caller.tenant_id == current_user.id,
+                    _phone_col_clean(Caller.phone).endswith(phone_tail),
+                )
+            ).limit(1)
+        )
+        caller_rec = caller_result.scalar_one_or_none()
+
+        if not caller_rec:
+            return []
+
         msg_filters = [
-            SMSMessage.tenant_id == current_user.id,
-            SMSMessage.patient_phone == patient_phone,
+            SMSMessage.caller_id == caller_rec.id,
+            is_test_filter,
         ]
-        if not include_test:
-            msg_filters.append(SMSMessage.is_test == False)  # noqa: E712
 
         stmt = (
             select(SMSMessage)
+            .join(Caller, SMSMessage.caller_id == Caller.id)
             .where(and_(*msg_filters))
             .order_by(SMSMessage.created_at.asc())
             .limit(limit)
@@ -149,6 +153,50 @@ async def list_messages(
                 "to_number": msg.to_number,
                 "body": msg.body,
                 "created_at": msg.created_at.isoformat() if msg.created_at else None,
+                "sender_type": getattr(msg, "sender_type", "agent") or "agent",
             }
             for msg in messages
         ]
+
+
+# ── Send custom message ───────────────────────────────────────────────────────
+
+
+class SendMessageRequest(BaseModel):
+    to: str
+    message: str
+
+
+@router.post("/send")
+async def send_message(
+    payload: SendMessageRequest,
+    current_user: Tenant = Depends(auth_service.get_current_user),
+):
+    """
+    Send a custom outbound SMS from the admin dashboard.
+    Saves with sender_type='admin' so the UI can distinguish it from AI-sent messages.
+    Test phone numbers (+1555...) are guarded — no real Twilio call is made.
+    """
+    to = payload.to.strip()
+    message = payload.message.strip()
+    if not to:
+        raise HTTPException(status_code=400, detail="Recipient phone number is required")
+    if not message:
+        raise HTTPException(status_code=400, detail="Message body is required")
+
+    is_test = to.startswith("+1555")
+    tenant_ctx = _tenant_to_context(current_user)
+
+    from backend.services import sms_service
+    ok = sms_service.send_custom_sms(
+        to=to,
+        message=message,
+        tenant_ctx=tenant_ctx,
+        is_test=is_test,
+        sender_type="admin",
+    )
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to send message — check Twilio credentials")
+
+    logger.info("[SMS] Admin manual send from tenant=%s to=%s is_test=%s", current_user.slug, to, is_test)
+    return {"success": True, "to": to, "is_test": is_test}

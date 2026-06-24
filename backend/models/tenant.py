@@ -1,8 +1,8 @@
 """
-Tenant model — each row represents one onboarded client (office, clinic,
-salon, practice, etc.) with all their integration credentials and config.
+Tenant model — each row represents one onboarded client (institute, office,
+salon, studio, etc.) with all their integration credentials and config.
 
-This is the foundation of multi-tenancy: every call, patient, and appointment
+This is the foundation of multi-tenancy: every call, caller record, and session
 is scoped to a tenant via tenant_id foreign keys.
 """
 
@@ -26,12 +26,8 @@ class TenantStatus(str, enum.Enum):
 
 
 class BusinessType(str, enum.Enum):
-    """Supported business verticals — drives prompt templates."""
-    DENTAL = "dental"
-    HOSPITAL = "hospital"
-    CLINIC = "clinic"
-    VETERINARY = "veterinary"
-    PHYSIOTHERAPY = "physiotherapy"
+    """Supported business verticals."""
+    COACHING_INSTITUTE = "coaching_institute"
     CUSTOM = "custom"
 
 
@@ -50,11 +46,15 @@ class Tenant(Base):
 
     # ── Business identity ────────────────────────────────────────────────
     business_name = Column(String(255), nullable=False)
-    business_type = Column(Enum(BusinessType), nullable=False, default=BusinessType.CUSTOM)
+    business_type = Column(
+        Enum(BusinessType, native_enum=False, values_callable=lambda x: [e.value for e in x]),
+        nullable=False,
+        default=BusinessType.COACHING_INSTITUTE,
+    )
     business_phone = Column(String(20), nullable=True)
     business_address = Column(Text, nullable=True)
     business_website = Column(String(255), nullable=True)
-    # Google Maps share-link or embed URL for the clinic's location.
+    # Google Maps share-link or embed URL for the institute's location.
     # Collected during registration so admins can iframe-preview the address
     # before approving, and so we have a definitive map source for templates.
     google_maps_url = Column(Text, nullable=True)
@@ -92,25 +92,15 @@ class Tenant(Base):
         default=lambda: ["goodbye", "thank you bye", "bye bye"],
     )
 
-    # ── Vapi integration ─────────────────────────────────────────────────
-    # Under Option A (centralised SaaS), vapi_api_key is unused — all
-    # tenants share the platform's global key from .env. We keep the column
-    # for backwards compat but it can be left NULL.
-    vapi_api_key = Column(String(255), nullable=True)
-    vapi_assistant_id = Column(String(255), nullable=True, unique=True, index=True)
-    vapi_phone_number_id = Column(String(255), nullable=True)
-    vapi_webhook_secret = Column(String(255), nullable=True)
-
     # ── Twilio integration ───────────────────────────────────────────────
     # Under Option A, twilio_account_sid and twilio_auth_token are unused —
     # all tenants share the platform's global Twilio account. Only the
-    # per-tenant phone number matters (each clinic gets a unique number).
+    # per-tenant phone number matters (each tenant gets a unique number).
     twilio_account_sid = Column(String(255), nullable=True)
     twilio_auth_token = Column(String(255), nullable=True)
     twilio_phone_number = Column(String(20), nullable=True)
 
     # ── Feature flags (per-tenant — effective only when global flag is also True)
-    feature_vapi_enabled = Column(Boolean, nullable=False, default=True)
     feature_twilio_enabled = Column(Boolean, nullable=False, default=True)
 
     # ── Usage metering (Option A — platform manages billing) ─────────────
@@ -134,8 +124,8 @@ class Tenant(Base):
     # DEPRECATED: Legacy separate arrays — kept for migration, prefer test_callers
     test_caller_phone = Column(String(20), nullable=True)
     test_caller_phones = Column(JSONB, nullable=False, default=lambda: [])
-    test_patient_name = Column(String(100), nullable=True, default="Alex Johnson")
-    test_patient_names = Column(JSONB, nullable=False, default=lambda: ["Alex Johnson"])
+    test_student_name = Column(String(100), nullable=True, default="Alex Johnson")
+    test_student_names = Column(JSONB, nullable=False, default=lambda: ["Alex Johnson"])
 
     # ── Escalation ───────────────────────────────────────────────────────
     escalation_phone = Column(String(20), nullable=True)

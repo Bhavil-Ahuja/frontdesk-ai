@@ -4,7 +4,7 @@ Provider service — CRUD and query operations for practice providers.
 Multi-tenant: every function accepts a tenant_id (or provider_id that implicitly
 belongs to one tenant) so that provider lookups and writes are scoped correctly.
 
-Providers are the practitioners (doctors, therapists, specialists, etc.) who perform
+Providers are the faculty members (teachers, counselors, specialists, etc.) who perform
 appointments. Each provider can:
   - Handle a subset of appointment types (or all types if list is empty)
   - Have their own Google Calendar or share the tenant's primary calendar
@@ -23,6 +23,7 @@ from sqlalchemy import select, and_, func
 
 from backend.database import async_session
 from backend.defaults import slugify_appointment_type
+from backend.models.caller import Caller
 from backend.models.provider import Provider
 from backend.models.appointment import Appointment, AppointmentStatus
 
@@ -37,6 +38,8 @@ _UPDATABLE_FIELDS = frozenset({
     "calendar_id",
     "business_hours_override",
     "max_concurrent",
+    "subject",
+    "demo_time_slots",
     "is_active",
 })
 
@@ -62,6 +65,8 @@ def provider_to_dict(p) -> dict:
         "appointment_types": p.appointment_types or [],
         "calendar_id": p.calendar_id,
         "business_hours_override": p.business_hours_override,
+        "subject": p.subject,
+        "demo_time_slots": p.demo_time_slots,
         "is_active": p.is_active,
     }
 
@@ -76,6 +81,8 @@ async def create_provider(
     calendar_id: str = None,
     business_hours_override: dict = None,
     max_concurrent: int = 1,
+    subject: str = None,
+    demo_time_slots: dict | None = None,
 ) -> dict:
     """
     Create a new provider for a tenant.
@@ -92,7 +99,7 @@ async def create_provider(
             override the tenant defaults.  Same shape as ``tenant.business_hours``.
         max_concurrent: Maximum overlapping appointments this provider can handle.
             Default 1 (single-booking). Set higher for providers who can see
-            multiple patients in parallel slots.
+            multiple callers in parallel slots.
 
     Returns:
         Dictionary representation of the newly created provider.
@@ -106,6 +113,8 @@ async def create_provider(
             calendar_id=calendar_id,
             business_hours_override=business_hours_override,
             max_concurrent=max(1, max_concurrent),
+            subject=subject.strip() if subject else None,
+            demo_time_slots=demo_time_slots if demo_time_slots else None,
             is_active=True,
         )
         session.add(provider)
@@ -387,9 +396,11 @@ async def auto_assign_provider(
         # Get all active bookings for these providers on the requested day
         provider_ids = [p.id for p in candidates]
         result = await session.execute(
-            select(Appointment).where(
+            select(Appointment)
+            .join(Caller, Appointment.caller_id == Caller.id)
+            .where(
                 and_(
-                    Appointment.tenant_id == tenant_id,
+                    Caller.tenant_id == tenant_id,
                     Appointment.provider_id.in_(provider_ids),
                     Appointment.scheduled_at >= day_start,
                     Appointment.scheduled_at < day_end,

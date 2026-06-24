@@ -4,9 +4,8 @@ FrontDesk AI — Multi-tenant AI Voice Agent Platform — FastAPI entry point.
 Startup sequence:
   1. Connect to PostgreSQL and auto-create tables
   2. Load knowledge base (per-tenant from DB, fallback to default_kb.json)
-  3. Register / update Vapi assistant (if API key is set)
-  4. Mount API routes and serve React dashboard as static files
-  5. Start on port 8000
+  3. Mount API routes and serve React dashboard as static files
+  4. Start on port 8000
 """
 
 import asyncio
@@ -25,11 +24,9 @@ from fastapi.responses import FileResponse
 from backend.config import settings
 from backend.database import init_db
 from backend.services.knowledge_service import load_knowledge_base
-from backend.services.vapi_service import register_assistant
 from backend.services.reminder_service import run_reminder_loop
 
 # ── Routes ────────────────────────────────────────────────────────────────────
-from backend.routes.vapi_webhook import router as vapi_router
 from backend.routes.calls import router as calls_router
 from backend.routes.appointments import router as appointments_router
 from backend.routes.dashboard import router as dashboard_router
@@ -38,13 +35,15 @@ from backend.routes.tenants import router as tenants_router
 from backend.routes.auth import router as auth_router
 from backend.routes.chat import router as chat_router
 from backend.routes.google_oauth import router as google_oauth_router
-from backend.routes.vapi_integration import router as vapi_integration_router
 from backend.routes.providers import router as providers_router
 from backend.routes.waitlist import router as waitlist_router
 from backend.routes.sms_webhook import router as sms_webhook_router
 from backend.routes.sms_messages import router as sms_messages_router
-from backend.routes.patients import router as patients_router
+from backend.routes.callers import router as callers_router
 from backend.routes.support_tickets import router as support_tickets_router
+from backend.routes.tenant_tools import router as tenant_tools_router
+from backend.routes.bolna import router as bolna_router
+from backend.routes.platform_admin import router as platform_admin_router
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -81,13 +80,11 @@ def _log_config_status():
 
     # Add common optional checks
     checks.extend([
-        ("Vapi API Key", settings.VAPI_API_KEY, False),
-        ("Vapi Phone Number ID", settings.VAPI_PHONE_NUMBER_ID, False),
-        ("Vapi Assistant ID", settings.VAPI_ASSISTANT_ID, False),
-        ("Vapi Webhook Secret", settings.VAPI_WEBHOOK_SECRET, False),
         ("Twilio Account SID", settings.TWILIO_ACCOUNT_SID, False),
         ("Twilio Auth Token", settings.TWILIO_AUTH_TOKEN, False),
         ("Twilio Phone Number", settings.TWILIO_PHONE_NUMBER, False),
+        ("Bolna API Key", settings.BOLNA_API_KEY, False),
+        ("Bolna Agent ID", settings.BOLNA_AGENT_ID, False),
         ("Escalation Phone", settings.ESCALATION_PHONE_NUMBER, False),
     ])
 
@@ -175,31 +172,16 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning("⚠ Unknown LLM_PROVIDER: %s", settings.LLM_PROVIDER)
 
-    # 4. Vapi assistant
-    if settings.VAPI_API_KEY:
-        logger.info("Registering Vapi assistant...")
-        assistant_id = await register_assistant()
-        if assistant_id:
-            logger.info("✓ Vapi assistant registered: %s", assistant_id)
-            if not settings.VAPI_ASSISTANT_ID:
-                logger.info("  💡 TIP: Add this to your .env to avoid re-creating:")
-                logger.info("     VAPI_ASSISTANT_ID=%s", assistant_id)
-        else:
-            logger.warning("⚠ Vapi assistant registration failed — continuing without it.")
-    else:
-        logger.info("⚠ VAPI_API_KEY not set — running without Vapi integration.")
-
     logger.info("=" * 60)
     logger.info("  %s AI Agent running at %s", settings.OFFICE_NAME, settings.SERVER_BASE_URL)
     if settings.DEMO_MODE:
         logger.info("  ⚡ DEMO MODE active — SMS and calendar calls are simulated")
     else:
-        logger.info("  🔴 LIVE MODE — real API calls to Google Calendar, Twilio, Vapi")
+        logger.info("  🔴 LIVE MODE — real API calls to Google Calendar, Twilio, Bolna")
     logger.info("")
     logger.info("  Dashboard:  %s", settings.SERVER_BASE_URL)
     logger.info("  API Docs:   %s/docs", settings.SERVER_BASE_URL)
     logger.info("  Health:     %s/health", settings.SERVER_BASE_URL)
-    logger.info("  Webhook:    %s/webhook/vapi", settings.SERVER_BASE_URL)
     logger.info("  SMS Webhook: %s/webhook/sms", settings.SERVER_BASE_URL)
     logger.info("=" * 60)
 
@@ -210,14 +192,12 @@ async def lifespan(app: FastAPI):
                         "Set a strong secret in .env before going to production.")
 
     if not settings.DEMO_MODE:
-        if not settings.VAPI_API_KEY:
-            logger.warning("⚠️  VAPI_API_KEY is empty — Vapi assistant registration will be skipped.")
         if not settings.TWILIO_ACCOUNT_SID or not settings.TWILIO_AUTH_TOKEN:
             logger.warning("⚠️  Twilio credentials missing — outbound SMS will silently fail.")
         if not settings.TWILIO_PHONE_NUMBER:
             logger.warning("⚠️  TWILIO_PHONE_NUMBER is empty — inbound SMS won't match a tenant.")
         if settings.SERVER_BASE_URL.startswith("http://localhost"):
-            logger.warning("⚠️  SERVER_BASE_URL is localhost — Vapi/Twilio webhooks won't reach "
+            logger.warning("⚠️  SERVER_BASE_URL is localhost — Twilio webhooks won't reach "
                             "this server. Use a tunnel (ngrok) or set a public URL.")
     if settings.LLM_PROVIDER == "gemini" and not settings.GEMINI_API_KEY:
         logger.warning("⚠️  LLM_PROVIDER=gemini but GEMINI_API_KEY is empty — LLM calls will fail.")
@@ -303,7 +283,6 @@ async def log_requests(request: Request, call_next):
 
 # ── API routes ────────────────────────────────────────────────────────────────
 
-app.include_router(vapi_router)
 app.include_router(calls_router)
 app.include_router(appointments_router)
 app.include_router(dashboard_router)
@@ -312,13 +291,15 @@ app.include_router(tenants_router)
 app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(google_oauth_router)
-app.include_router(vapi_integration_router)
 app.include_router(providers_router)
 app.include_router(waitlist_router)
 app.include_router(sms_webhook_router)
 app.include_router(sms_messages_router)
-app.include_router(patients_router)
+app.include_router(callers_router)
 app.include_router(support_tickets_router)
+app.include_router(tenant_tools_router)
+app.include_router(bolna_router)
+app.include_router(platform_admin_router)
 
 
 @app.get("/health")

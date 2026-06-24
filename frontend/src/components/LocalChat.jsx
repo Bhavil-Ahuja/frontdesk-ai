@@ -141,6 +141,34 @@ export default function LocalChat() {
   const [callerSearch, setCallerSearch] = useState(''); // Search filter for callers
   const [deleteConfirmCaller, setDeleteConfirmCaller] = useState(null); // Caller pending delete confirmation
 
+  // ── Resizable contacts sidebar ──────────────────────────────────────────────
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const saved = parseInt(localStorage.getItem('chat-sidebar-width'), 10);
+    return isNaN(saved) ? 320 : Math.max(200, Math.min(400, saved));
+  });
+  const sidebarRef = useRef(null);
+  const dragRef = useRef({ startX: 0, startW: 0 });
+  const onDragStart = useCallback((e) => {
+    e.preventDefault();
+    dragRef.current = { startX: e.clientX, startW: sidebarWidth };
+    document.body.style.cursor = 'col-resize';
+    if (sidebarRef.current) sidebarRef.current.style.transition = 'none';
+    function onMove(ev) {
+      const next = Math.max(200, Math.min(400, dragRef.current.startW + ev.clientX - dragRef.current.startX));
+      if (sidebarRef.current) sidebarRef.current.style.width = next + 'px';
+    }
+    function onUp(ev) {
+      document.removeEventListener('mousemove', onMove);
+      document.body.style.cursor = '';
+      if (sidebarRef.current) sidebarRef.current.style.transition = '';
+      const next = Math.max(200, Math.min(400, dragRef.current.startW + ev.clientX - dragRef.current.startX));
+      setSidebarWidth(next);
+      localStorage.setItem('chat-sidebar-width', String(next));
+    }
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp, { once: true });
+  }, [sidebarWidth]);
+
   // ── Voice mode state (speech-to-text & text-to-speech) ─────────────────────
   const [voiceMode, setVoiceMode] = useState(false); // true = voice enabled
   const [isListening, setIsListening] = useState(false);
@@ -688,7 +716,7 @@ export default function LocalChat() {
     setPreviewingVoice(voiceName);
 
     const utterance = new SpeechSynthesisUtterance(
-      "Hi! I'm your AI receptionist. How can I help you today?"
+      "Hi! I'm your AI assistant. How can I help you today?"
     );
     utterance.rate = 1.0;
     utterance.pitch = 1.0;
@@ -955,77 +983,81 @@ export default function LocalChat() {
   }
 
   return (
-    <div className="flex h-full overflow-hidden bg-gray-100 dark:bg-gray-900">
+    <div className="flex h-full overflow-hidden bg-gray-100 dark:bg-[#0a0a0f]">
       {/* ═══════════════════════════════════════════════════════════════════════
           LEFT SIDEBAR — Contacts List (WhatsApp style)
           ═══════════════════════════════════════════════════════════════════════ */}
-      <div className={`${mobileShowChat ? 'hidden md:flex' : 'flex'} flex-col w-full md:w-80 lg:w-96 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 shrink-0`}>
+      <div
+        ref={sidebarRef}
+        className={`${mobileShowChat ? 'hidden md:flex' : 'flex'} flex-col bg-white dark:bg-gray-900/60 border-r border-gray-200 dark:border-white/5 shrink-0 w-full md:w-auto`}
+        style={{ width: `${sidebarWidth}px` }}
+      >
         {/* Sidebar Header */}
-        <div className="px-4 py-3 bg-teal-600 dark:bg-teal-700">
+        <div className="px-4 py-3 bg-white dark:bg-zinc-900/80 border-b border-gray-100 dark:border-white/5">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center">
-                <Bot className="w-5 h-5 text-white" />
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 bg-indigo-500 rounded-lg flex items-center justify-center shrink-0">
+                <Bot className="w-4 h-4 text-white" />
               </div>
               <div>
-                <h1 className="text-white font-semibold">Test Agent</h1>
-                <p className="text-teal-100 text-xs">Test your AI receptionist</p>
+                <p className="text-sm font-semibold text-gray-900 dark:text-white">Test Agent</p>
+                <p className="text-xs text-gray-400 dark:text-white/40">Simulate your AI agent</p>
               </div>
             </div>
             <button
               onClick={() => setAddingCaller(true)}
-              className="p-2 hover:bg-white/10 rounded-full transition-colors"
+              className="p-1.5 hover:bg-gray-100 dark:hover:bg-white/8 rounded-lg transition-colors btn-press text-gray-400 hover:text-gray-600 dark:hover:text-white/70"
               title="Add new test caller"
             >
-              <Plus className="w-5 h-5 text-white" />
+              <Plus className="w-4 h-4" />
             </button>
           </div>
         </div>
 
         {/* Search Bar */}
-        <div className="px-4 py-2 bg-white dark:bg-gray-800 border-b border-gray-100 dark:border-gray-700">
+        <div className="px-3 py-2 bg-white dark:bg-zinc-900/80 border-b border-gray-100 dark:border-white/5">
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
             <input
               type="text"
               value={callerSearch}
               onChange={(e) => setCallerSearch(e.target.value)}
-              placeholder="Search or start new chat"
-              className="w-full pl-10 pr-4 py-2.5 bg-gray-100 dark:bg-gray-700 rounded-lg text-sm text-gray-900 dark:text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-teal-500"
+              placeholder="Search callers"
+              className="w-full pl-9 pr-4 py-2 bg-gray-100 dark:bg-zinc-800 rounded-lg text-sm text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-white/30 focus:outline-none"
             />
           </div>
         </div>
 
         {/* Add New Caller Form (inline) */}
         {addingCaller && (
-          <div className="px-4 py-3 bg-teal-50 dark:bg-teal-900/30 border-b border-teal-100 dark:border-teal-800">
-            <p className="text-xs font-medium text-teal-700 dark:text-teal-400 mb-2">Add New Test Caller</p>
+          <div className="px-3 py-3 bg-indigo-50 dark:bg-indigo-950/30 border-b border-indigo-100 dark:border-indigo-900/50">
+            <p className="text-xs font-medium text-indigo-700 dark:text-indigo-400 mb-2">Add Test Caller</p>
             <div className="flex gap-2">
               <input
                 type="text"
                 value={newCallerName}
                 onChange={(e) => setNewCallerName(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleAddCaller(); } if (e.key === 'Escape') { setAddingCaller(false); setNewCallerName(''); } }}
-                placeholder="Patient name..."
-                className="flex-1 min-w-0 px-3 py-2.5 text-sm border border-teal-200 dark:border-teal-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 dark:bg-gray-700 dark:text-white"
+                placeholder="Caller name..."
+                className="flex-1 min-w-0 px-3 py-2 text-sm border border-indigo-200 dark:border-indigo-700/50 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/40 bg-white dark:bg-zinc-800 dark:text-white"
                 autoFocus
                 maxLength={50}
               />
               <button
                 onClick={handleAddCaller}
                 disabled={!newCallerName.trim() || testCallers.length >= 10}
-                className="px-4 py-2.5 bg-teal-500 text-white rounded-lg hover:bg-teal-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm font-medium shrink-0"
+                className="px-3 py-2 bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm font-medium shrink-0"
               >
                 Add
               </button>
               <button
                 onClick={() => { setAddingCaller(false); setNewCallerName(''); }}
-                className="p-2.5 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors shrink-0"
+                className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/8 rounded-lg transition-colors shrink-0"
               >
-                <X className="w-5 h-5" />
+                <X className="w-4 h-4" />
               </button>
             </div>
-            <p className="text-[10px] text-teal-600 dark:text-teal-400 mt-2">{testCallers.length}/10 test callers</p>
+            <p className="text-[10px] text-indigo-500 dark:text-indigo-400 mt-1.5">{testCallers.length}/10 callers</p>
           </div>
         )}
 
@@ -1041,7 +1073,7 @@ export default function LocalChat() {
               </p>
               <button
                 onClick={() => setAddingCaller(true)}
-                className="text-teal-600 dark:text-teal-400 text-sm font-medium hover:underline"
+                className="text-indigo-600 dark:text-indigo-400 text-sm font-medium hover:underline"
               >
                 + Add a test caller
               </button>
@@ -1053,28 +1085,23 @@ export default function LocalChat() {
               return (
                 <div
                   key={caller.phone}
-                  className={`group relative flex items-center gap-3 px-4 py-3.5 hover:bg-gray-50 dark:hover:bg-gray-700/50 active:bg-gray-100 dark:active:bg-gray-700 transition-colors border-b border-gray-100 dark:border-gray-700/50 cursor-pointer ${
-                    isActive ? 'bg-teal-50 dark:bg-teal-900/30' : ''
+                  className={`group relative flex items-center gap-3 px-4 py-3.5 hover:bg-gray-100 dark:hover:bg-white/5 active:bg-gray-200 dark:active:bg-white/10 transition-colors cursor-pointer ${
+                    isActive ? 'bg-indigo-50 dark:bg-indigo-950/40' : ''
                   }`}
                   onClick={() => selectCaller(caller)}
                 >
                   {/* Avatar */}
-                  <div className={`w-11 h-11 md:w-12 md:h-12 rounded-full flex items-center justify-center shrink-0 ${
-                    isActive ? 'bg-teal-500 text-white' : 'bg-gray-200 dark:bg-gray-600 text-gray-600 dark:text-gray-300'
+                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                    isActive ? 'bg-indigo-500 text-white' : 'bg-gray-300 dark:bg-gray-700 text-gray-500 dark:text-gray-400'
                   }`}>
-                    <UserIcon className="w-5 h-5 md:w-6 md:h-6" />
+                    <UserIcon className="w-4 h-4 md:w-5 md:h-5" />
                   </div>
                   {/* Name & Preview */}
                   <div className="flex-1 min-w-0 pr-8">
                     <div className="flex items-center gap-2">
-                      <span className={`font-medium truncate text-sm md:text-base ${isActive ? 'text-teal-700 dark:text-teal-400' : 'text-gray-900 dark:text-white'}`}>
+                      <span className={`font-medium truncate text-sm ${isActive ? 'text-indigo-700 dark:text-indigo-300' : 'text-gray-900 dark:text-white'}`}>
                         {caller.name}
                       </span>
-                      {isActive && (
-                        <span className="text-[10px] bg-teal-500 text-white px-1.5 py-0.5 rounded-full shrink-0">
-                          active
-                        </span>
-                      )}
                     </div>
                     <p className="text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5">
                       {preview}
@@ -1112,6 +1139,12 @@ export default function LocalChat() {
         )}
       </div>
 
+      {/* Drag handle between sidebar and chat panel */}
+      <div
+        onMouseDown={onDragStart}
+        className="hidden md:flex w-1 shrink-0 cursor-col-resize hover:bg-indigo-400/40 active:bg-indigo-400/60 transition-colors self-stretch"
+      />
+
       {/* ═══════════════════════════════════════════════════════════════════════
           RIGHT SIDE — Chat Area
           ═══════════════════════════════════════════════════════════════════════ */}
@@ -1119,22 +1152,22 @@ export default function LocalChat() {
         {selectedCaller ? (
           <>
             {/* Chat Header */}
-            <div className="px-3 md:px-4 py-3 bg-teal-600 dark:bg-teal-700 flex items-center gap-2 md:gap-3 shrink-0">
+            <div className="px-3 md:px-4 py-3 bg-white dark:bg-zinc-900/80 border-b border-gray-100 dark:border-white/5 flex items-center gap-2 md:gap-3 shrink-0">
               {/* Back button (mobile only) */}
               <button
                 onClick={() => setMobileShowChat(false)}
-                className="md:hidden p-2 -ml-1 hover:bg-white/10 active:bg-white/20 rounded-full transition-colors"
+                className="md:hidden p-1.5 -ml-1 hover:bg-gray-100 dark:hover:bg-white/8 rounded-lg transition-colors text-gray-500 dark:text-white/50"
               >
-                <ArrowLeft className="w-5 h-5 text-white" />
+                <ArrowLeft className="w-5 h-5" />
               </button>
               {/* Caller Avatar */}
-              <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center shrink-0">
-                <UserIcon className="w-5 h-5 text-white" />
+              <div className="w-9 h-9 bg-indigo-500 rounded-xl flex items-center justify-center shrink-0">
+                <UserIcon className="w-4 h-4 text-white" />
               </div>
               {/* Caller Info */}
               <div className="flex-1 min-w-0">
-                <h2 className="text-white font-medium truncate text-base">{selectedCaller.name}</h2>
-                <p className="text-teal-100 text-xs truncate">{selectedCaller.phone}</p>
+                <h2 className="text-gray-900 dark:text-white font-semibold truncate text-sm">{selectedCaller.name}</h2>
+                <p className="text-gray-400 dark:text-white/40 text-xs truncate">{selectedCaller.phone}</p>
               </div>
               {/* Action Buttons */}
               <div className="flex items-center gap-1">
@@ -1165,11 +1198,10 @@ export default function LocalChat() {
                           const isSelected = voice.name === selectedVoice;
                           const isPreviewing = voice.name === previewingVoice;
                           return (
-                            <div key={voice.name} className={`flex items-center justify-between px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700/50 ${isSelected ? 'bg-teal-50 dark:bg-teal-900/30' : ''}`}>
+                            <div key={voice.name} className={`flex items-center justify-between px-3 py-2 hover:bg-gray-50 dark:hover:bg-white/4 ${isSelected ? 'bg-indigo-50 dark:bg-indigo-950/30' : ''}`}>
                               <div className="flex items-center gap-2 flex-1 min-w-0">
-                                {isSelected && <Check className="w-3.5 h-3.5 text-teal-600 shrink-0" />}
                                 <div className="min-w-0">
-                                  <span className={`text-sm truncate block ${isSelected ? 'font-semibold text-teal-700 dark:text-teal-400' : 'text-gray-700 dark:text-gray-300'}`}>{displayName}</span>
+                                  <span className={`text-sm truncate block ${isSelected ? 'font-semibold text-indigo-700 dark:text-indigo-400' : 'text-gray-700 dark:text-gray-300'}`}>{displayName}</span>
                                   <span className="text-[10px] text-gray-400">{voice.lang}</span>
                                 </div>
                               </div>
@@ -1178,7 +1210,7 @@ export default function LocalChat() {
                                   {isPreviewing ? <Square className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
                                 </button>
                                 {!isSelected && (
-                                  <button type="button" onClick={(e) => { e.stopPropagation(); applyVoice(voice.name); }} className="px-2 py-1 text-[10px] font-medium bg-teal-500 text-white rounded-md hover:bg-teal-600 transition-colors">Use</button>
+                                  <button type="button" onClick={(e) => { e.stopPropagation(); applyVoice(voice.name); }} className="px-2 py-1 text-[10px] font-medium bg-indigo-500 text-white rounded-md hover:bg-indigo-600 transition-colors">Use</button>
                                 )}
                               </div>
                             </div>
@@ -1220,10 +1252,10 @@ export default function LocalChat() {
 
             {/* Voice Status Bar */}
             {voiceMode && (isListening || isSpeaking) && (
-              <div className="px-3 md:px-4 py-2.5 bg-teal-50 dark:bg-teal-900/30 border-t border-teal-100 dark:border-teal-800 flex items-center justify-center gap-2">
+              <div className="px-3 md:px-4 py-2.5 bg-indigo-50 dark:bg-indigo-950/30 border-t border-indigo-100 dark:border-indigo-900/40 flex items-center justify-center gap-2">
                 {isListening && (
-                  <span className="flex items-center gap-2 text-sm text-teal-700 dark:text-teal-400">
-                    <span className="w-2.5 h-2.5 bg-teal-500 rounded-full animate-pulse" />
+                  <span className="flex items-center gap-2 text-sm text-indigo-700 dark:text-indigo-400">
+                    <span className="w-2.5 h-2.5 bg-indigo-500 rounded-full animate-pulse" />
                     <span className="hidden sm:inline">Listening... speak now</span>
                     <span className="sm:hidden">Listening...</span>
                   </span>
@@ -1239,7 +1271,7 @@ export default function LocalChat() {
             )}
 
             {/* Composer */}
-            <form onSubmit={sendMessage} className="px-2 md:px-4 py-2 md:py-3 pb-safe bg-gray-100 dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 shrink-0">
+            <form onSubmit={sendMessage} className="px-2 md:px-4 py-2 md:py-3 pb-safe bg-white dark:bg-zinc-900/80 border-t border-gray-100 dark:border-white/5 shrink-0">
               <div className="flex items-end gap-2">
                 <textarea
                   ref={inputRef}
@@ -1253,8 +1285,8 @@ export default function LocalChat() {
                   enterKeyHint="send"
                   placeholder={isListening ? 'Listening...' : 'Type a message'}
                   rows={1}
-                  className={`flex-1 min-w-0 resize-none px-3 md:px-4 py-2.5 md:py-3 border rounded-2xl focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent text-base bg-white dark:bg-gray-700 dark:text-white transition-colors ${
-                    isListening ? 'border-teal-400 bg-teal-50 dark:bg-teal-900/20' : 'border-gray-200 dark:border-gray-600'
+                  className={`flex-1 min-w-0 resize-none px-3 md:px-4 py-2.5 md:py-3 border rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-400 text-base bg-white dark:bg-zinc-800 dark:text-white transition-colors ${
+                    isListening ? 'border-indigo-400 bg-indigo-50 dark:bg-indigo-950/20' : 'border-gray-200 dark:border-white/8'
                   }`}
                   style={{ minHeight: '44px', maxHeight: '120px' }}
                   disabled={streaming || isListening}
@@ -1266,7 +1298,7 @@ export default function LocalChat() {
                     onClick={isListening ? stopListening : startListening}
                     disabled={streaming || isSpeaking}
                     className={`p-2.5 md:p-3 rounded-full transition-all shrink-0 ${
-                      isListening ? 'bg-red-500 text-white animate-pulse' : 'bg-teal-500 text-white disabled:bg-gray-300 dark:disabled:bg-gray-600'
+                      isListening ? 'bg-red-500 text-white animate-pulse' : 'bg-indigo-500 text-white disabled:bg-gray-300 dark:disabled:bg-gray-600'
                     }`}
                     title={isListening ? 'Stop listening' : 'Start speaking'}
                   >
@@ -1277,7 +1309,7 @@ export default function LocalChat() {
                 <button
                   type="submit"
                   disabled={streaming || !input.trim()}
-                  className="p-2.5 md:p-3 bg-teal-500 text-white rounded-full hover:bg-teal-600 active:bg-teal-700 disabled:bg-gray-300 dark:disabled:bg-gray-600 disabled:cursor-not-allowed transition-colors shrink-0"
+                  className="p-2.5 md:p-3 bg-indigo-500 text-white rounded-full hover:bg-indigo-600 active:bg-indigo-700 disabled:bg-gray-200 dark:disabled:bg-white/8 disabled:cursor-not-allowed transition-colors shrink-0"
                 >
                   <Send className="w-5 h-5" />
                 </button>
@@ -1286,13 +1318,13 @@ export default function LocalChat() {
           </>
         ) : (
           /* No caller selected — empty state */
-          <div className="flex-1 flex flex-col items-center justify-center bg-gray-50 dark:bg-gray-900 text-center px-6">
-            <div className="w-24 h-24 bg-gray-200 dark:bg-gray-700 rounded-full flex items-center justify-center mb-6">
-              <MessageSquare className="w-12 h-12 text-gray-400" />
+          <div className="flex-1 flex flex-col items-center justify-center bg-gray-50 dark:bg-[#0a0a0f] text-center px-6">
+            <div className="w-16 h-16 bg-indigo-50 dark:bg-indigo-950/30 rounded-2xl flex items-center justify-center mb-5">
+              <MessageSquare className="w-8 h-8 text-indigo-400" />
             </div>
-            <h2 className="text-xl font-semibold text-gray-700 dark:text-gray-300 mb-2">Test Agent Chat</h2>
+            <h2 className="text-base font-semibold text-gray-800 dark:text-white mb-1.5">Test Agent Chat</h2>
             <p className="text-gray-500 dark:text-gray-400 max-w-sm mb-6">
-              Select a test caller from the left to start a conversation with your AI receptionist.
+              Select a test caller from the left to start a conversation with your AI agent.
             </p>
             <p className="text-xs text-gray-400 dark:text-gray-500">
               Same LLM + tools as voice calls
@@ -1363,7 +1395,7 @@ function MessageBubble({ message, isSpeaking }) {
       <div
         className={`relative px-3 py-2 rounded-lg text-sm leading-relaxed whitespace-pre-wrap break-words overflow-hidden shadow-sm ${
           isUser
-            ? 'bg-teal-500 text-white rounded-tr-none max-w-[80%]'
+            ? 'bg-indigo-500 text-white rounded-tr-none max-w-[80%]'
             : 'bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded-tl-none max-w-[80%]'
         } ${isSpeaking && !isUser ? 'ring-2 ring-amber-400' : ''}`}
         style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}
@@ -1371,7 +1403,7 @@ function MessageBubble({ message, isSpeaking }) {
         {/* WhatsApp-style tail */}
         <div className={`absolute top-0 w-3 h-3 ${
           isUser
-            ? '-right-1.5 border-t-[12px] border-t-teal-500 border-l-[12px] border-l-transparent'
+            ? '-right-1.5 border-t-[12px] border-t-indigo-500 border-l-[12px] border-l-transparent'
             : '-left-1.5 border-t-[12px] border-t-white dark:border-t-gray-700 border-r-[12px] border-r-transparent'
         }`} />
         {/* Message content */}

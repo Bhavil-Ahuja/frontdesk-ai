@@ -1,88 +1,43 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
-  Shield,
   Building2,
   Clock,
   CheckCircle,
   XCircle,
-  PauseCircle,
-  PlayCircle,
-  Trash2,
   RefreshCw,
   Search,
   ChevronDown,
   ChevronUp,
-  ExternalLink,
-  Phone,
-  Globe2,
+  ChevronRight,
   Wifi,
-  WifiOff,
   AlertCircle,
-  History,
-  MapPin,
-  Save,
-  PhoneCall,
-  MessageSquare,
-  BarChart3,
   HelpCircle,
   Loader2,
-  Send,
-  Users,
+  MessageSquare,
   Settings2,
-  ToggleLeft,
-  ToggleRight,
+  PhoneCall,
+  Save,
   Info,
-  Zap,
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import { useModal } from '../contexts/ModalContext';
+import {
+  STATUS_CONFIG,
+  PLAN_LABELS,
+  TICKET_STATUS_LABELS,
+  TICKET_PRIORITY_LABELS,
+  TICKET_CATEGORY_LABELS,
+} from '../lib/tenantLabels';
 
 // ── Constants ───────────────────────────────────────────────────────────────
-
-const STATUS_CONFIG = {
-  PENDING: {
-    color: 'bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400',
-    dot: 'bg-amber-400',
-    icon: Clock,
-    label: 'Pending',
-  },
-  APPROVED: {
-    color: 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-400',
-    dot: 'bg-blue-400',
-    icon: CheckCircle,
-    label: 'Approved',
-  },
-  ACTIVE: {
-    color: 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400',
-    dot: 'bg-green-400',
-    icon: Wifi,
-    label: 'Active',
-  },
-  SUSPENDED: {
-    color: 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-400',
-    dot: 'bg-red-400',
-    icon: PauseCircle,
-    label: 'Suspended',
-  },
-  DEACTIVATED: {
-    color: 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400',
-    dot: 'bg-gray-400',
-    icon: WifiOff,
-    label: 'Deactivated',
-  },
-};
 
 const STATUS_FILTERS = ['ALL', 'PENDING', 'ACTIVE', 'APPROVED', 'SUSPENDED', 'DEACTIVATED'];
 
 const TOP_TABS = [
   { key: 'tenants', label: 'Tenants', icon: Building2 },
   { key: 'tickets', label: 'Support Tickets', icon: HelpCircle },
-];
-
-const TENANT_TABS = [
-  { key: 'overview', label: 'Overview', icon: Info },
-  { key: 'integrations', label: 'Integrations & Flags', icon: Zap },
-  { key: 'usage', label: 'Usage & History', icon: BarChart3 },
+  { key: 'platform', label: 'Platform Settings', icon: Settings2 },
 ];
 
 // ── Main Component ──────────────────────────────────────────────────────────
@@ -93,20 +48,14 @@ export default function TenantAdmin() {
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [searchQuery, setSearchQuery] = useState('');
-  const [expandedId, setExpandedId] = useState(null);
-  const [actionLoading, setActionLoading] = useState(null);
   const [error, setError] = useState(null);
-  const { toast, confirm, prompt } = useModal();
+  const { toast } = useModal();
 
   // Support tickets state
   const [ticketStats, setTicketStats] = useState(null);
   const [adminTickets, setAdminTickets] = useState([]);
   const [ticketsLoading, setTicketsLoading] = useState(false);
-  const [ticketStatusFilter, setTicketStatusFilter] = useState('OPEN');
-  const [updatingTicketId, setUpdatingTicketId] = useState(null);
-  const [expandedTicketId, setExpandedTicketId] = useState(null);
-  const [replyText, setReplyText] = useState('');
-  const [sendingReply, setSendingReply] = useState(false);
+  const [ticketStatusFilter, setTicketStatusFilter] = useState('ALL');
 
   useEffect(() => {
     fetchTenants();
@@ -152,114 +101,6 @@ export default function TenantAdmin() {
     }
   }
 
-  async function updateTicketStatus(ticketId, newStatus) {
-    setUpdatingTicketId(ticketId);
-    try {
-      await apiFetch(`/api/admin/support/tickets/${ticketId}`, {
-        method: 'PATCH',
-        body: { status: newStatus },
-      });
-      fetchAdminTickets(ticketStatusFilter);
-      fetchTicketStats();
-      toast.success('Ticket updated');
-    } catch (err) {
-      toast.error('Failed to update ticket');
-    } finally {
-      setUpdatingTicketId(null);
-    }
-  }
-
-  async function handleExpandTicket(ticketId) {
-    if (expandedTicketId === ticketId) {
-      setExpandedTicketId(null);
-      setReplyText('');
-      return;
-    }
-    setExpandedTicketId(ticketId);
-    setReplyText('');
-    try {
-      const detail = await apiFetch(`/api/admin/support/tickets/${ticketId}`);
-      setAdminTickets((prev) =>
-        prev.map((t) => (t.id === ticketId ? { ...t, ...detail } : t))
-      );
-    } catch (err) {
-      console.error('Failed to fetch ticket detail:', err);
-    }
-  }
-
-  async function sendAdminReply(ticketId) {
-    if (!replyText.trim()) return;
-    setSendingReply(true);
-    try {
-      const updated = await apiFetch(`/api/admin/support/tickets/${ticketId}/messages`, {
-        method: 'POST',
-        body: { body: replyText.trim() },
-      });
-      setAdminTickets((prev) =>
-        prev.map((t) => (t.id === ticketId ? { ...t, ...updated } : t))
-      );
-      setReplyText('');
-      fetchTicketStats();
-      toast.success('Reply sent');
-    } catch (err) {
-      toast.error('Failed to send reply');
-    } finally {
-      setSendingReply(false);
-    }
-  }
-
-  async function performAction(tenantId, action, method = 'POST') {
-    setActionLoading(tenantId);
-    try {
-      const url =
-        action === 'delete'
-          ? `/api/tenants/${tenantId}`
-          : `/api/tenants/${tenantId}/${action}`;
-      await apiFetch(url, { method });
-      await fetchTenants();
-    } catch (err) {
-      console.error(`Action ${action} failed:`, err);
-      toast.error(err.message || 'Action failed.');
-    } finally {
-      setActionLoading(null);
-    }
-  }
-
-  async function purgeAccount(tenantId, businessName, email) {
-    const first = await confirm({
-      title: 'Permanently Delete Account?',
-      message: `This will permanently delete "${businessName}" (${email}) and ALL associated data — appointments, patients, calls, SMS messages.\n\nThis action is IRREVERSIBLE.`,
-      confirmText: 'Continue',
-      variant: 'danger',
-    });
-    if (!first) return;
-
-    const typed = await prompt({
-      title: 'Type to Confirm',
-      message: `Type the exact business name to confirm permanent deletion:`,
-      placeholder: businessName,
-      confirmText: 'Delete Forever',
-      variant: 'danger',
-    });
-    if (typed === null) return;
-    if (typed !== businessName) {
-      toast.error('Business name did not match. Deletion cancelled.');
-      return;
-    }
-
-    setActionLoading(tenantId);
-    try {
-      await apiFetch(`/api/tenants/${tenantId}/purge`, { method: 'DELETE' });
-      toast.success(`"${businessName}" permanently deleted.`);
-      await fetchTenants();
-    } catch (err) {
-      console.error('Purge failed:', err);
-      toast.error(err.message || 'Permanent deletion failed.');
-    } finally {
-      setActionLoading(null);
-    }
-  }
-
   // Client-side search filter
   const filtered = tenants.filter((t) => {
     if (!searchQuery) return true;
@@ -280,21 +121,26 @@ export default function TenantAdmin() {
   if (loading && tenants.length === 0) {
     return (
       <div className="flex items-center justify-center h-full">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500"></div>
+        <div className="w-8 h-8 border-2 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin" />
       </div>
     );
   }
 
   return (
-    <div className="p-4 md:p-8 space-y-4 md:space-y-6">
+    <div className="p-5 md:p-8 space-y-5">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Platform Admin</h2>
-          <p className="text-gray-500 dark:text-gray-400 mt-1">Manage tenants, support tickets, and platform settings</p>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Platform Admin</h1>
+          <p className="text-gray-500 dark:text-gray-400 mt-1">
+            Manage tenants, support tickets, and platform settings
+          </p>
         </div>
         <button
-          onClick={() => { fetchTenants(); fetchTicketStats(); }}
+          onClick={() => {
+            fetchTenants();
+            fetchTicketStats();
+          }}
           className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-600 dark:text-gray-400 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
         >
           <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
@@ -313,7 +159,7 @@ export default function TenantAdmin() {
             }}
             className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
               activeTopTab === key
-                ? 'border-primary-500 text-primary-600 dark:text-primary-400'
+                ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
                 : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300'
             }`}
           >
@@ -344,12 +190,7 @@ export default function TenantAdmin() {
           setStatusFilter={setStatusFilter}
           searchQuery={searchQuery}
           setSearchQuery={setSearchQuery}
-          expandedId={expandedId}
-          setExpandedId={setExpandedId}
-          actionLoading={actionLoading}
           error={error}
-          performAction={performAction}
-          purgeAccount={purgeAccount}
           onRefresh={fetchTenants}
         />
       )}
@@ -359,18 +200,15 @@ export default function TenantAdmin() {
           tickets={adminTickets}
           ticketsLoading={ticketsLoading}
           ticketStatusFilter={ticketStatusFilter}
-          setTicketStatusFilter={(s) => { setTicketStatusFilter(s); fetchAdminTickets(s); }}
+          setTicketStatusFilter={(s) => {
+            setTicketStatusFilter(s);
+            fetchAdminTickets(s);
+          }}
           ticketStats={ticketStats}
-          expandedTicketId={expandedTicketId}
-          handleExpandTicket={handleExpandTicket}
-          updateTicketStatus={updateTicketStatus}
-          updatingTicketId={updatingTicketId}
-          replyText={replyText}
-          setReplyText={setReplyText}
-          sendAdminReply={sendAdminReply}
-          sendingReply={sendingReply}
         />
       )}
+
+      {activeTopTab === 'platform' && <PlatformSettingsTab />}
     </div>
   );
 }
@@ -383,16 +221,33 @@ export default function TenantAdmin() {
 function TenantsTab({
   tenants, totalCount, pendingCount, activeCount,
   statusFilter, setStatusFilter, searchQuery, setSearchQuery,
-  expandedId, setExpandedId, actionLoading, error,
-  performAction, purgeAccount, onRefresh,
+  error, onRefresh,
 }) {
   return (
     <div className="space-y-5">
       {/* Stat cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <StatCard icon={Building2} iconBg="bg-blue-50 dark:bg-blue-900/50" iconColor="text-blue-600" value={totalCount} label="Total Tenants" />
-        <StatCard icon={Clock} iconBg="bg-amber-50 dark:bg-amber-900/50" iconColor="text-amber-600" value={pendingCount} label="Pending Approval" />
-        <StatCard icon={Wifi} iconBg="bg-green-50 dark:bg-green-900/50" iconColor="text-green-600" value={activeCount} label="Active Tenants" />
+        <StatCard
+          icon={Building2}
+          iconBg="bg-blue-50 dark:bg-blue-900/50"
+          iconColor="text-blue-600"
+          value={totalCount}
+          label="Total Tenants"
+        />
+        <StatCard
+          icon={Clock}
+          iconBg="bg-amber-50 dark:bg-amber-900/50"
+          iconColor="text-amber-600"
+          value={pendingCount}
+          label="Pending Approval"
+        />
+        <StatCard
+          icon={Wifi}
+          iconBg="bg-green-50 dark:bg-green-900/50"
+          iconColor="text-green-600"
+          value={activeCount}
+          label="Active Tenants"
+        />
       </div>
 
       {/* Search + status filters */}
@@ -403,8 +258,8 @@ function TenantsTab({
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search by name, slug, owner..."
-            className="w-full pl-10 pr-4 py-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none dark:bg-gray-700 dark:text-white"
+            placeholder="Search by name, slug, owner…"
+            className="w-full pl-10 pr-4 py-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none dark:bg-gray-700 dark:text-white"
           />
         </div>
         <div className="flex items-center gap-1 flex-wrap">
@@ -414,7 +269,7 @@ function TenantsTab({
               onClick={() => setStatusFilter(s)}
               className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
                 statusFilter === s
-                  ? 'bg-primary-500 text-white'
+                  ? 'bg-indigo-500 text-white'
                   : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-400 dark:hover:bg-gray-600'
               }`}
             >
@@ -437,25 +292,20 @@ function TenantsTab({
 
       {/* Tenant list */}
       {tenants.length === 0 ? (
-        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-12 text-center">
+        <div className="bg-white dark:bg-gray-900/60 rounded-2xl border border-gray-200/80 dark:border-white/5 p-12 text-center">
           <Building2 className="w-10 h-10 text-gray-300 dark:text-gray-600 mx-auto mb-3" />
           <p className="text-gray-500 dark:text-gray-400 text-sm">
-            {searchQuery ? 'No tenants match your search.' : statusFilter !== 'ALL' ? `No ${STATUS_CONFIG[statusFilter]?.label?.toLowerCase()} tenants.` : 'No tenants registered yet.'}
+            {searchQuery
+              ? 'No tenants match your search.'
+              : statusFilter !== 'ALL'
+              ? `No ${STATUS_CONFIG[statusFilter]?.label?.toLowerCase()} tenants.`
+              : 'No tenants registered yet.'}
           </p>
         </div>
       ) : (
-        <div className="space-y-3">
+        <div className="space-y-2">
           {tenants.map((tenant) => (
-            <TenantRow
-              key={tenant.id}
-              tenant={tenant}
-              expanded={expandedId === tenant.id}
-              onToggle={() => setExpandedId(expandedId === tenant.id ? null : tenant.id)}
-              onAction={(action, method) => performAction(tenant.id, action, method)}
-              onPurge={() => purgeAccount(tenant.id, tenant.business_name, tenant.owner_email)}
-              actionLoading={actionLoading === tenant.id}
-              onRefresh={onRefresh}
-            />
+            <TenantRow key={tenant.id} tenant={tenant} />
           ))}
         </div>
       )}
@@ -465,224 +315,40 @@ function TenantsTab({
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// SUPPORT TICKETS TAB
+// TENANT ROW — navigates to detail page on click
 // ═══════════════════════════════════════════════════════════════════════════
 
-function TicketsTab({
-  tickets, ticketsLoading, ticketStatusFilter, setTicketStatusFilter,
-  ticketStats, expandedTicketId, handleExpandTicket, updateTicketStatus,
-  updatingTicketId, replyText, setReplyText, sendAdminReply, sendingReply,
-}) {
-  return (
-    <div className="space-y-4">
-      {/* Status filter bar */}
-      <div className="flex items-center gap-1 flex-wrap">
-        {['OPEN', 'REOPENED', 'IN_PROGRESS', 'RESOLVED', 'ALL'].map((s) => (
-          <button
-            key={s}
-            onClick={() => setTicketStatusFilter(s)}
-            className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
-              ticketStatusFilter === s
-                ? 'bg-violet-500 text-white'
-                : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-400 dark:hover:bg-gray-600'
-            }`}
-          >
-            {s === 'IN_PROGRESS' ? 'In Progress' : s === 'ALL' ? 'All' : s.charAt(0) + s.slice(1).toLowerCase()}
-            {s !== 'ALL' && ticketStats?.[s] > 0 && (
-              <span className="ml-1 opacity-70">({ticketStats[s]})</span>
-            )}
-          </button>
-        ))}
-      </div>
-
-      {/* Ticket list */}
-      <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
-        <div className="divide-y divide-gray-100 dark:divide-gray-700">
-          {ticketsLoading ? (
-            <div className="flex items-center justify-center py-12">
-              <Loader2 className="w-5 h-5 animate-spin text-violet-500" />
-            </div>
-          ) : tickets.length === 0 ? (
-            <div className="text-center py-12">
-              <HelpCircle className="w-8 h-8 text-gray-300 dark:text-gray-600 mx-auto mb-2" />
-              <p className="text-gray-400 text-sm">No tickets in this category</p>
-            </div>
-          ) : (
-            tickets.map((ticket) => (
-              <TicketRow
-                key={ticket.id}
-                ticket={ticket}
-                isExpanded={expandedTicketId === ticket.id}
-                onToggle={() => handleExpandTicket(ticket.id)}
-                onStatusChange={updateTicketStatus}
-                updatingTicketId={updatingTicketId}
-                replyText={expandedTicketId === ticket.id ? replyText : ''}
-                setReplyText={setReplyText}
-                sendReply={() => sendAdminReply(ticket.id)}
-                sendingReply={sendingReply}
-              />
-            ))
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function TicketRow({
-  ticket, isExpanded, onToggle, onStatusChange, updatingTicketId,
-  replyText, setReplyText, sendReply, sendingReply,
-}) {
-  const messages = ticket.messages || [];
-  const statusColor =
-    ticket.status === 'OPEN' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400' :
-    ticket.status === 'REOPENED' ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400' :
-    ticket.status === 'IN_PROGRESS' ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400' :
-    ticket.status === 'RESOLVED' ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400' :
-    'bg-gray-100 dark:bg-gray-700 text-gray-500';
-  const statusLabel =
-    ticket.status === 'IN_PROGRESS' ? 'In Progress' :
-    ticket.status === 'REOPENED' ? 'Reopened' :
-    ticket.status.charAt(0) + ticket.status.slice(1).toLowerCase();
-  const canReply = !['CLOSED'].includes(ticket.status);
-
-  return (
-    <div>
-      <button
-        type="button"
-        onClick={onToggle}
-        className="w-full p-4 hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors text-left"
-      >
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="font-medium text-sm text-gray-900 dark:text-white">{ticket.subject}</span>
-              <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${statusColor}`}>{statusLabel}</span>
-              <span className={`text-[10px] font-medium ${
-                ticket.priority === 'URGENT' ? 'text-red-500' : ticket.priority === 'HIGH' ? 'text-orange-500' : 'text-gray-400'
-              }`}>{ticket.priority}</span>
-              {(ticket.message_count > 0) && (
-                <span className="inline-flex items-center gap-0.5 text-[10px] text-gray-400">
-                  <MessageSquare className="w-2.5 h-2.5" /> {ticket.message_count}
-                </span>
-              )}
-            </div>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-              {ticket.tenant_name || ticket.tenant_slug || 'Unknown'} · {ticket.category?.replace('_', ' ')} · {new Date(ticket.created_at).toLocaleDateString()}
-            </p>
-            {!isExpanded && (
-              <p className="text-xs text-gray-600 dark:text-gray-400 mt-1 line-clamp-1">{ticket.body}</p>
-            )}
-          </div>
-          {isExpanded ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
-        </div>
-      </button>
-
-      {isExpanded && (
-        <div className="bg-gray-50 dark:bg-gray-800/50 border-t border-gray-100 dark:border-gray-700 px-4 pb-4">
-          {/* Description */}
-          <div className="pt-3 pb-2">
-            <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">Description</p>
-            <p className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap">{ticket.body}</p>
-          </div>
-
-          {/* Conversation */}
-          {messages.length > 0 && (
-            <div className="pt-2 pb-2">
-              <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2 flex items-center gap-1">
-                <MessageSquare className="w-3 h-3" /> Conversation ({messages.length})
-              </p>
-              <div className="space-y-2 max-h-64 overflow-y-auto">
-                {messages.map((msg) => {
-                  const isAdmin = msg.sender_type === 'ADMIN';
-                  return (
-                    <div key={msg.id} className={`flex ${isAdmin ? 'justify-end' : 'justify-start'}`}>
-                      <div className={`max-w-[80%] rounded-2xl px-3 py-2 ${
-                        isAdmin
-                          ? 'bg-violet-50 dark:bg-violet-900/20 border border-violet-200 dark:border-violet-800 rounded-br-md'
-                          : 'bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-bl-md'
-                      }`}>
-                        <p className={`text-[10px] font-medium mb-0.5 ${isAdmin ? 'text-violet-600 dark:text-violet-400' : 'text-gray-500 dark:text-gray-400'}`}>
-                          {isAdmin ? '🛡 ' : ''}{msg.sender_name}
-                        </p>
-                        <p className="text-xs text-gray-800 dark:text-gray-200 whitespace-pre-wrap">{msg.body}</p>
-                        <p className="text-[9px] text-gray-400 mt-1">
-                          {new Date(msg.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })}
-                        </p>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* Reply input */}
-          {canReply && (
-            <div className="flex gap-2 pt-2">
-              <input
-                type="text"
-                value={replyText}
-                onChange={(e) => setReplyText(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendReply(); } }}
-                placeholder="Type a reply..."
-                className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white focus:ring-2 focus:ring-violet-500 focus:border-violet-500"
-              />
-              <button
-                onClick={sendReply}
-                disabled={sendingReply || !replyText.trim()}
-                className="px-3 py-2 bg-violet-500 text-white rounded-lg text-sm font-medium hover:bg-violet-600 disabled:opacity-50 transition-colors"
-              >
-                {sendingReply ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-              </button>
-            </div>
-          )}
-
-          {/* Action buttons */}
-          <div className="flex items-center gap-2 pt-3">
-            {(ticket.status === 'OPEN' || ticket.status === 'REOPENED') && (
-              <ActionButton icon={Clock} label="Start Working" color="amber" loading={updatingTicketId === ticket.id} onClick={() => onStatusChange(ticket.id, 'IN_PROGRESS')} />
-            )}
-            {(ticket.status === 'OPEN' || ticket.status === 'IN_PROGRESS' || ticket.status === 'REOPENED') && (
-              <ActionButton icon={CheckCircle} label="Resolve" color="green" loading={updatingTicketId === ticket.id} onClick={() => onStatusChange(ticket.id, 'RESOLVED')} />
-            )}
-            {ticket.status === 'RESOLVED' && (
-              <ActionButton icon={XCircle} label="Close" color="gray" loading={updatingTicketId === ticket.id} onClick={() => onStatusChange(ticket.id, 'CLOSED')} />
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-
-// ═══════════════════════════════════════════════════════════════════════════
-// TENANT ROW (expandable with inner tabs)
-// ═══════════════════════════════════════════════════════════════════════════
-
-function TenantRow({ tenant, expanded, onToggle, onAction, onPurge, actionLoading, onRefresh }) {
-  const { confirm, toast } = useModal();
+function TenantRow({ tenant }) {
+  const navigate = useNavigate();
   const cfg = STATUS_CONFIG[tenant.status] || STATUS_CONFIG.PENDING;
-  const [activeTab, setActiveTab] = useState('overview');
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
-      {/* Summary row */}
-      <button
-        onClick={onToggle}
-        className="w-full flex items-center gap-4 p-4 text-left hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
-      >
-        <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${cfg.dot}`}></div>
+    <button
+      onClick={() => navigate(`/admin/tenants/${tenant.id}`)}
+      className="w-full text-left bg-white dark:bg-gray-900/60 rounded-2xl border border-gray-200/80 dark:border-white/5 overflow-hidden hover:border-indigo-300 dark:hover:border-indigo-700/60 hover:shadow-sm transition-all group"
+    >
+      <div className="flex items-center gap-4 p-4">
+        {/* Status dot */}
+        <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${cfg.dot}`} />
+
+        {/* Primary info */}
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="font-semibold text-gray-900 dark:text-white truncate">{tenant.business_name}</span>
-            <span className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${cfg.color}`}>{cfg.label}</span>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-semibold text-gray-900 dark:text-white truncate">
+              {tenant.business_name}
+            </span>
+            <span className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${cfg.color}`}>
+              {cfg.label}
+            </span>
             {tenant.demo_mode && (
-              <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-400">Demo</span>
+              <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-400">
+                Demo
+              </span>
             )}
             {tenant.plan && (
-              <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-400">{tenant.plan}</span>
+              <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-400">
+                {PLAN_LABELS[tenant.plan] || tenant.plan}
+              </span>
             )}
           </div>
           <div className="flex items-center gap-3 mt-0.5 text-xs text-gray-500 dark:text-gray-400">
@@ -694,345 +360,485 @@ function TenantRow({ tenant, expanded, onToggle, onAction, onPurge, actionLoadin
           </div>
         </div>
 
-        {/* Integration badges + agent status */}
+        {/* Integration badges */}
         <div className="hidden md:flex items-center gap-1.5">
-          <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${
-            tenant.agent_active !== false
-              ? 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400'
-              : 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-400'
-          }`}>
+          <span
+            className={`px-2 py-0.5 rounded text-[10px] font-medium ${
+              tenant.agent_active !== false
+                ? 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400'
+                : 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-400'
+            }`}
+          >
             {tenant.agent_active !== false ? 'Agent ON' : 'Agent OFF'}
           </span>
-          <IntegrationBadge label="Vapi" active={tenant.vapi_configured} enabled={tenant.feature_vapi_enabled !== false} />
           <IntegrationBadge label="GCal" active={tenant.google_calendar_connected} />
-          <IntegrationBadge label="Twilio" active={tenant.twilio_configured} enabled={tenant.feature_twilio_enabled !== false} />
+          <IntegrationBadge
+            label="Twilio"
+            active={tenant.twilio_configured}
+            enabled={tenant.feature_twilio_enabled !== false}
+          />
         </div>
 
-        {expanded ? <ChevronUp className="w-4 h-4 text-gray-400 shrink-0" /> : <ChevronDown className="w-4 h-4 text-gray-400 shrink-0" />}
-      </button>
-
-      {/* Expanded detail with inner tabs */}
-      {expanded && (
-        <div className="border-t border-gray-100 dark:border-gray-700">
-          {/* Inner tab bar */}
-          <div className="flex items-center gap-0 border-b border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-700/30 px-4">
-            {TENANT_TABS.map(({ key, label, icon: Icon }) => (
-              <button
-                key={key}
-                onClick={() => setActiveTab(key)}
-                className={`flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium border-b-2 transition-colors ${
-                  activeTab === key
-                    ? 'border-primary-500 text-primary-600 dark:text-primary-400'
-                    : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
-                }`}
-              >
-                <Icon className="w-3.5 h-3.5" />
-                {label}
-              </button>
-            ))}
-          </div>
-
-          {/* Tab content */}
-          <div className="px-4 py-5 bg-gray-50/50 dark:bg-gray-700/50">
-            {activeTab === 'overview' && (
-              <OverviewTab tenant={tenant} />
-            )}
-            {activeTab === 'integrations' && (
-              <IntegrationsTab tenantId={tenant.id} tenant={tenant} onRefresh={onRefresh} />
-            )}
-            {activeTab === 'usage' && (
-              <UsageHistoryTab tenantId={tenant.id} />
-            )}
-
-            {/* Action buttons — always visible */}
-            <div className="mt-5 pt-4 border-t border-gray-200 dark:border-gray-700 flex flex-wrap gap-2">
-              {tenant.status === 'PENDING' && (
-                <ActionButton icon={CheckCircle} label="Approve" color="green" loading={actionLoading} onClick={() => onAction('approve')} />
-              )}
-              {tenant.status === 'ACTIVE' && (
-                <ActionButton icon={PauseCircle} label="Suspend" color="amber" loading={actionLoading} onClick={() => onAction('suspend')} />
-              )}
-              {(tenant.status === 'SUSPENDED' || tenant.status === 'DEACTIVATED') && (
-                <ActionButton icon={PlayCircle} label="Reactivate" color="blue" loading={actionLoading} onClick={() => onAction('reactivate')} />
-              )}
-              {tenant.status !== 'DEACTIVATED' && (
-                <ActionButton
-                  icon={Trash2}
-                  label="Deactivate"
-                  color="red"
-                  loading={actionLoading}
-                  onClick={async () => {
-                    const ok = await confirm({
-                      title: 'Deactivate Account?',
-                      message: `Deactivate "${tenant.business_name}"? The account will be disabled but data will be preserved.`,
-                      confirmText: 'Deactivate',
-                      variant: 'danger',
-                    });
-                    if (ok) onAction('delete', 'DELETE');
-                  }}
-                />
-              )}
-              <ActionButton icon={XCircle} label="Permanently Delete" color="red" loading={actionLoading} onClick={onPurge} />
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+        <ChevronRight className="w-4 h-4 text-gray-400 group-hover:text-indigo-500 shrink-0 transition-colors" />
+      </div>
+    </button>
   );
 }
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// TENANT INNER TABS
+// SUPPORT TICKETS TAB — grouped by tenant, each ticket navigates to detail
 // ═══════════════════════════════════════════════════════════════════════════
 
-// ── Overview Tab ──────────────────────────────────────────────────────────
+const TICKET_STATUS_DOT = {
+  OPEN:        'bg-blue-500',
+  IN_PROGRESS: 'bg-amber-500',
+  RESOLVED:    'bg-green-500',
+  CLOSED:      'bg-gray-400',
+  REOPENED:    'bg-red-500',
+};
 
-function OverviewTab({ tenant }) {
+const TICKET_STATUS_COLOR = {
+  OPEN:        'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
+  IN_PROGRESS: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
+  RESOLVED:    'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400',
+  CLOSED:      'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400',
+  REOPENED:    'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400',
+};
+
+function TicketsTab({ tickets, ticketsLoading, ticketStatusFilter, setTicketStatusFilter, ticketStats }) {
+  const [tenantSearch, setTenantSearch] = useState('');
+
+  // Filter by status + tenant search
+  const filtered = tickets.filter((t) => {
+    if (tenantSearch) {
+      const q = tenantSearch.toLowerCase();
+      const matchTenant =
+        (t.tenant_name || '').toLowerCase().includes(q) ||
+        (t.tenant_slug || '').toLowerCase().includes(q);
+      if (!matchTenant) return false;
+    }
+    return true;
+  });
+
+  // Group by tenant_id
+  const groupMap = {};
+  filtered.forEach((t) => {
+    const key = t.tenant_id || 'unknown';
+    if (!groupMap[key]) {
+      groupMap[key] = {
+        tenantId: key,
+        name: t.tenant_name || t.tenant_slug || 'Unknown Tenant',
+        slug: t.tenant_slug || '',
+        tickets: [],
+      };
+    }
+    groupMap[key].tickets.push(t);
+  });
+  const tenantGroups = Object.values(groupMap);
+
   return (
-    <div className="space-y-5">
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Left: Business details */}
-        <div className="space-y-3">
-          <h4 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Business Details</h4>
-          <DetailRow label="ID" value={tenant.id} mono />
-          <DetailRow label="Slug" value={tenant.slug} mono />
-          <DetailRow label="Business Type" value={tenant.business_type || '—'} />
-          <DetailRow label="Timezone" value={tenant.timezone} />
-          <DetailRow label="Plan" value={tenant.plan || '—'} />
-          <DetailRow label="Agent Name" value={tenant.agent_name || '—'} />
-          <DetailRow label="Created" value={tenant.created_at ? new Date(tenant.created_at).toLocaleString() : '—'} />
-          <DetailRow label="Updated" value={tenant.updated_at ? new Date(tenant.updated_at).toLocaleString() : '—'} />
+    <div className="space-y-4">
+      {/* Search + status filter row */}
+      <div className="flex flex-col sm:flex-row gap-3">
+        <div className="relative sm:w-64">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+          <input
+            type="text"
+            value={tenantSearch}
+            onChange={(e) => setTenantSearch(e.target.value)}
+            placeholder="Search by tenant…"
+            className="w-full pl-10 pr-4 py-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none dark:bg-gray-700 dark:text-white"
+          />
         </div>
-
-        {/* Right: Owner info */}
-        <div className="space-y-3">
-          <h4 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Owner</h4>
-          <DetailRow label="Name" value={tenant.owner_name} />
-          <DetailRow label="Email" value={tenant.owner_email} />
-          <DetailRow label="Phone" value={tenant.owner_phone || '—'} />
+        <div className="flex items-center gap-1 flex-wrap">
+          {['ALL', 'OPEN', 'REOPENED', 'IN_PROGRESS', 'RESOLVED', 'CLOSED'].map((s) => (
+            <button
+              key={s}
+              onClick={() => setTicketStatusFilter(s)}
+              className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
+                ticketStatusFilter === s
+                  ? 'bg-indigo-500 text-white'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-400 dark:hover:bg-gray-600'
+              }`}
+            >
+              {s === 'ALL' ? 'All' : TICKET_STATUS_LABELS[s] || s}
+              {s !== 'ALL' && ticketStats?.[s] > 0 && (
+                <span className="ml-1 opacity-70">({ticketStats[s]})</span>
+              )}
+            </button>
+          ))}
         </div>
       </div>
 
-      {/* Greeting message */}
-      {tenant.greeting_message && (
-        <div className="p-3 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
-          <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Greeting Message</p>
-          <p className="text-sm text-gray-700 dark:text-gray-300 italic">"{tenant.greeting_message}"</p>
+      {/* Stats summary */}
+      {ticketStats && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {[
+            { key: 'OPEN', label: 'Open', icon: HelpCircle, iconColor: 'text-blue-500', iconBg: 'bg-blue-50 dark:bg-blue-900/30' },
+            { key: 'REOPENED', label: 'Reopened', icon: RefreshCw, iconColor: 'text-red-500', iconBg: 'bg-red-50 dark:bg-red-900/30' },
+            { key: 'IN_PROGRESS', label: 'In Progress', icon: Clock, iconColor: 'text-amber-500', iconBg: 'bg-amber-50 dark:bg-amber-900/30' },
+            { key: 'RESOLVED', label: 'Resolved', icon: CheckCircle, iconColor: 'text-green-500', iconBg: 'bg-green-50 dark:bg-green-900/30' },
+          ].map(({ key, label, icon: Icon, iconColor, iconBg }) => (
+            <StatCard key={key} icon={Icon} iconBg={iconBg} iconColor={iconColor} value={ticketStats[key] || 0} label={label} />
+          ))}
         </div>
       )}
 
-      {/* Location */}
-      {(tenant.business_address || tenant.google_maps_url) && (
-        <div className="p-4 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
-          <h4 className="text-sm font-semibold text-gray-900 dark:text-white flex items-center gap-2 mb-2">
-            <MapPin className="w-4 h-4 text-primary-500" />
-            Clinic Location
-          </h4>
-          {tenant.business_address && (
-            <p className="text-sm text-gray-700 dark:text-gray-300 mb-2">{tenant.business_address}</p>
-          )}
-          {tenant.google_maps_url && (
-            <a href={tenant.google_maps_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-sm font-medium text-primary-600 dark:text-primary-400 hover:text-primary-700 dark:hover:text-primary-300">
-              <ExternalLink className="w-3.5 h-3.5" />
-              Open in Google Maps
-            </a>
-          )}
+      {/* Content */}
+      {ticketsLoading ? (
+        <div className="flex items-center justify-center py-16">
+          <Loader2 className="w-5 h-5 animate-spin text-indigo-500" />
+        </div>
+      ) : tenantGroups.length === 0 ? (
+        <div className="bg-white dark:bg-gray-900/60 rounded-2xl border border-gray-200/80 dark:border-white/5 p-12 text-center">
+          <HelpCircle className="w-10 h-10 text-gray-300 dark:text-gray-600 mx-auto mb-3" />
+          <p className="text-gray-400 text-sm">
+            {tenantSearch ? 'No tenants match your search.' : 'No tickets found.'}
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {tenantGroups.map((group) => (
+            <TenantTicketGroup key={group.tenantId} group={group} />
+          ))}
         </div>
       )}
     </div>
   );
 }
 
-// ── Integrations & Flags Tab ─────────────────────────────────────────────
+function TenantTicketGroup({ group }) {
+  const navigate = useNavigate();
+  const [collapsed, setCollapsed] = useState(false);
 
-function IntegrationsTab({ tenantId, tenant, onRefresh }) {
+  // Count by status for summary badges
+  const statusCounts = group.tickets.reduce((acc, t) => {
+    acc[t.status] = (acc[t.status] || 0) + 1;
+    return acc;
+  }, {});
+
+  const initials = (group.name || '?').charAt(0).toUpperCase();
+
+  return (
+    <div className="bg-white dark:bg-gray-900/60 rounded-2xl border border-gray-200/80 dark:border-white/5 overflow-hidden">
+      {/* Group header */}
+      <button
+        onClick={() => setCollapsed((c) => !c)}
+        className="w-full flex items-center justify-between gap-4 p-4 hover:bg-gray-50 dark:hover:bg-gray-800/40 transition-colors text-left"
+      >
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-400 to-purple-500 flex items-center justify-center text-white text-sm font-bold shrink-0">
+            {initials}
+          </div>
+          <div>
+            <p className="font-semibold text-sm text-gray-900 dark:text-white">{group.name}</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400 font-mono">{group.slug}</p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {/* Status summary pills */}
+          <div className="hidden sm:flex items-center gap-1.5">
+            {Object.entries(statusCounts).map(([status, count]) => (
+              <span key={status} className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${TICKET_STATUS_COLOR[status] || 'bg-gray-100 text-gray-500'}`}>
+                {count} {TICKET_STATUS_LABELS[status] || status}
+              </span>
+            ))}
+          </div>
+          <span className="text-xs text-gray-400 tabular-nums shrink-0">
+            {group.tickets.length} ticket{group.tickets.length !== 1 ? 's' : ''}
+          </span>
+          {collapsed
+            ? <ChevronDown className="w-4 h-4 text-gray-400 shrink-0" />
+            : <ChevronUp className="w-4 h-4 text-gray-400 shrink-0" />
+          }
+        </div>
+      </button>
+
+      {/* Ticket rows */}
+      {!collapsed && (
+        <div className="border-t border-gray-100 dark:border-gray-700/50 divide-y divide-gray-100 dark:divide-gray-700/30">
+          {group.tickets.map((ticket) => (
+            <button
+              key={ticket.id}
+              onClick={() => navigate(`/admin/tickets/${ticket.id}`)}
+              className="w-full text-left flex items-center gap-3 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-800/40 group transition-colors"
+            >
+              {/* Status dot */}
+              <span className={`w-2 h-2 rounded-full shrink-0 ${TICKET_STATUS_DOT[ticket.status] || 'bg-gray-400'}`} />
+
+              {/* Subject + meta */}
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">
+                    {ticket.subject}
+                  </span>
+                  <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold shrink-0 ${TICKET_STATUS_COLOR[ticket.status] || 'bg-gray-100 text-gray-500'}`}>
+                    {TICKET_STATUS_LABELS[ticket.status] || ticket.status}
+                  </span>
+                  {(ticket.priority === 'HIGH' || ticket.priority === 'URGENT') && (
+                    <span className={`text-[10px] font-semibold shrink-0 ${ticket.priority === 'URGENT' ? 'text-red-500' : 'text-orange-500'}`}>
+                      {TICKET_PRIORITY_LABELS[ticket.priority]}
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 mt-0.5 text-xs text-gray-400 dark:text-gray-500">
+                  <span>{TICKET_CATEGORY_LABELS[ticket.category] || ticket.category}</span>
+                  <span>·</span>
+                  <span>{new Date(ticket.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                  {ticket.message_count > 0 && (
+                    <>
+                      <span>·</span>
+                      <span className="inline-flex items-center gap-0.5">
+                        <MessageSquare className="w-3 h-3" /> {ticket.message_count}
+                      </span>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-indigo-500 shrink-0 transition-colors" />
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PLATFORM SETTINGS TAB
+// ═══════════════════════════════════════════════════════════════════════════
+
+function PlatformSettingsTab() {
   const { toast } = useModal();
+  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [fields, setFields] = useState({
-    vapi_assistant_id: '',
-    vapi_phone_number_id: '',
-    twilio_phone_number: '',
-    agent_active: tenant.agent_active !== false,
-    feature_vapi_enabled: tenant.feature_vapi_enabled !== false,
-    feature_twilio_enabled: tenant.feature_twilio_enabled !== false,
+  const [config, setConfig] = useState({
+    bolna_api_key_masked: '',
+    bolna_agent_id: '',
+    bolna_configured: false,
   });
-  const [loaded, setLoaded] = useState(false);
+  const [editKey, setEditKey] = useState('');
+  const [editAgentId, setEditAgentId] = useState('');
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState(null); // {ok, message, agent_name?}
 
   useEffect(() => {
-    if (!loaded) loadCurrentValues();
+    loadConfig();
   }, []);
 
-  async function loadCurrentValues() {
+  async function loadConfig() {
+    setLoading(true);
     try {
-      const data = await apiFetch(`/api/integrations/vapi/admin/${tenantId}`);
-      setFields({
-        vapi_assistant_id: data.vapi_assistant_id || '',
-        vapi_phone_number_id: data.vapi_phone_number_id || '',
-        twilio_phone_number: data.twilio_phone_number || '',
-        agent_active: data.agent_active !== false,
-        feature_vapi_enabled: data.feature_vapi_enabled !== false,
-        feature_twilio_enabled: data.feature_twilio_enabled !== false,
-      });
-    } catch (err) {
-      // Use tenant-level data as fallback
-      setFields((f) => ({
-        ...f,
-        agent_active: tenant.agent_active !== false,
-        feature_vapi_enabled: tenant.feature_vapi_enabled !== false,
-        feature_twilio_enabled: tenant.feature_twilio_enabled !== false,
-      }));
+      const data = await apiFetch('/api/admin/platform/config');
+      setConfig(data);
+      setEditAgentId(data.bolna_agent_id || '');
+    } catch {
+      toast.error('Failed to load platform config.');
+    } finally {
+      setLoading(false);
     }
-    setLoaded(true);
   }
 
   async function handleSave() {
     setSaving(true);
+    setTestResult(null);
     try {
-      // Save integration assignments + feature flags
-      await apiFetch(`/api/integrations/vapi/assign`, {
-        method: 'POST',
-        body: JSON.stringify({
-          tenant_id: tenantId,
-          vapi_assistant_id: fields.vapi_assistant_id.trim() || null,
-          vapi_phone_number_id: fields.vapi_phone_number_id.trim() || null,
-          twilio_phone_number: fields.twilio_phone_number.trim() || null,
-          feature_vapi_enabled: fields.feature_vapi_enabled,
-          feature_twilio_enabled: fields.feature_twilio_enabled,
-        }),
-      });
-      // Save agent_active via tenant update endpoint
-      await apiFetch(`/api/tenants/${tenantId}`, {
+      const body = { bolna_agent_id: editAgentId.trim() };
+      if (editKey.trim()) body.bolna_api_key = editKey.trim();
+      const data = await apiFetch('/api/admin/platform/config', {
         method: 'PUT',
-        body: JSON.stringify({ agent_active: fields.agent_active }),
+        body: JSON.stringify(body),
       });
-      toast.success('Integration settings saved.');
-      if (onRefresh) onRefresh();
+      setConfig(data);
+      setEditKey('');
+      toast.success('Platform settings saved.');
     } catch (err) {
-      console.error('Failed to save:', err);
-      toast.error(err.message || 'Failed to save integration settings.');
+      toast.error(err.message || 'Failed to save platform settings.');
     } finally {
       setSaving(false);
     }
   }
 
+  async function handleTestConnection() {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const result = await apiFetch('/api/admin/platform/bolna/test');
+      setTestResult(result);
+    } catch (err) {
+      setTestResult({ ok: false, message: err.message || 'Request failed.' });
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <Loader2 className="w-6 h-6 animate-spin text-indigo-400" />
+      </div>
+    );
+  }
+
   return (
-    <div className="space-y-6">
-      {/* Agent Status — admin can turn on/off */}
-      <div className={`p-4 rounded-lg border ${
-        fields.agent_active
-          ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'
-          : 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800'
-      }`}>
-        <FeatureToggle
-          label="Agent Status"
-          description={
-            fields.agent_active
-              ? 'AI agent is LIVE — answering calls and processing requests'
-              : 'Agent is OFF — inbound calls are forwarded to the business phone'
-          }
-          enabled={fields.agent_active}
-          onChange={(v) => setFields((f) => ({ ...f, agent_active: v }))}
-        />
-      </div>
-
-      {/* Feature Flags section */}
-      <div className="p-4 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
-        <h4 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-          <Settings2 className="w-3.5 h-3.5" />
-          Feature Flags
-        </h4>
-        <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
-          Toggle features on/off for this tenant. When disabled, the feature is completely hidden and non-functional — even if API keys are configured.
-        </p>
-        <div className="space-y-3">
-          <FeatureToggle
-            label="Voice Agent (Vapi)"
-            description="AI phone receptionist — inbound call handling, appointment booking by voice"
-            enabled={fields.feature_vapi_enabled}
-            onChange={(v) => setFields((f) => ({ ...f, feature_vapi_enabled: v }))}
-          />
-          <FeatureToggle
-            label="SMS (Twilio)"
-            description="Appointment confirmations, reminders, waitlist notifications via text"
-            enabled={fields.feature_twilio_enabled}
-            onChange={(v) => setFields((f) => ({ ...f, feature_twilio_enabled: v }))}
-          />
+    <div className="space-y-6 max-w-2xl">
+      {/* Header */}
+      <div className="bg-gradient-to-r from-indigo-50 to-purple-50 dark:from-indigo-900/20 dark:to-purple-900/20 rounded-xl p-5 border border-indigo-100 dark:border-indigo-800/50">
+        <div className="flex items-start gap-3">
+          <div className="p-2 bg-indigo-100 dark:bg-indigo-900/50 rounded-lg">
+            <Settings2 className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+          </div>
+          <div>
+            <h3 className="text-base font-semibold text-gray-900 dark:text-white">
+              Global Platform Settings
+            </h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+              Admin-only configuration that applies across all tenants. These credentials are managed
+              centrally — tenants cannot see or change them.
+            </p>
+          </div>
         </div>
       </div>
 
-      {/* Connection status */}
-      <div className="p-4 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
-        <h4 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">Connection Status</h4>
-        <div className="space-y-2">
-          <IntegrationStatus label="Vapi" configured={tenant.vapi_configured} enabled={fields.feature_vapi_enabled} />
-          <IntegrationStatus
-            label={`Google Calendar${tenant.google_calendar_email ? ` (${tenant.google_calendar_email})` : ''}`}
-            configured={tenant.google_calendar_connected}
-          />
-          <IntegrationStatus label="Twilio" configured={tenant.twilio_configured} enabled={fields.feature_twilio_enabled} />
-        </div>
-      </div>
-
-      {/* Provisioning fields */}
-      <div className="p-4 bg-white dark:bg-gray-800 rounded-lg border border-indigo-200 dark:border-indigo-800">
-        <h4 className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider mb-3 flex items-center gap-2">
-          <PhoneCall className="w-3.5 h-3.5" />
-          Integration Assignment
-        </h4>
-        <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
-          Assign Vapi and Twilio resources from the platform's global accounts.
-        </p>
-
-        <div className="space-y-4">
-          <ProvisioningField
-            icon={Phone}
-            label="Vapi Assistant ID"
-            value={fields.vapi_assistant_id}
-            onChange={(v) => setFields((f) => ({ ...f, vapi_assistant_id: v }))}
-            placeholder="e.g. asst_abc123..."
-            hint="The Vapi assistant provisioned for this tenant's voice agent."
-          />
-          <ProvisioningField
-            icon={PhoneCall}
-            label="Vapi Phone Number ID"
-            value={fields.vapi_phone_number_id}
-            onChange={(v) => setFields((f) => ({ ...f, vapi_phone_number_id: v }))}
-            placeholder="e.g. phn_xyz789..."
-            hint="Vapi phone number ID assigned to this tenant."
-          />
-          <ProvisioningField
-            icon={MessageSquare}
-            label="Twilio Phone Number"
-            value={fields.twilio_phone_number}
-            onChange={(v) => setFields((f) => ({ ...f, twilio_phone_number: v }))}
-            placeholder="e.g. +14155551234"
-            hint="Twilio SMS number from the platform account."
-          />
-        </div>
-
-        <div className="pt-4 flex items-center gap-3">
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className="inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors disabled:opacity-50"
+      {/* Bolna AI Section */}
+      <div className="bg-white dark:bg-gray-800/60 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+        <div className="px-5 py-4 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <PhoneCall className="w-4 h-4 text-indigo-500" />
+            <h4 className="text-sm font-semibold text-gray-900 dark:text-white">
+              Bolna AI — Outbound Calling
+            </h4>
+          </div>
+          <span
+            className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium ${
+              config.bolna_configured
+                ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                : 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400'
+            }`}
           >
-            {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-            Save All Settings
-          </button>
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${config.bolna_configured ? 'bg-green-500' : 'bg-gray-400'}`}
+            />
+            {config.bolna_configured ? 'Configured' : 'Not configured'}
+          </span>
+        </div>
+
+        <div className="p-5 space-y-5">
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            Bolna AI provides AI-powered outbound calling with Indian phone number support (+91). A single
+            global API key and agent are used for all tenant outbound calls initiated via the platform.
+          </p>
+
+          {/* API Key */}
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-2">
+              Bolna API Key
+            </label>
+            <div className="relative">
+              <input
+                type="text"
+                value={editKey}
+                onChange={(e) => setEditKey(e.target.value)}
+                placeholder={config.bolna_api_key_masked || 'Paste your Bolna API key…'}
+                className="w-full px-3 py-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none dark:bg-gray-700 dark:text-white font-mono pr-28"
+              />
+              {config.bolna_api_key_masked && !editKey && (
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 dark:text-gray-500 font-mono pointer-events-none">
+                  {config.bolna_api_key_masked}
+                </span>
+              )}
+            </div>
+            <p className="text-[11px] text-gray-400 mt-1">
+              Leave blank to keep the existing key. Shown masked — paste a new key to update.
+            </p>
+          </div>
+
+          {/* Agent ID */}
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-2">
+              Bolna Agent ID
+            </label>
+            <input
+              type="text"
+              value={editAgentId}
+              onChange={(e) => setEditAgentId(e.target.value)}
+              placeholder="e.g. 123e4567-e89b-12d3-a456-426655440000"
+              className="w-full px-3 py-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none dark:bg-gray-700 dark:text-white font-mono"
+            />
+            <p className="text-[11px] text-gray-400 mt-1">
+              UUID of the Bolna voice agent (found in the Bolna dashboard under Agents).
+            </p>
+          </div>
+
+          <div className="pt-2 space-y-3">
+            <div className="flex items-center gap-3 flex-wrap">
+              <button
+                onClick={handleSave}
+                disabled={saving || testing}
+                className="inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors disabled:opacity-50"
+              >
+                {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                Save Platform Settings
+              </button>
+              <button
+                onClick={handleTestConnection}
+                disabled={saving || testing || !config.bolna_configured}
+                title={!config.bolna_configured ? 'Save credentials first' : 'Ping Bolna API — no call is placed'}
+                className="inline-flex items-center gap-1.5 px-4 py-2 border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors disabled:opacity-40"
+              >
+                {testing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <PhoneCall className="w-3.5 h-3.5" />}
+                Test Connection
+              </button>
+              <button
+                onClick={loadConfig}
+                disabled={loading || saving}
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors disabled:opacity-50"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                Refresh
+              </button>
+            </div>
+
+            {/* Test result banner */}
+            {testResult && (
+              <div className={`flex items-start gap-2.5 p-3 rounded-lg border text-sm ${
+                testResult.ok
+                  ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800 text-green-800 dark:text-green-300'
+                  : 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800 text-red-800 dark:text-red-300'
+              }`}>
+                {testResult.ok
+                  ? <CheckCircle className="w-4 h-4 shrink-0 mt-0.5 text-green-600 dark:text-green-400" />
+                  : <XCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-500" />
+                }
+                <div>
+                  <p className="font-medium">{testResult.ok ? 'Connection successful' : 'Connection failed'}</p>
+                  <p className="text-xs mt-0.5 opacity-80">{testResult.message}</p>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
-    </div>
-  );
-}
 
-// ── Usage & History Tab ──────────────────────────────────────────────────
-
-function UsageHistoryTab({ tenantId }) {
-  return (
-    <div className="space-y-5">
-      <TenantUsageStats tenantId={tenantId} />
-      <TenantChangeHistory tenantId={tenantId} />
+      {/* Info callout */}
+      <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-800/50 rounded-xl p-4 flex items-start gap-3">
+        <Info className="w-4 h-4 text-blue-500 shrink-0 mt-0.5" />
+        <div className="text-xs text-blue-700 dark:text-blue-300 space-y-1">
+          <p className="font-medium">How it works</p>
+          <p>
+            When a tenant triggers an outbound call, the platform uses these global Bolna credentials —
+            not any per-tenant key. Tenants cannot see or modify these credentials.
+          </p>
+          <p>
+            The Bolna agent ID identifies which pre-configured voice agent handles the call. Create and
+            configure agents at <span className="font-mono">app.bolna.dev</span>.
+          </p>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1044,7 +850,7 @@ function UsageHistoryTab({ tenantId }) {
 
 function StatCard({ icon: Icon, iconBg, iconColor, value, label }) {
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
+    <div className="bg-white dark:bg-gray-900/60 rounded-2xl border border-gray-200/80 dark:border-white/5 p-5">
       <div className="flex items-center gap-3">
         <div className={`p-2.5 rounded-lg ${iconBg}`}>
           <Icon className={`w-5 h-5 ${iconColor}`} />
@@ -1058,17 +864,6 @@ function StatCard({ icon: Icon, iconBg, iconColor, value, label }) {
   );
 }
 
-function DetailRow({ label, value, mono }) {
-  return (
-    <div className="flex items-start gap-2">
-      <span className="text-xs font-medium text-gray-500 dark:text-gray-400 w-24 shrink-0 pt-0.5">{label}</span>
-      <span className={`text-sm text-gray-800 dark:text-gray-200 break-all ${mono ? 'font-mono text-xs bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded' : ''}`}>
-        {value}
-      </span>
-    </div>
-  );
-}
-
 function IntegrationBadge({ label, active, enabled = true }) {
   if (!enabled) {
     return (
@@ -1078,226 +873,15 @@ function IntegrationBadge({ label, active, enabled = true }) {
     );
   }
   return (
-    <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${
-      active ? 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400' : 'bg-gray-100 text-gray-400 dark:bg-gray-700 dark:text-gray-500'
-    }`}>
+    <span
+      className={`px-2 py-0.5 rounded text-[10px] font-medium ${
+        active
+          ? 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400'
+          : 'bg-gray-100 text-gray-400 dark:bg-gray-700 dark:text-gray-500'
+      }`}
+    >
       {label}
     </span>
   );
 }
 
-function IntegrationStatus({ label, configured, enabled = true }) {
-  return (
-    <div className="flex items-center gap-2">
-      <div className={`w-2 h-2 rounded-full ${
-        !enabled ? 'bg-gray-300 dark:bg-gray-600' : configured ? 'bg-green-400' : 'bg-gray-300'
-      }`}></div>
-      <span className={`text-sm ${!enabled ? 'text-gray-400 line-through' : 'text-gray-700 dark:text-gray-300'}`}>{label}</span>
-      <span className={`text-xs ${
-        !enabled ? 'text-gray-400 dark:text-gray-500' : configured ? 'text-green-600 dark:text-green-400' : 'text-gray-400'
-      }`}>
-        {!enabled ? 'Disabled' : configured ? 'Connected' : 'Not configured'}
-      </span>
-    </div>
-  );
-}
-
-function FeatureToggle({ label, description, enabled, onChange }) {
-  return (
-    <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
-      <div>
-        <p className="text-sm font-medium text-gray-900 dark:text-white">{label}</p>
-        <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{description}</p>
-      </div>
-      <button
-        onClick={() => onChange(!enabled)}
-        className={`relative shrink-0 ml-4 w-11 h-6 rounded-full transition-colors ${
-          enabled ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600'
-        }`}
-      >
-        <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${
-          enabled ? 'translate-x-5' : 'translate-x-0'
-        }`} />
-      </button>
-    </div>
-  );
-}
-
-function ProvisioningField({ icon: Icon, label, value, onChange, placeholder, hint }) {
-  return (
-    <div>
-      <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
-        <Icon className="w-3.5 h-3.5 inline mr-1" />
-        {label}
-      </label>
-      <input
-        type="text"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none dark:bg-gray-700 dark:text-white font-mono"
-      />
-      {hint && <p className="text-[11px] text-gray-400 mt-1">{hint}</p>}
-    </div>
-  );
-}
-
-function TenantChangeHistory({ tenantId }) {
-  const [changes, setChanges] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [loaded, setLoaded] = useState(false);
-
-  useEffect(() => {
-    if (!loaded) loadChanges();
-  }, []);
-
-  async function loadChanges() {
-    setLoading(true);
-    try {
-      const data = await apiFetch(`/api/auth/profile-changes?tenant_id=${tenantId}`);
-      setChanges(Array.isArray(data) ? data : []);
-      setLoaded(true);
-    } catch (err) {
-      console.error('Failed to load changes:', err);
-      setLoaded(true);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  return (
-    <div className="p-4 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
-      <h4 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3 flex items-center gap-2">
-        <History className="w-3.5 h-3.5" />
-        Change History
-        {loaded && changes.length > 0 && (
-          <span className="px-1.5 py-0.5 bg-gray-100 dark:bg-gray-600 text-gray-500 dark:text-gray-400 rounded text-[10px]">{changes.length}</span>
-        )}
-      </h4>
-
-      {loading ? (
-        <div className="flex items-center justify-center py-6">
-          <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
-        </div>
-      ) : changes.length === 0 ? (
-        <p className="text-xs text-gray-400 dark:text-gray-500 py-2">No profile changes recorded.</p>
-      ) : (
-        <div className="space-y-2 max-h-64 overflow-y-auto">
-          {changes.map((log) => (
-            <div key={log.id} className="flex items-start gap-2.5 p-2.5 bg-gray-50 dark:bg-gray-700/50 rounded-lg text-xs">
-              <div className="w-1.5 h-1.5 rounded-full bg-primary-400 mt-1.5 shrink-0"></div>
-              <div className="flex-1 min-w-0">
-                <p className="text-gray-900 dark:text-white font-medium">
-                  {log.field_name === 'password' ? 'Password changed' : (
-                    <>
-                      <span className="text-gray-500 dark:text-gray-400">{log.field_name}:</span>{' '}
-                      <span className="line-through text-gray-400 dark:text-gray-500">{log.old_value}</span>{' '}
-                      <span className="text-primary-600 dark:text-primary-400">{log.new_value}</span>
-                    </>
-                  )}
-                </p>
-                <p className="text-gray-400 dark:text-gray-500 mt-0.5">
-                  by {log.changed_by} · {log.created_at ? new Date(log.created_at).toLocaleString() : '—'}
-                </p>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function TenantUsageStats({ tenantId }) {
-  const [usage, setUsage] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [loaded, setLoaded] = useState(false);
-
-  useEffect(() => {
-    if (!loaded) loadUsage();
-  }, []);
-
-  async function loadUsage() {
-    setLoading(true);
-    try {
-      const data = await apiFetch(`/api/integrations/vapi/admin/${tenantId}/usage`);
-      setUsage(data);
-    } catch (err) {
-      console.error('Failed to load usage:', err);
-    } finally {
-      setLoading(false);
-      setLoaded(true);
-    }
-  }
-
-  return (
-    <div className="p-4 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
-      <h4 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3 flex items-center gap-2">
-        <BarChart3 className="w-3.5 h-3.5" />
-        Usage Stats
-      </h4>
-
-      {loading ? (
-        <div className="flex items-center justify-center py-6">
-          <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
-        </div>
-      ) : !usage ? (
-        <p className="text-xs text-gray-400 py-2">Could not load usage data.</p>
-      ) : (
-        <div className="space-y-3">
-          <div className="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
-            <span>Plan: <strong className="text-gray-900 dark:text-white">{usage.plan || '—'}</strong></span>
-            {usage.period_start && (
-              <span>Period started: {new Date(usage.period_start).toLocaleDateString()}</span>
-            )}
-          </div>
-          <UsageBar label="Call Minutes" used={usage.call_minutes_used?.toFixed(1) || '0'} limit={usage.call_minutes_limit} raw={usage.call_minutes_used || 0} />
-          <UsageBar label="SMS Sent" used={usage.sms_sent || 0} limit={usage.sms_limit} raw={usage.sms_sent || 0} />
-        </div>
-      )}
-    </div>
-  );
-}
-
-function UsageBar({ label, used, limit, raw }) {
-  const pct = limit ? Math.min((raw / limit) * 100, 100) : 0;
-  const color = pct >= 95 ? 'bg-red-500' : pct >= 80 ? 'bg-amber-500' : 'bg-green-500';
-  return (
-    <div>
-      <div className="flex items-center justify-between text-xs mb-1">
-        <span className="text-gray-600 dark:text-gray-400">{label}</span>
-        <span className="font-medium text-gray-900 dark:text-white">{used} / {limit ?? '∞'}</span>
-      </div>
-      <div className="w-full h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
-        <div className={`h-full ${color} rounded-full transition-all`} style={{ width: `${pct}%` }} />
-      </div>
-    </div>
-  );
-}
-
-function ActionButton({ icon: Icon, label, color, loading, onClick }) {
-  const colorMap = {
-    green: 'bg-green-50 text-green-700 hover:bg-green-100 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:hover:bg-green-900/50 dark:border-green-800',
-    amber: 'bg-amber-50 text-amber-700 hover:bg-amber-100 border-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:hover:bg-amber-900/50 dark:border-amber-800',
-    blue: 'bg-blue-50 text-blue-700 hover:bg-blue-100 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:hover:bg-blue-900/50 dark:border-blue-800',
-    red: 'bg-red-50 text-red-700 hover:bg-red-100 border-red-200 dark:bg-red-900/30 dark:text-red-400 dark:hover:bg-red-900/50 dark:border-red-800',
-    gray: 'bg-gray-100 text-gray-600 hover:bg-gray-200 border-gray-200 dark:bg-gray-700 dark:text-gray-400 dark:hover:bg-gray-600 dark:border-gray-600',
-  };
-
-  return (
-    <button
-      onClick={onClick}
-      disabled={loading}
-      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors disabled:opacity-50 ${
-        colorMap[color] || colorMap.blue
-      }`}
-    >
-      {loading ? (
-        <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-current"></div>
-      ) : (
-        <Icon className="w-3.5 h-3.5" />
-      )}
-      {label}
-    </button>
-  );
-}

@@ -13,7 +13,7 @@ import {
   Filter,
   User,
   Phone,
-  Stethoscope,
+  CalendarCheck,
   Calendar,
   CalendarPlus,
 } from 'lucide-react';
@@ -112,7 +112,7 @@ export default function WaitlistView() {
   async function handleCancel(entryId) {
     const ok = await confirm({
       title: 'Cancel Waitlist Entry?',
-      message: 'The patient will be notified by SMS that their waitlist entry has been cancelled.',
+      message: 'The caller will be notified by SMS that their waitlist entry has been cancelled.',
       confirmText: 'Cancel Entry',
       variant: 'danger',
     });
@@ -150,7 +150,7 @@ export default function WaitlistView() {
 
   // First step of the promote flow — check for conflicting appointments
   // before booking. If any are found, surface them in the confirmation
-  // panel so the admin can decide to force-promote (doctor agrees) or back out.
+  // panel so the admin can decide to force-promote (faculty member agrees) or back out.
   async function handlePromote() {
     if (!promoteEntry || !promoteTime) return;
     setPromoteSubmitting(true);
@@ -188,7 +188,7 @@ export default function WaitlistView() {
   }
 
   // Second step — admin has reviewed conflicts and chose to proceed anyway.
-  // The doctor is ready, so we bypass the provider/time concurrency check.
+  // The faculty member is ready, so we bypass the provider/time concurrency check.
   async function handleForcePromote() {
     if (!promoteEntry || !promoteTime) return;
     setPromoteSubmitting(true);
@@ -217,22 +217,22 @@ export default function WaitlistView() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500"></div>
+        <div className="w-8 h-8 border-2 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin"></div>
       </div>
     );
   }
 
   return (
-    <div className="p-4 md:p-8 space-y-4 md:space-y-6 max-w-5xl mx-auto">
+    <div className="p-5 md:p-8 space-y-5 max-w-5xl mx-auto">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
-            <ClipboardList className="w-7 h-7 text-primary-500" />
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
+            <ClipboardList className="w-7 h-7 text-indigo-500" />
             Waitlist
-          </h2>
+          </h1>
           <p className="text-gray-500 dark:text-gray-400 mt-1">
-            Patients waiting for appointment openings. They're auto-notified when a cancellation
+            Callers waiting for appointment openings. They're auto-notified when a cancellation
             matches their preferences.
           </p>
         </div>
@@ -268,7 +268,7 @@ export default function WaitlistView() {
               onClick={() => setFilterStatus(isActive ? '' : key)}
               className={`rounded-xl border p-3 text-left transition-all ${
                 isActive
-                  ? `${cfg.bg} ${cfg.border} ring-2 ring-offset-1 ring-primary-300 dark:ring-offset-gray-900`
+                  ? `${cfg.bg} ${cfg.border} ring-2 ring-offset-1 ring-indigo-300 dark:ring-offset-gray-900`
                   : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 hover:border-gray-300'
               }`}
             >
@@ -302,7 +302,7 @@ export default function WaitlistView() {
 
       {/* Entries list */}
       {entries.length === 0 ? (
-        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-12 text-center">
+        <div className="bg-white dark:bg-gray-900/60 rounded-2xl border border-gray-200/80 dark:border-white/5 p-12 text-center">
           <ClipboardList className="w-12 h-12 text-gray-300 mx-auto mb-3" />
           <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-1">
             {filterStatus ? 'No matching entries' : 'Waitlist is empty'}
@@ -310,7 +310,7 @@ export default function WaitlistView() {
           <p className="text-sm text-gray-500 dark:text-gray-400">
             {filterStatus
               ? `No entries with status "${filterStatus}". Try clearing the filter.`
-              : 'When patients request a fully-booked slot, the AI agent will offer to add them here.'}
+              : 'When callers request a fully-booked slot, the AI agent will offer to add them here.'}
           </p>
         </div>
       ) : (
@@ -321,7 +321,7 @@ export default function WaitlistView() {
             return (
               <div
                 key={entry.id}
-                className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4 hover:border-gray-300 dark:hover:border-gray-600 transition-colors"
+                className="bg-white dark:bg-gray-900/60 rounded-2xl border border-gray-200/80 dark:border-white/5 p-4 hover:border-gray-300 dark:hover:border-gray-600 transition-colors"
               >
                 <div className="flex items-start gap-4">
                   {/* Status indicator */}
@@ -334,7 +334,7 @@ export default function WaitlistView() {
                   {/* Main content */}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-semibold text-gray-900 dark:text-white">{entry.patient_name}</span>
+                      <span className="font-semibold text-gray-900 dark:text-white">{entry.student_name}</span>
                       <span
                         className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${cfg.bg} ${cfg.text}`}
                       >
@@ -346,10 +346,10 @@ export default function WaitlistView() {
                     <div className="flex items-center gap-4 mt-1.5 text-sm text-gray-500 dark:text-gray-400 flex-wrap">
                       <span className="flex items-center gap-1">
                         <Phone className="w-3.5 h-3.5" />
-                        {entry.patient_phone}
+                        {entry.student_phone}
                       </span>
                       <span className="flex items-center gap-1">
-                        <Stethoscope className="w-3.5 h-3.5" />
+                        <CalendarCheck className="w-3.5 h-3.5" />
                         {entry.appointment_type}
                       </span>
                       <span className="flex items-center gap-1">
@@ -415,12 +415,12 @@ export default function WaitlistView() {
       {/* Promote modal */}
       {promoteEntry && (
         <div
-          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+          className="fixed inset-0 bg-black/50 flex items-start justify-center z-50 p-4 overflow-y-auto"
           onClick={(e) => {
             if (e.target === e.currentTarget) closePromote();
           }}
         >
-          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-full max-w-md p-6">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-full max-w-md p-6 my-auto">
             <div className="flex items-start justify-between mb-4">
               <div>
                 <h3 className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
@@ -428,7 +428,7 @@ export default function WaitlistView() {
                   Promote to Appointment
                 </h3>
                 <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                  Book this patient into a real slot. They'll be notified by SMS.
+                  Book this contact into a real slot. They'll be notified by SMS.
                 </p>
               </div>
               <button
@@ -442,14 +442,14 @@ export default function WaitlistView() {
             <div className="bg-gray-50 dark:bg-gray-900/50 rounded-lg p-3 mb-4 text-sm space-y-1">
               <div className="flex items-center gap-2 text-gray-700 dark:text-gray-300">
                 <User className="w-3.5 h-3.5 text-gray-400" />
-                <span className="font-medium">{promoteEntry.patient_name}</span>
+                <span className="font-medium">{promoteEntry.student_name}</span>
               </div>
               <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400">
                 <Phone className="w-3.5 h-3.5" />
-                {promoteEntry.patient_phone}
+                {promoteEntry.student_phone}
               </div>
               <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400">
-                <Stethoscope className="w-3.5 h-3.5" />
+                <CalendarCheck className="w-3.5 h-3.5" />
                 {promoteEntry.appointment_type}
               </div>
               <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400">
@@ -482,7 +482,7 @@ export default function WaitlistView() {
 
             {/* Conflict panel — shown when the backend reports existing
                 appointments at the chosen provider/slot. The admin can choose
-                to proceed anyway (the doctor is ready) or back out. */}
+                to proceed anyway (the faculty member is ready) or back out. */}
             {conflicts.length > 0 && (
               <div className="mt-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-4">
                 <div className="flex items-start gap-2">
@@ -493,7 +493,7 @@ export default function WaitlistView() {
                     </p>
                     <p className="text-xs text-amber-700 dark:text-amber-300 mt-0.5">
                       These appointments are already on the books for the same provider/window.
-                      Promote anyway only if the doctor has agreed to take the overlap.
+                      Promote anyway only if the provider has agreed to take the overlap.
                     </p>
                   </div>
                 </div>
@@ -505,14 +505,14 @@ export default function WaitlistView() {
                     >
                       <div className="flex items-center justify-between gap-2">
                         <span className="font-medium text-gray-900 dark:text-gray-100 truncate">
-                          {c.patient_name}
+                          {c.student_name}
                         </span>
                         <span className="text-gray-500 dark:text-gray-400 shrink-0">
                           {c.scheduled_at ? formatTime(c.scheduled_at, tz) : '—'}
                         </span>
                       </div>
                       <div className="flex items-center gap-2 mt-0.5 text-gray-500 dark:text-gray-400">
-                        <Stethoscope className="w-3 h-3" />
+                        <CalendarCheck className="w-3 h-3" />
                         <span className="truncate">{c.appointment_type}</span>
                         {c.provider_name && (
                           <>

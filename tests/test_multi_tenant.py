@@ -44,8 +44,8 @@ TENANT_2_ID = uuid.UUID("22222222-2222-2222-2222-222222222222")
 
 def _make_mock_tenant(
     tenant_id=TENANT_1_ID,
-    slug="acme-clinic",
-    business_name="Acme Clinic",
+    slug="acme-coaching",
+    business_name="Acme Coaching",
     business_type_val="custom",
     vapi_assistant_id="asst_abc123",
     status_val="ACTIVE",
@@ -60,7 +60,7 @@ def _make_mock_tenant(
     appointment_types=None,
     knowledge_base=None,
     emergency_guidance="",
-    greeting_message="Thank you for calling Acme Clinic.",
+    greeting_message="Thank you for calling Acme Coaching.",
 ):
     """Create a mock Tenant ORM object."""
     from unittest.mock import MagicMock
@@ -94,8 +94,8 @@ def _make_mock_tenant(
     t.business_hours = None
     t.knowledge_base = knowledge_base or {}
     t.emergency_guidance = emergency_guidance
-    t.owner_name = "Dr. Smith"
-    t.owner_email = "dr.smith@acme-clinic.com"
+    t.owner_name = "Amit Sharma"
+    t.owner_email = "admin@acme-coaching.com"
     t.owner_phone = "+15551111111"
     t.plan = MagicMock(value="starter")
     t.status = MagicMock(value=status_val)
@@ -127,8 +127,8 @@ def test_tenant_context_creation():
     ctx = _make_tenant_context()
 
     _assert(str(ctx.tenant_id) == str(TENANT_1_ID), "tenant_id matches")
-    _assert(ctx.slug == "acme-clinic", "slug matches")
-    _assert(ctx.business_name == "Acme Clinic", "business_name matches")
+    _assert(ctx.slug == "acme-coaching", "slug matches")
+    _assert(ctx.business_name == "Acme Coaching", "business_name matches")
     _assert(ctx.business_type == "custom", "business_type matches")
     _assert(ctx.timezone == "America/Chicago", "timezone matches")
     _assert(ctx.demo_mode is True, "demo_mode matches")
@@ -177,7 +177,7 @@ def test_cache():
     _cache_set("test_key", ctx)
     cached = _cache_get("test_key")
     _assert(cached is not None, "cache hit after set")
-    _assert(cached.slug == "acme-clinic", "cached value correct")
+    _assert(cached.slug == "acme-coaching", "cached value correct")
 
     # Miss
     _assert(_cache_get("nonexistent") is None, "cache miss returns None")
@@ -195,26 +195,26 @@ def test_cache():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TEST 4: Tenant data isolation (Patient.phone unique per tenant)
+# TEST 4: Tenant data isolation (Caller.phone unique per tenant)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def test_patient_model_constraint():
-    print("\n── Test 4: Patient model has tenant_id + composite unique constraint ──")
+def test_caller_model_constraint():
+    print("\n── Test 4: Caller model has tenant_id + composite unique constraint ──")
 
-    from backend.models.patient import Patient
+    from backend.models.caller import Caller
 
     # Check that the model has tenant_id column
-    columns = {c.name for c in Patient.__table__.columns}
-    _assert("tenant_id" in columns, "Patient model has tenant_id column")
+    columns = {c.name for c in Caller.__table__.columns}
+    _assert("tenant_id" in columns, "Caller model has tenant_id column")
 
     # Check UniqueConstraint
-    constraints = Patient.__table__.constraints
+    constraints = Caller.__table__.constraints
     has_composite = any(
         hasattr(c, "columns") and
         set(col.name for col in c.columns) == {"tenant_id", "phone"}
         for c in constraints
     )
-    _assert(has_composite, "Patient has composite unique constraint (tenant_id, phone)")
+    _assert(has_composite, "Caller has composite unique constraint (tenant_id, phone)")
 
 
 def test_call_model_has_tenant_id():
@@ -249,7 +249,7 @@ def test_sms_service_tenant_params():
 
     ctx = _make_tenant_context()
 
-    _assert(_business_name(ctx) == "Acme Clinic", "business name from tenant")
+    _assert(_business_name(ctx) == "Acme Coaching", "business name from tenant")
     _assert(_business_name(None) != "", "business name falls back to settings.OFFICE_NAME")
 
     sid, token, from_num = _resolve_twilio(ctx)
@@ -267,7 +267,7 @@ def test_sms_confirmation_uses_tenant():
     from backend.services import sms_service
 
     ctx = _make_tenant_context(
-        business_name="Sunrise Hospital",
+        business_name="Sunrise Institute",
         timezone_val="America/New_York",
         demo_mode=True,
     )
@@ -283,7 +283,7 @@ def test_sms_confirmation_uses_tenant():
 
     with patch.object(sms_service, "_send_sms", side_effect=_capture_send):
         result = sms_service.send_confirmation(
-            patient_name="John Doe",
+            caller_name="John Doe",
             phone="+15551234567",
             appointment_type="Consultation",
             scheduled_at=datetime(2026, 5, 5, 10, 0),
@@ -292,7 +292,7 @@ def test_sms_confirmation_uses_tenant():
 
     _assert(result is True, "SMS send returns True in demo mode")
     body = captured_body.get("body", "")
-    _assert("Sunrise Hospital" in body, f"SMS body contains tenant business name (body={body[:100]})")
+    _assert("Sunrise Institute" in body, f"SMS body contains tenant business name (body={body[:100]})")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -324,23 +324,23 @@ def test_system_prompt_uses_tenant():
 
     ctx = _make_tenant_context(
         agent_name="Emily",
-        business_name="Sunrise Veterinary Clinic",
-        business_type_val="veterinary",
+        business_name="Sunrise Coaching Institute",
+        business_type_val="coaching_institute",
         appointment_types=[
-            {"code": "checkup", "name": "Annual Checkup", "duration_minutes": 30},
-            {"code": "vaccination", "name": "Vaccination", "duration_minutes": 15},
+            {"code": "demo_class", "name": "Demo Class", "duration_minutes": 60},
+            {"code": "counselling", "name": "Counselling Session", "duration_minutes": 30},
         ],
     )
 
     prompt = build_system_prompt(tenant_ctx=ctx)
 
     _assert("Emily" in prompt, "agent_name 'Emily' in prompt")
-    _assert("Sunrise Veterinary Clinic" in prompt, "business_name in prompt")
-    _assert("Annual Checkup" in prompt, "custom appointment type in prompt")
-    _assert("Vaccination" in prompt, "custom appointment type in prompt (2)")
-    _assert("30 minutes" in prompt, "custom duration in prompt")
+    _assert("Sunrise Coaching Institute" in prompt, "business_name in prompt")
+    _assert("Demo Class" in prompt, "custom appointment type in prompt")
+    _assert("Counselling Session" in prompt, "custom appointment type in prompt (2)")
+    _assert("60 minutes" in prompt, "custom duration in prompt")
 
-    # Should NOT contain hardcoded dental references
+    # Should NOT contain hardcoded references
     _assert("SmileCare" not in prompt, "no hardcoded SmileCare in parameterised prompt")
 
 
@@ -356,25 +356,24 @@ def test_system_prompt_default_fallback():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TEST 12: Patient context in prompt with tenant business name
+# TEST 12: Caller context in prompt with tenant business name
 # ══════════════════════════════════════════════════════════════════════════════
 
-def test_patient_context_with_tenant():
-    print("\n── Test 12: Patient context in prompt uses tenant business name ──")
+def test_caller_context_with_tenant():
+    print("\n── Test 12: Caller context in prompt uses tenant business name ──")
 
     from backend.prompts.agent_prompt import build_system_prompt
 
-    ctx = _make_tenant_context(business_name="City Hospital")
+    ctx = _make_tenant_context(business_name="City Coaching Centre")
 
-    patient_context = {
-        "patient": {
+    caller_context = {
+        "caller": {
             "name": "Jane Smith",
             "phone": "+15551111111",
             "dob": "01/15/1985",
-            "is_new_patient": False,
+            "is_new": False,
             "visit_count": 5,
             "preferred_type": "consultation",
-            "allergies": None,
             "notes": None,
         },
         "upcoming_appointments": [],
@@ -385,11 +384,11 @@ def test_patient_context_with_tenant():
         "months_since_last_visit": 1,
     }
 
-    prompt = build_system_prompt(patient_context=patient_context, tenant_ctx=ctx)
+    prompt = build_system_prompt(caller_context=caller_context, tenant_ctx=ctx)
 
-    _assert("Jane Smith" in prompt, "patient name in prompt")
+    _assert("Jane Smith" in prompt, "caller name in prompt")
     _assert("CALLER RECOGNISED" in prompt, "caller recognised section present")
-    _assert("City Hospital" in prompt, "tenant business name in returning patient greeting")
+    _assert("City Coaching Centre" in prompt, "tenant business name in returning caller greeting")
     _assert("Total visits: 5" in prompt, "visit count in prompt")
 
 
@@ -405,7 +404,7 @@ def test_knowledge_service_tenant_kb():
     ctx = _make_tenant_context(
         knowledge_base={
             "office_info": {
-                "name": "Sunrise Hospital",
+                "name": "Sunrise Institute",
                 "address": "456 Oak Ave",
                 "phone": "555-0200",
                 "hours": "Mon-Fri 7AM-7PM",
@@ -417,10 +416,10 @@ def test_knowledge_service_tenant_kb():
     )
 
     kb = get_tenant_kb(ctx)
-    _assert(kb.get("office_info", {}).get("name") == "Sunrise Hospital", "tenant KB loaded from context")
+    _assert(kb.get("office_info", {}).get("name") == "Sunrise Institute", "tenant KB loaded from context")
 
     context_str = kb_to_context_string(tenant_ctx=ctx)
-    _assert("Sunrise Hospital" in context_str, "tenant KB in context string")
+    _assert("Sunrise Institute" in context_str, "tenant KB in context string")
     _assert("walk-ins" in context_str, "tenant FAQ in context string")
 
     # Without tenant, should fall back to file
@@ -437,15 +436,15 @@ def test_tenant_isolation_concept():
 
     ctx1 = _make_tenant_context(
         tenant_id=TENANT_1_ID,
-        slug="acme-clinic",
-        business_name="Acme Clinic",
+        slug="acme-coaching",
+        business_name="Acme Coaching Institute",
         vapi_assistant_id="asst_1",
     )
 
     ctx2 = _make_tenant_context(
         tenant_id=TENANT_2_ID,
-        slug="sunrise",
-        business_name="Sunrise Hospital",
+        slug="sunrise-coaching",
+        business_name="Sunrise Coaching Academy",
         vapi_assistant_id="asst_2",
     )
 
@@ -471,11 +470,11 @@ def test_tenant_status_enum():
 
 
 def test_business_type_enum():
-    print("\n── Test 16: BusinessType enum supports multiple verticals ──")
+    print("\n── Test 16: BusinessType enum supports coaching verticals ──")
 
     from backend.models.tenant import BusinessType
 
-    expected = {"dental", "hospital", "clinic", "veterinary", "physiotherapy", "custom"}
+    expected = {"coaching_institute", "custom"}
     actual = {b.value for b in BusinessType}
     _assert(actual == expected, f"BusinessType has all types: {actual}")
 
@@ -557,7 +556,7 @@ def test_noemail_address():
     print("\n── Test 21: noemail filter is honoured by gcal sync ──")
 
     # The noemail_address column-level property was removed from Tenant; gcal sync
-    # now drops any patient email that contains "noemail" so demo placeholders
+    # now drops any caller email that contains "noemail" so demo placeholders
     # are never invited to Google Calendar events.
     import backend.services.google_calendar as gcal
     import inspect
@@ -566,19 +565,20 @@ def test_noemail_address():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TEST 22: Prompt with emergency guidance (dental default)
+# TEST 22: Prompt coaching terminology
 # ══════════════════════════════════════════════════════════════════════════════
 
-def test_prompt_dental_emergency_default():
-    print("\n── Test 22: Dental business type gets dental emergency guidance ──")
+def test_prompt_coaching_terminology():
+    print("\n── Test 22: Coaching prompt uses coaching-specific terminology ──")
 
     from backend.prompts.agent_prompt import build_system_prompt
 
-    ctx = _make_tenant_context(business_type_val="dental", emergency_guidance="")
+    ctx = _make_tenant_context(business_type_val="coaching_institute", emergency_guidance="")
 
     prompt = build_system_prompt(tenant_ctx=ctx)
-    _assert("Knocked out tooth" in prompt, "dental-specific emergency guidance present")
-    _assert("warm salt water" in prompt, "dental toothache guidance present")
+    _assert("faculty" in prompt.lower(), "prompt uses 'faculty' terminology")
+    _assert("demo class" in prompt.lower() or "demo" in prompt.lower(), "prompt mentions demo class")
+    _assert("student" in prompt.lower(), "prompt uses 'student' terminology")
 
 
 def test_prompt_custom_emergency():
@@ -587,13 +587,14 @@ def test_prompt_custom_emergency():
     from backend.prompts.agent_prompt import build_system_prompt
 
     ctx = _make_tenant_context(
-        business_type_val="veterinary",
-        emergency_guidance="If the pet is choking, perform the Heimlich maneuver adapted for animals.",
+        business_type_val="custom",
+        emergency_guidance="For medical emergencies, advise the caller to call 112 immediately.",
+        escalation_phone="+15559990000",
     )
 
     prompt = build_system_prompt(tenant_ctx=ctx)
-    _assert("Heimlich maneuver" in prompt, "custom emergency guidance in prompt")
-    _assert("Knocked out tooth" not in prompt, "no dental guidance for vet clinic")
+    _assert("112" in prompt, "custom emergency guidance in prompt")
+    _assert("Knocked out tooth" not in prompt, "no dental guidance in custom prompt")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -608,26 +609,26 @@ def test_tenant_onboard_schema():
 
     # Valid request
     valid = TenantOnboardRequest(
-        slug="my-clinic",
-        business_name="My Clinic",
+        slug="my-institute",
+        business_name="My Institute",
         business_address="123 Main St",
-        owner_name="Dr. Jones",
-        owner_email="jones@clinic.com",
+        owner_name="Prof. Jones",
+        owner_email="jones@institute.com",
         owner_phone="+15551234567",
         timezone="America/Chicago",
     )
-    _assert(valid.slug == "my-clinic", "valid slug accepted")
+    _assert(valid.slug == "my-institute", "valid slug accepted")
     _assert(valid.plan == "starter", "default plan is starter")
     _assert(valid.timezone == "America/Chicago", "default timezone")
 
     # Invalid slug (uppercase)
     try:
         TenantOnboardRequest(
-            slug="My-Clinic",
-            business_name="My Clinic",
+            slug="My-Institute",
+            business_name="My Institute",
             business_address="123 Main St",
-            owner_name="Dr. Jones",
-            owner_email="jones@clinic.com",
+            owner_name="Prof. Jones",
+            owner_email="jones@institute.com",
             owner_phone="+15551234567",
             timezone="America/Chicago",
         )
@@ -703,26 +704,27 @@ def test_different_tenants_different_prompts():
 
     from backend.prompts.agent_prompt import build_system_prompt
 
-    ctx_clinic = _make_tenant_context(
+    ctx_coaching = _make_tenant_context(
         agent_name="Sarah",
-        business_name="Downtown Clinic",
-        business_type_val="clinic",
+        business_name="Downtown Coaching",
+        business_type_val="coaching_institute",
     )
-    ctx_vet = _make_tenant_context(
+    ctx_custom = _make_tenant_context(
         agent_name="Max",
-        business_name="Happy Paws Vet",
-        business_type_val="veterinary",
-        emergency_guidance="For pet emergencies, call the animal ER.",
+        business_name="Bright Minds Academy",
+        business_type_val="custom",
+        emergency_guidance="For urgent issues, contact our admin team immediately.",
+        escalation_phone="+15559990000",
     )
 
-    prompt_clinic = build_system_prompt(tenant_ctx=ctx_clinic)
-    prompt_vet = build_system_prompt(tenant_ctx=ctx_vet)
+    prompt_coaching = build_system_prompt(tenant_ctx=ctx_coaching)
+    prompt_custom = build_system_prompt(tenant_ctx=ctx_custom)
 
-    _assert(prompt_clinic != prompt_vet, "prompts are different for different tenants")
-    _assert("Downtown Clinic" in prompt_clinic, "clinic prompt mentions correct business")
-    _assert("Happy Paws Vet" in prompt_vet, "vet prompt mentions correct business")
-    _assert("Max" in prompt_vet, "vet prompt uses correct agent name")
-    _assert("animal ER" in prompt_vet, "vet prompt has custom emergency guidance")
+    _assert(prompt_coaching != prompt_custom, "prompts are different for different tenants")
+    _assert("Downtown Coaching" in prompt_coaching, "coaching prompt mentions correct business")
+    _assert("Bright Minds Academy" in prompt_custom, "custom prompt mentions correct business")
+    _assert("Max" in prompt_custom, "custom prompt uses correct agent name")
+    _assert("admin team" in prompt_custom, "custom prompt has custom emergency guidance")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -738,7 +740,7 @@ def main():
         test_tenant_context_creation,
         test_tenant_context_no_calcom,
         test_cache,
-        test_patient_model_constraint,
+        test_caller_model_constraint,
         test_call_model_has_tenant_id,
         test_appointment_model_has_tenant_id,
         test_sms_service_tenant_params,
@@ -746,7 +748,7 @@ def main():
         test_calendar_service_tenant_config,
         test_system_prompt_uses_tenant,
         test_system_prompt_default_fallback,
-        test_patient_context_with_tenant,
+        test_caller_context_with_tenant,
         test_knowledge_service_tenant_kb,
         test_tenant_isolation_concept,
         test_tenant_status_enum,
@@ -756,7 +758,7 @@ def main():
         test_models_export,
         test_tz_abbreviation,
         test_noemail_address,
-        test_prompt_dental_emergency_default,
+        test_prompt_coaching_terminology,
         test_prompt_custom_emergency,
         test_tenant_onboard_schema,
         test_tenant_out_hides_keys,

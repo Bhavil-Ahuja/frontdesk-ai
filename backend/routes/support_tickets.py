@@ -227,7 +227,9 @@ async def admin_update_ticket(
     if req.status in ("RESOLVED", "CLOSED") and not req.resolved_by:
         update_data["resolved_by"] = admin.owner_email
 
-    ticket = await support_ticket_service.update_ticket(tid, update_data)
+    ticket = await support_ticket_service.update_ticket(
+        tid, update_data, changed_by=admin.owner_email or admin.slug
+    )
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found.")
 

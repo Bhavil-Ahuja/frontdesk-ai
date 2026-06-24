@@ -62,10 +62,6 @@ class TenantUpdateRequest(BaseModel):
     agent_name: Optional[str] = None
     greeting_message: Optional[str] = None
     system_prompt_override: Optional[str] = None
-    vapi_api_key: Optional[str] = None
-    vapi_assistant_id: Optional[str] = None
-    vapi_phone_number_id: Optional[str] = None
-    vapi_webhook_secret: Optional[str] = None
     twilio_account_sid: Optional[str] = None
     twilio_auth_token: Optional[str] = None
     twilio_phone_number: Optional[str] = None
@@ -83,7 +79,6 @@ class TenantUpdateRequest(BaseModel):
     # Agent on/off — owner or admin can toggle
     agent_active: Optional[bool] = None
     # Feature flags (per-tenant toggles — admin only)
-    feature_vapi_enabled: Optional[bool] = None
     feature_twilio_enabled: Optional[bool] = None
 
 
@@ -106,17 +101,14 @@ class TenantOut(BaseModel):
     agent_name: Optional[str]
     greeting_message: Optional[str]
     # Integration status (show whether configured, don't expose keys)
-    vapi_configured: bool
     twilio_configured: bool
     # Per-tenant Twilio phone number (assigned by admin under Option A)
     twilio_phone_number: Optional[str]
     google_calendar_connected: bool
     google_calendar_email: Optional[str]
     # Feature flags — raw per-tenant toggles (admin-editable)
-    feature_vapi_enabled: Optional[bool]
     feature_twilio_enabled: Optional[bool]
     # Feature flags — effective state (global AND per-tenant)
-    vapi_enabled: bool
     twilio_enabled: bool
     created_at: Optional[datetime]
     updated_at: Optional[datetime]
@@ -144,9 +136,6 @@ def _tenant_to_out(t: Tenant) -> TenantOut:
         demo_mode=t.demo_mode if t.demo_mode is not None else True,
         agent_name=t.agent_name,
         greeting_message=t.greeting_message,
-        # Option A: Vapi is "configured" if an assistant_id has been assigned
-        # (by admin or auto-provision). The global API key handles auth.
-        vapi_configured=bool(t.vapi_assistant_id),
         # Twilio is "configured" if the platform has credentials AND a phone
         # number is assigned to this tenant.
         twilio_configured=bool(
@@ -158,10 +147,8 @@ def _tenant_to_out(t: Tenant) -> TenantOut:
         google_calendar_connected=bool(t.google_calendar_connected),
         google_calendar_email=t.google_calendar_email or "",
         # Feature flags — raw per-tenant toggles
-        feature_vapi_enabled=t.feature_vapi_enabled,
         feature_twilio_enabled=t.feature_twilio_enabled,
         # Feature flags — effective = global AND per-tenant
-        vapi_enabled=settings.FEATURE_VAPI_ENABLED and (t.feature_vapi_enabled if t.feature_vapi_enabled is not None else True),
         twilio_enabled=settings.FEATURE_TWILIO_ENABLED and (t.feature_twilio_enabled if t.feature_twilio_enabled is not None else True),
         created_at=t.created_at,
         updated_at=t.updated_at,
@@ -425,7 +412,7 @@ async def purge_tenant(
     admin: Tenant = Depends(auth_service.require_admin),
 ):
     """
-    Permanently delete a tenant and ALL associated data (appointments, patients,
+    Permanently delete a tenant and ALL associated data (appointments, callers,
     calls, SMS, waitlist, providers, profile change logs). This frees the email
     so the person can re-register. Irreversible. (Admin only)
     """
@@ -439,7 +426,7 @@ async def purge_tenant(
         raise HTTPException(status_code=400, detail="You cannot delete your own account.")
 
     from backend.models import (
-        Appointment, Call, Patient, Provider, WaitlistEntry, SMSMessage, ProfileChangeLog,
+        Appointment, Call, Caller, Provider, WaitlistEntry, SMSMessage, ProfileChangeLog,
         SupportTicket,
     )
     from backend.database import async_session
@@ -455,13 +442,19 @@ async def purge_tenant(
         tenant_email = tenant.owner_email
         tenant_slug = tenant.slug
 
-        # Delete all related data first (order doesn't matter with no inter-table FKs)
-        await session.execute(delete(Appointment).where(Appointment.tenant_id == uid))
+        # Build caller_id subquery first — Appointment/WaitlistEntry/SMSMessage
+        # derive tenant scope through caller_id, so we must delete child rows
+        # BEFORE deleting callers (otherwise the FK is gone).
+        tenant_caller_ids = select(Caller.id).where(Caller.tenant_id == uid)
+
+        await session.execute(delete(Appointment).where(Appointment.caller_id.in_(tenant_caller_ids)))
+        await session.execute(delete(WaitlistEntry).where(WaitlistEntry.caller_id.in_(tenant_caller_ids)))
+        await session.execute(delete(SMSMessage).where(SMSMessage.caller_id.in_(tenant_caller_ids)))
+
+        # Now safe to delete callers (child FKs gone)
+        await session.execute(delete(Caller).where(Caller.tenant_id == uid))
         await session.execute(delete(Call).where(Call.tenant_id == uid))
-        await session.execute(delete(Patient).where(Patient.tenant_id == uid))
         await session.execute(delete(Provider).where(Provider.tenant_id == uid))
-        await session.execute(delete(WaitlistEntry).where(WaitlistEntry.tenant_id == uid))
-        await session.execute(delete(SMSMessage).where(SMSMessage.tenant_id == uid))
         await session.execute(delete(ProfileChangeLog).where(ProfileChangeLog.tenant_id == uid))
         await session.execute(delete(SupportTicket).where(SupportTicket.tenant_id == uid))
 

@@ -1,12 +1,12 @@
 """
-Patient CRM API routes — list patients, get full patient profile with
+Caller CRM API routes — list callers, get full caller profile with
 appointment history, call logs, and SMS threads.
 
-GET    /api/patients              -> list all patients for the tenant
-GET    /api/patients/{patient_id} -> full patient profile with history
-PUT    /api/patients/{patient_id} -> update patient notes/allergies/etc.
-DELETE /api/patients/{patient_id} -> delete patient + related data
-POST   /api/patients/bulk-delete  -> delete multiple patients + related data
+GET    /api/callers              -> list all callers for the tenant
+GET    /api/callers/{caller_id}  -> full caller profile with history
+PUT    /api/callers/{caller_id}  -> update caller notes/etc.
+DELETE /api/callers/{caller_id}  -> delete caller + related data
+POST   /api/callers/bulk-delete  -> delete multiple callers + related data
 """
 
 import logging
@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import async_session
 from backend.models.tenant import Tenant
-from backend.models.patient import Patient
+from backend.models.caller import Caller
 from backend.models.appointment import Appointment, AppointmentStatus
 from backend.models.call import Call
 from backend.models.sms_message import SMSMessage, SMSDirection
@@ -27,99 +27,105 @@ from backend.models.provider import Provider
 from backend.models.waitlist import WaitlistEntry
 from backend.models.status_history import AppointmentStatusHistory
 from backend.services import auth_service
-from backend.services.patient_service import _phone_digits_tail, _phone_col_clean
+from backend.services.caller_service import _phone_digits_tail, _phone_col_clean
 from backend.defaults import slugify_appointment_type
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/patients", tags=["Patients"])
+router = APIRouter(prefix="/api/callers", tags=["Callers"])
 
 
 # -- Schemas -------------------------------------------------------------------
 
 
-class PatientUpdateRequest(BaseModel):
-    """Partial update for editable patient fields."""
+class CallerUpdateRequest(BaseModel):
+    """Partial update for editable caller fields."""
     name: Optional[str] = None
     email: Optional[str] = None
     date_of_birth: Optional[str] = None
-    allergies: Optional[str] = None
     notes: Optional[str] = None
     preferred_appointment_type: Optional[str] = None
 
 
 class BulkDeleteRequest(BaseModel):
-    """Request body for bulk patient deletion."""
-    patient_ids: List[str]
+    """Request body for bulk caller deletion."""
+    caller_ids: List[str]
 
 
 # -- Routes --------------------------------------------------------------------
 
 
 @router.get("")
-async def list_patients(
+async def list_callers(
     search: Optional[str] = Query(None, description="Search by name or phone"),
     sort: str = Query("recent", description="Sort: recent, name, visits"),
-    include_test: bool = Query(False, description="Include test/demo patient data"),
+    include_test: bool = Query(False, description="Include test/demo caller data"),
     current_user: Tenant = Depends(auth_service.get_current_user),
 ):
     """
-    List all patients for the authenticated tenant with summary stats.
-    Returns: id, name, phone, email, visit_count, is_new_patient,
+    List all callers for the authenticated tenant with summary stats.
+    Returns: id, name, phone, email, visit_count, is_new_caller,
     last_appointment_at, upcoming_count.
     """
-    logger.info("[Patients] Listing patients for tenant=%s search=%s include_test=%s", current_user.slug, search, include_test)
+    logger.info("[Callers] Listing callers for tenant=%s search=%s include_test=%s", current_user.slug, search, include_test)
     async with async_session() as session:
         # Base query
-        filters = [Patient.tenant_id == current_user.id]
+        filters = [Caller.tenant_id == current_user.id]
 
-        # Exclude test data by default
+        # When include_test=False → real data only; include_test=True → test data only
         if not include_test:
-            filters.append(Patient.is_test == False)  # noqa: E712
+            filters.append(Caller.is_test == False)  # noqa: E712
+        else:
+            filters.append(Caller.is_test == True)  # noqa: E712
 
         if search:
             search_term = f"%{search.strip()}%"
             filters.append(
-                (Patient.name.ilike(search_term)) | (Patient.phone.ilike(search_term))
+                (Caller.name.ilike(search_term)) | (Caller.phone.ilike(search_term))
             )
 
-        stmt = select(Patient).where(and_(*filters))
+        stmt = select(Caller).where(and_(*filters))
 
         # Sorting
         if sort == "name":
-            stmt = stmt.order_by(Patient.name.asc())
+            stmt = stmt.order_by(Caller.name.asc())
         elif sort == "visits":
-            stmt = stmt.order_by(desc(Patient.visit_count))
+            stmt = stmt.order_by(desc(Caller.visit_count))
         else:  # "recent" — most recently seen first
-            stmt = stmt.order_by(desc(Patient.last_appointment_at))
+            stmt = stmt.order_by(desc(Caller.last_appointment_at))
 
         result = await session.execute(stmt)
-        patients = result.scalars().all()
+        callers = result.scalars().all()
 
-        # For each patient, count upcoming appointments
-        patient_list = []
-        for p in patients:
+        # For each caller, count upcoming sessions
+        caller_list = []
+        for p in callers:
             # Count upcoming confirmed appointments (suffix match handles
             # phone format differences like +6352418405 vs +16352418405)
             phone_tail = _phone_digits_tail(p.phone)
-            upcoming_count_stmt = select(func.count()).where(
-                and_(
-                    Appointment.tenant_id == current_user.id,
-                    _phone_col_clean(Appointment.patient_phone).endswith(phone_tail),
-                    Appointment.status == AppointmentStatus.CONFIRMED,
-                    Appointment.scheduled_at > func.now(),
+            upcoming_count_stmt = (
+                select(func.count(Appointment.id))
+                .select_from(Appointment)
+                .join(Caller, Appointment.caller_id == Caller.id)
+                .where(
+                    and_(
+                        Caller.tenant_id == current_user.id,
+                        _phone_col_clean(Appointment.student_phone).endswith(phone_tail),
+                        Appointment.status == AppointmentStatus.CONFIRMED,
+                        Appointment.scheduled_at > func.now(),
+                    )
                 )
             )
             upcoming_result = await session.execute(upcoming_count_stmt)
             upcoming_count = upcoming_result.scalar() or 0
 
-            patient_list.append({
+            caller_list.append({
                 "id": str(p.id),
                 "name": p.name,
                 "phone": p.phone,
                 "email": p.email,
                 "date_of_birth": p.date_of_birth,
-                "is_new_patient": p.is_new_patient,
+                "is_new_caller": p.is_new_caller,
                 "visit_count": p.visit_count or 0,
                 "no_show_count": p.no_show_count or 0,
                 "last_appointment_at": p.last_appointment_at.isoformat() if p.last_appointment_at else None,
@@ -127,41 +133,43 @@ async def list_patients(
                 "upcoming_count": upcoming_count,
                 "preferred_appointment_type": p.preferred_appointment_type,
                 "is_test": p.is_test or False,
+                "extra_data": p.extra_data or {},
             })
 
-        return patient_list
+        return caller_list
 
 
-@router.get("/{patient_id}")
-async def get_patient_profile(
-    patient_id: str,
+@router.get("/{caller_id}")
+async def get_caller_profile(
+    caller_id: str,
     current_user: Tenant = Depends(auth_service.get_current_user),
 ):
     """
-    Full patient profile: demographics, all appointments, call logs, SMS threads.
-    This is the data backing the CRM patient detail view.
+    Full caller profile: demographics, all appointments, call logs, SMS threads.
+    This is the data backing the CRM caller detail view.
     """
-    logger.info("[Patients] Profile request for %s by tenant=%s", patient_id, current_user.slug)
+    logger.info("[Callers] Profile request for %s by tenant=%s", caller_id, current_user.slug)
     async with async_session() as session:
-        # Get patient
+        # Get caller record
         result = await session.execute(
-            select(Patient).where(
-                and_(Patient.id == patient_id, Patient.tenant_id == current_user.id)
+            select(Caller).where(
+                and_(Caller.id == caller_id, Caller.tenant_id == current_user.id)
             )
         )
-        patient = result.scalar_one_or_none()
-        if not patient:
-            raise HTTPException(status_code=404, detail="Patient not found.")
+        caller_rec = result.scalar_one_or_none()
+        if not caller_rec:
+            raise HTTPException(status_code=404, detail="Caller not found.")
 
         # ── Appointments (all, most recent first) ────────────────────────
         # Use suffix matching to handle phone format differences
-        phone_tail = _phone_digits_tail(patient.phone)
+        phone_tail = _phone_digits_tail(caller_rec.phone)
         appts_result = await session.execute(
             select(Appointment)
+            .join(Caller, Appointment.caller_id == Caller.id)
             .where(
                 and_(
-                    Appointment.tenant_id == current_user.id,
-                    _phone_col_clean(Appointment.patient_phone).endswith(phone_tail),
+                    Caller.tenant_id == current_user.id,
+                    _phone_col_clean(Appointment.student_phone).endswith(phone_tail),
                 )
             )
             .order_by(desc(Appointment.scheduled_at))
@@ -181,7 +189,7 @@ async def get_patient_profile(
 
         # ── Call logs (matched by caller_number) ─────────────────────────
         # Match on last 10 digits to handle +1 prefix differences
-        phone_digits = patient.phone.replace("+", "").replace("-", "").replace(" ", "")
+        phone_digits = caller_rec.phone.replace("+", "").replace("-", "").replace(" ", "")
         phone_tail = phone_digits[-10:] if len(phone_digits) >= 10 else phone_digits
 
         calls_result = await session.execute(
@@ -200,12 +208,7 @@ async def get_patient_profile(
         # ── SMS messages ─────────────────────────────────────────────────
         sms_result = await session.execute(
             select(SMSMessage)
-            .where(
-                and_(
-                    SMSMessage.tenant_id == current_user.id,
-                    SMSMessage.patient_phone.ilike(f"%{phone_tail}"),
-                )
-            )
+            .where(SMSMessage.caller_id == caller_rec.id)
             .order_by(desc(SMSMessage.created_at))
             .limit(100)
         )
@@ -234,20 +237,20 @@ async def get_patient_profile(
 
     # ── Assemble response ────────────────────────────────────────────────
     return {
-        "patient": {
-            "id": str(patient.id),
-            "name": patient.name,
-            "phone": patient.phone,
-            "email": patient.email,
-            "date_of_birth": patient.date_of_birth,
-            "preferred_appointment_type": patient.preferred_appointment_type,
-            "allergies": patient.allergies,
-            "notes": patient.notes,
-            "is_new_patient": patient.is_new_patient,
-            "visit_count": patient.visit_count or 0,
-            "no_show_count": patient.no_show_count or 0,
-            "first_seen_at": patient.first_seen_at.isoformat() if patient.first_seen_at else None,
-            "last_appointment_at": patient.last_appointment_at.isoformat() if patient.last_appointment_at else None,
+        "caller": {
+            "id": str(caller_rec.id),
+            "name": caller_rec.name,
+            "phone": caller_rec.phone,
+            "email": caller_rec.email,
+            "date_of_birth": caller_rec.date_of_birth,
+            "preferred_appointment_type": caller_rec.preferred_appointment_type,
+            "notes": caller_rec.notes,
+            "is_new_caller": caller_rec.is_new_caller,
+            "visit_count": caller_rec.visit_count or 0,
+            "no_show_count": caller_rec.no_show_count or 0,
+            "first_seen_at": caller_rec.first_seen_at.isoformat() if caller_rec.first_seen_at else None,
+            "last_appointment_at": caller_rec.last_appointment_at.isoformat() if caller_rec.last_appointment_at else None,
+            "extra_data": caller_rec.extra_data or {},
         },
         "appointments": [
             {
@@ -263,7 +266,7 @@ async def get_patient_profile(
                 "booked_via": a.booked_via.value if a.booked_via else None,
                 "provider_id": str(a.provider_id) if a.provider_id else None,
                 "provider_name": provider_map.get(a.provider_id) if a.provider_id else None,
-                "confirmed_by_patient": a.confirmed_by_patient,
+                "confirmed_by_student": a.confirmed_by_student,
                 "reminder_sent_at": a.reminder_sent_at.isoformat() if a.reminder_sent_at else None,
                 "notes": a.notes,
                 "created_at": a.created_at.isoformat() if a.created_at else None,
@@ -304,88 +307,88 @@ async def get_patient_profile(
     }
 
 
-@router.put("/{patient_id}")
-async def update_patient(
-    patient_id: str,
-    req: PatientUpdateRequest,
+@router.put("/{caller_id}")
+async def update_caller(
+    caller_id: str,
+    req: CallerUpdateRequest,
     current_user: Tenant = Depends(auth_service.get_current_user),
 ):
-    """Update editable patient fields (notes, allergies, etc.)."""
-    logger.info("[Patients] Updating patient %s for tenant=%s", patient_id, current_user.slug)
+    """Update editable caller fields (notes, etc.)."""
+    logger.info("[Callers] Updating caller %s for tenant=%s", caller_id, current_user.slug)
     async with async_session() as session:
         result = await session.execute(
-            select(Patient).where(
-                and_(Patient.id == patient_id, Patient.tenant_id == current_user.id)
+            select(Caller).where(
+                and_(Caller.id == caller_id, Caller.tenant_id == current_user.id)
             )
         )
-        patient = result.scalar_one_or_none()
-        if not patient:
-            raise HTTPException(status_code=404, detail="Patient not found.")
+        caller_rec = result.scalar_one_or_none()
+        if not caller_rec:
+            raise HTTPException(status_code=404, detail="Caller not found.")
 
         update_data = {k: v for k, v in req.model_dump().items() if v is not None}
         if not update_data:
             raise HTTPException(status_code=400, detail="No fields to update.")
 
         for key, value in update_data.items():
-            setattr(patient, key, value)
+            setattr(caller_rec, key, value)
 
         await session.commit()
-        return {"status": "updated", "patient_id": patient_id, "updated_fields": list(update_data.keys())}
+        return {"status": "updated", "caller_id": caller_id, "updated_fields": list(update_data.keys())}
 
 
 @router.post("/bulk-delete")
-async def bulk_delete_patients(
+async def bulk_delete_callers(
     req: BulkDeleteRequest,
     current_user: Tenant = Depends(auth_service.get_current_user),
 ):
     """
-    Delete multiple patients and all their related data (appointments,
+    Delete multiple callers and all their related data (appointments,
     waitlist entries, SMS messages). Matches related data by phone number.
-    Requires explicit patient_ids list from the doctor.
+    Requires explicit caller IDs list.
     """
-    if not req.patient_ids:
-        raise HTTPException(status_code=400, detail="No patient IDs provided.")
-    if len(req.patient_ids) > 100:
-        raise HTTPException(status_code=400, detail="Maximum 100 patients per bulk delete.")
+    if not req.caller_ids:
+        raise HTTPException(status_code=400, detail="No caller IDs provided.")
+    if len(req.caller_ids) > 100:
+        raise HTTPException(status_code=400, detail="Maximum 100 callers per bulk delete.")
 
     logger.warning(
-        "[Patients] Bulk delete requested for %d patients by tenant=%s",
-        len(req.patient_ids), current_user.slug,
+        "[Callers] Bulk delete requested for %d callers by tenant=%s",
+        len(req.caller_ids), current_user.slug,
     )
 
     async with async_session() as session:
-        # Look up all requested patients (scoped to tenant)
+        # Look up all requested callers (scoped to tenant)
         result = await session.execute(
-            select(Patient).where(
+            select(Caller).where(
                 and_(
-                    Patient.tenant_id == current_user.id,
-                    Patient.id.in_(req.patient_ids),
+                    Caller.tenant_id == current_user.id,
+                    Caller.id.in_(req.caller_ids),
                 )
             )
         )
-        patients = result.scalars().all()
+        callers = result.scalars().all()
 
-        if not patients:
-            raise HTTPException(status_code=404, detail="No matching patients found.")
+        if not callers:
+            raise HTTPException(status_code=404, detail="No matching callers found.")
 
         # Cascade delete related data by phone number
-        totals = {"patients": 0, "appointments": 0, "waitlist_entries": 0, "sms_messages": 0}
+        totals = {"callers": 0, "appointments": 0, "waitlist_entries": 0, "sms_messages": 0}
         deleted_names = []
 
-        for patient in patients:
-            counts = await _cascade_delete_patient(session, patient, current_user.id)
-            totals["patients"] += 1
+        for caller_rec in callers:
+            counts = await _cascade_delete_caller(session, caller_rec, current_user.id)
+            totals["callers"] += 1
             totals["appointments"] += counts["appointments"]
             totals["waitlist_entries"] += counts["waitlist_entries"]
             totals["sms_messages"] += counts["sms_messages"]
-            deleted_names.append(patient.name or patient.phone)
+            deleted_names.append(caller_rec.name or caller_rec.phone)
 
         await session.commit()
 
     total = sum(totals.values())
     logger.warning(
-        "[Patients] Bulk deleted %d patients (%s) + %d appts + %d waitlist + %d sms for tenant=%s",
-        totals["patients"], ", ".join(deleted_names),
+        "[Callers] Bulk deleted %d callers (%s) + %d appts + %d waitlist + %d sms for tenant=%s",
+        totals["callers"], ", ".join(deleted_names),
         totals["appointments"], totals["waitlist_entries"], totals["sms_messages"],
         current_user.slug,
     )
@@ -402,47 +405,48 @@ async def clear_test_data(
     current_user: Tenant = Depends(auth_service.get_current_user),
 ):
     """
-    Delete all test/demo data (patients, appointments, waitlist entries, SMS)
+    Delete all test/demo data (callers, appointments, waitlist entries, SMS)
     for the authenticated tenant. Only removes records where is_test=True.
     """
-    logger.info("[Patients] Clearing test data for tenant=%s", current_user.slug)
+    logger.info("[Callers] Clearing test data for tenant=%s", current_user.slug)
     async with async_session() as session:
-        # Delete in order to respect FK constraints
-        sms_count = (await session.execute(
-            delete(SMSMessage).where(
-                and_(SMSMessage.tenant_id == current_user.id, SMSMessage.is_test == True)  # noqa: E712
+        # Subquery: IDs of test callers for this tenant
+        test_caller_ids_q = (
+            select(Caller.id).where(
+                and_(Caller.tenant_id == current_user.id, Caller.is_test == True)  # noqa: E712
             )
+        )
+
+        # Delete child records first (FK on caller_id — no CASCADE defined)
+        sms_count = (await session.execute(
+            delete(SMSMessage).where(SMSMessage.caller_id.in_(test_caller_ids_q))
         )).rowcount
 
         waitlist_count = (await session.execute(
-            delete(WaitlistEntry).where(
-                and_(WaitlistEntry.tenant_id == current_user.id, WaitlistEntry.is_test == True)  # noqa: E712
-            )
+            delete(WaitlistEntry).where(WaitlistEntry.caller_id.in_(test_caller_ids_q))
         )).rowcount
 
         appt_count = (await session.execute(
-            delete(Appointment).where(
-                and_(Appointment.tenant_id == current_user.id, Appointment.is_test == True)  # noqa: E712
-            )
+            delete(Appointment).where(Appointment.caller_id.in_(test_caller_ids_q))
         )).rowcount
 
-        patient_count = (await session.execute(
-            delete(Patient).where(
-                and_(Patient.tenant_id == current_user.id, Patient.is_test == True)  # noqa: E712
+        caller_count = (await session.execute(
+            delete(Caller).where(
+                and_(Caller.tenant_id == current_user.id, Caller.is_test == True)  # noqa: E712
             )
         )).rowcount
 
         await session.commit()
 
-    total = patient_count + appt_count + waitlist_count + sms_count
+    total = caller_count + appt_count + waitlist_count + sms_count
     logger.info(
-        "[Patients] Cleared test data: %d patients, %d appointments, %d waitlist, %d sms",
-        patient_count, appt_count, waitlist_count, sms_count,
+        "[Callers] Cleared test data: %d callers, %d appointments, %d waitlist, %d sms",
+        caller_count, appt_count, waitlist_count, sms_count,
     )
     return {
         "status": "cleared",
         "deleted": {
-            "patients": patient_count,
+            "callers": caller_count,
             "appointments": appt_count,
             "waitlist_entries": waitlist_count,
             "sms_messages": sms_count,
@@ -451,41 +455,41 @@ async def clear_test_data(
     }
 
 
-@router.delete("/{patient_id}")
-async def delete_patient(
-    patient_id: str,
+@router.delete("/{caller_id}")
+async def delete_caller(
+    caller_id: str,
     current_user: Tenant = Depends(auth_service.get_current_user),
 ):
     """
-    Delete a single patient and all related data (appointments, waitlist
+    Delete a single caller and all related data (appointments, waitlist
     entries, SMS messages). Matches related data by phone number.
     """
-    logger.warning("[Patients] Delete requested for patient %s by tenant=%s", patient_id, current_user.slug)
+    logger.warning("[Callers] Delete requested for caller %s by tenant=%s", caller_id, current_user.slug)
 
     async with async_session() as session:
         result = await session.execute(
-            select(Patient).where(
-                and_(Patient.id == patient_id, Patient.tenant_id == current_user.id)
+            select(Caller).where(
+                and_(Caller.id == caller_id, Caller.tenant_id == current_user.id)
             )
         )
-        patient = result.scalar_one_or_none()
-        if not patient:
-            raise HTTPException(status_code=404, detail="Patient not found.")
+        caller_rec = result.scalar_one_or_none()
+        if not caller_rec:
+            raise HTTPException(status_code=404, detail="Caller not found.")
 
-        counts = await _cascade_delete_patient(session, patient, current_user.id)
-        patient_name = patient.name or patient.phone
+        counts = await _cascade_delete_caller(session, caller_rec, current_user.id)
+        caller_name = caller_rec.name or caller_rec.phone
         await session.commit()
 
     logger.warning(
-        "[Patients] Deleted patient '%s' + %d appts + %d waitlist + %d sms for tenant=%s",
-        patient_name, counts["appointments"], counts["waitlist_entries"],
+        "[Callers] Deleted caller '%s' + %d appts + %d waitlist + %d sms for tenant=%s",
+        caller_name, counts["appointments"], counts["waitlist_entries"],
         counts["sms_messages"], current_user.slug,
     )
     return {
         "status": "deleted",
-        "patient_name": patient_name,
+        "caller_name": caller_name,
         "deleted": {
-            "patients": 1,
+            "callers": 1,
             **counts,
         },
         "total": 1 + sum(counts.values()),
@@ -495,49 +499,30 @@ async def delete_patient(
 # -- Helpers -------------------------------------------------------------------
 
 
-async def _cascade_delete_patient(
-    session: AsyncSession, patient: Patient, tenant_id
+async def _cascade_delete_caller(
+    session: AsyncSession, caller_rec: Caller, tenant_id
 ) -> dict:
     """
-    Delete a patient and all related records (SMS, waitlist, appointments)
-    matched by phone number suffix. Returns counts of deleted related records.
+    Delete a caller and all related records (SMS, waitlist, appointments)
+    by caller_id FK. Returns counts of deleted related records.
     Must be called within an active session — caller is responsible for commit.
     """
-    phone_tail = _phone_digits_tail(patient.phone)
-
-    # Delete related SMS messages
+    # Delete child records by caller_id (direct FK — no phone matching needed)
     sms_count = (await session.execute(
-        delete(SMSMessage).where(
-            and_(
-                SMSMessage.tenant_id == tenant_id,
-                _phone_col_clean(SMSMessage.patient_phone).endswith(phone_tail),
-            )
-        )
+        delete(SMSMessage).where(SMSMessage.caller_id == caller_rec.id)
     )).rowcount
 
-    # Delete related waitlist entries
     waitlist_count = (await session.execute(
-        delete(WaitlistEntry).where(
-            and_(
-                WaitlistEntry.tenant_id == tenant_id,
-                _phone_col_clean(WaitlistEntry.patient_phone).endswith(phone_tail),
-            )
-        )
+        delete(WaitlistEntry).where(WaitlistEntry.caller_id == caller_rec.id)
     )).rowcount
 
-    # Delete related appointments
     appt_count = (await session.execute(
-        delete(Appointment).where(
-            and_(
-                Appointment.tenant_id == tenant_id,
-                _phone_col_clean(Appointment.patient_phone).endswith(phone_tail),
-            )
-        )
+        delete(Appointment).where(Appointment.caller_id == caller_rec.id)
     )).rowcount
 
-    # Delete the patient record itself
+    # Delete the caller record itself
     await session.execute(
-        delete(Patient).where(Patient.id == patient.id)
+        delete(Caller).where(Caller.id == caller_rec.id)
     )
 
     return {

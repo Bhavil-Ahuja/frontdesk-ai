@@ -2,8 +2,8 @@
 Tenant service — resolution, caching, and CRUD for multi-tenant routing.
 
 The primary flow:
-  1. Vapi sends a request with `call.assistantId`
-  2. We resolve `assistantId` → Tenant row → TenantContext
+  1. A request arrives with a tenant slug or tenant_id
+  2. We resolve it → Tenant row → TenantContext
   3. TenantContext is threaded through every service call
   4. Each service uses the tenant's credentials, timezone, etc.
 
@@ -27,7 +27,7 @@ from backend.defaults import (
     DEFAULT_AGENT_NAME,
     DEFAULT_BUSINESS_HOURS,
     DEFAULT_GREETING,
-    DEFAULT_TEST_PATIENT_NAME,
+    DEFAULT_TEST_STUDENT_NAME,
     DEFAULT_TIMEZONE,
 )
 from backend.models.tenant import Tenant, TenantStatus
@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 # ── Cache ────────────────────────────────────────────────────────────────────
 # Simple in-memory cache with 5-minute TTL. Tenants change rarely;
-# avoids a DB round-trip on every Vapi request.
+# avoids a DB round-trip on every request.
 
 _CACHE_TTL = 300  # seconds
 _cache: dict[str, tuple[float, "TenantContext"]] = {}  # key → (timestamp, context)
@@ -88,15 +88,9 @@ class TenantContext:
     agent_name: str
     greeting_message: str
     system_prompt_override: str | None
-    # Voice — drives the Vapi assistant's voice and the in-app preview/picker.
+    # Voice — drives the voice config and the in-app preview/picker.
     # Default: 11labs Rachel (matches the seed/default in the Tenant model).
     voice_config: dict[str, Any]
-
-    # Vapi
-    vapi_api_key: str
-    vapi_assistant_id: str
-    vapi_phone_number_id: str
-    vapi_webhook_secret: str
 
     # Twilio
     twilio_account_sid: str
@@ -132,11 +126,10 @@ class TenantContext:
     # Legacy fields (deprecated — prefer test_callers)
     test_caller_phone: str
     test_caller_phones: list[str]
-    test_patient_name: str
-    test_patient_names: list[str]
+    test_student_name: str
+    test_student_names: list[str]
 
     # Feature flags — effective state (global AND per-tenant)
-    feature_vapi_enabled: bool = True
     feature_twilio_enabled: bool = True
 
     @property
@@ -157,7 +150,7 @@ def _tenant_to_context(t: Tenant) -> TenantContext:
         tenant_id=t.id,
         slug=t.slug,
         business_name=t.business_name,
-        business_type=t.business_type.value if t.business_type else "custom",
+        business_type=t.business_type.value if t.business_type else "coaching_institute",
         business_phone=t.business_phone or "",
         business_address=t.business_address or "",
         timezone=t.timezone or DEFAULT_TIMEZONE,
@@ -166,12 +159,6 @@ def _tenant_to_context(t: Tenant) -> TenantContext:
         greeting_message=t.greeting_message or DEFAULT_GREETING,
         system_prompt_override=t.system_prompt_override,
         voice_config=t.voice_config or {"provider": "11labs", "voiceId": "21m00Tcm4TlvDq8ikWAM"},
-        # Option A: fall back to global .env credentials when tenant fields are empty.
-        # This lets all tenants share the platform's Vapi/Twilio account seamlessly.
-        vapi_api_key=t.vapi_api_key or settings.VAPI_API_KEY,
-        vapi_assistant_id=t.vapi_assistant_id or "",
-        vapi_phone_number_id=t.vapi_phone_number_id or "",
-        vapi_webhook_secret=t.vapi_webhook_secret or settings.VAPI_WEBHOOK_SECRET,
         twilio_account_sid=t.twilio_account_sid or settings.TWILIO_ACCOUNT_SID,
         twilio_auth_token=t.twilio_auth_token or settings.TWILIO_AUTH_TOKEN,
         twilio_phone_number=t.twilio_phone_number or settings.TWILIO_PHONE_NUMBER,
@@ -192,10 +179,9 @@ def _tenant_to_context(t: Tenant) -> TenantContext:
         # Legacy fields (kept for backwards compat)
         test_caller_phone=t.test_caller_phone or "",
         test_caller_phones=t.test_caller_phones or [],
-        test_patient_name=t.test_patient_name or DEFAULT_TEST_PATIENT_NAME,
-        test_patient_names=t.test_patient_names or [DEFAULT_TEST_PATIENT_NAME],
+        test_student_name=t.test_student_name or DEFAULT_TEST_STUDENT_NAME,
+        test_student_names=t.test_student_names or [DEFAULT_TEST_STUDENT_NAME],
         # Feature flags — effective = global AND per-tenant
-        feature_vapi_enabled=settings.FEATURE_VAPI_ENABLED and (t.feature_vapi_enabled if t.feature_vapi_enabled is not None else True),
         feature_twilio_enabled=settings.FEATURE_TWILIO_ENABLED and (t.feature_twilio_enabled if t.feature_twilio_enabled is not None else True),
     )
 
@@ -210,95 +196,24 @@ def _merge_test_callers(t: Tenant) -> list[dict[str, str]]:
 
     # Merge legacy parallel arrays
     phones = t.test_caller_phones or []
-    names = t.test_patient_names or []
+    names = t.test_student_names or []
 
     # If no phones but we have the single legacy field, use that
     if not phones and t.test_caller_phone:
         phones = [t.test_caller_phone]
-    if not names and t.test_patient_name:
-        names = [t.test_patient_name]
+    if not names and t.test_student_name:
+        names = [t.test_student_name]
 
     # Pair them up — if arrays are different lengths, use index or default name
     result = []
     for i, phone in enumerate(phones):
-        name = names[i] if i < len(names) else f"Test Patient {i + 1}"
+        name = names[i] if i < len(names) else f"Test Caller {i + 1}"
         result.append({"phone": phone, "name": name})
 
     return result
 
 
 # ── Resolution (the hot path — called on every request) ──────────────────────
-
-async def resolve_by_assistant_id(assistant_id: str) -> TenantContext | None:
-    """
-    Resolve a Vapi assistant_id to a TenantContext.
-    Uses cache first; falls back to DB.
-    Returns None if no active tenant matches.
-    """
-    if not assistant_id:
-        return None
-
-    cache_key = f"assistant:{assistant_id}"
-    cached = _cache_get(cache_key)
-    if cached:
-        return cached
-
-    async with async_session() as session:
-        result = await session.execute(
-            select(Tenant).where(
-                Tenant.vapi_assistant_id == assistant_id,
-                Tenant.status == TenantStatus.ACTIVE,
-            )
-        )
-        tenant = result.scalar_one_or_none()
-
-    if not tenant:
-        logger.warning("[TenantSvc] No active tenant for assistant_id=%s", assistant_id)
-        return None
-
-    ctx = _tenant_to_context(tenant)
-    _cache_set(cache_key, ctx)
-    logger.info("[TenantSvc] Resolved tenant: %s (%s) for assistant_id=%s",
-                ctx.slug, ctx.business_name, assistant_id)
-    return ctx
-
-
-async def resolve_by_phone_number_id(phone_number_id: str) -> TenantContext | None:
-    """
-    Resolve a Vapi phone number ID to a TenantContext.
-
-    In the platform-managed model we own ONE Vapi assistant and N phone numbers.
-    Each tenant row stores the phone_number_id assigned to them. When Vapi calls
-    the webhook it sends phoneNumberId — that's how we know which tenant the
-    call belongs to.
-    """
-    if not phone_number_id:
-        return None
-
-    cache_key = f"phone:{phone_number_id}"
-    cached = _cache_get(cache_key)
-    if cached:
-        return cached
-
-    async with async_session() as session:
-        result = await session.execute(
-            select(Tenant).where(
-                Tenant.vapi_phone_number_id == phone_number_id,
-                Tenant.status == TenantStatus.ACTIVE,
-            )
-        )
-        tenant = result.scalar_one_or_none()
-
-    if not tenant:
-        logger.warning("[TenantSvc] No active tenant for phone_number_id=%s", phone_number_id)
-        return None
-
-    ctx = _tenant_to_context(tenant)
-    _cache_set(cache_key, ctx)
-    logger.info("[TenantSvc] Resolved tenant: %s (%s) for phone_number_id=%s",
-                ctx.slug, ctx.business_name, phone_number_id)
-    return ctx
-
 
 async def resolve_by_slug(slug: str) -> TenantContext | None:
     """Resolve a tenant by URL slug."""
@@ -398,7 +313,7 @@ async def resolve_default_tenant() -> TenantContext | None:
         tenant_id=uuid.UUID("00000000-0000-0000-0000-000000000000"),
         slug="default",
         business_name=settings.OFFICE_NAME,
-        business_type="custom",
+        business_type="coaching_institute",
         business_phone="",
         business_address="",
         timezone=settings.OFFICE_TIMEZONE,
@@ -407,10 +322,6 @@ async def resolve_default_tenant() -> TenantContext | None:
         greeting_message=DEFAULT_GREETING,
         system_prompt_override=None,
         voice_config={"provider": "11labs", "voiceId": "21m00Tcm4TlvDq8ikWAM"},
-        vapi_api_key=settings.VAPI_API_KEY,
-        vapi_assistant_id=settings.VAPI_ASSISTANT_ID,
-        vapi_phone_number_id=settings.VAPI_PHONE_NUMBER_ID,
-        vapi_webhook_secret=settings.VAPI_WEBHOOK_SECRET,
         twilio_account_sid=settings.TWILIO_ACCOUNT_SID,
         twilio_auth_token=settings.TWILIO_AUTH_TOKEN,
         twilio_phone_number=settings.TWILIO_PHONE_NUMBER,
@@ -434,9 +345,8 @@ async def resolve_default_tenant() -> TenantContext | None:
         test_callers=[],
         test_caller_phone="",
         test_caller_phones=[],
-        test_patient_name=DEFAULT_TEST_PATIENT_NAME,
-        test_patient_names=[DEFAULT_TEST_PATIENT_NAME],
-        feature_vapi_enabled=settings.FEATURE_VAPI_ENABLED,
+        test_student_name=DEFAULT_TEST_STUDENT_NAME,
+        test_student_names=[DEFAULT_TEST_STUDENT_NAME],
         feature_twilio_enabled=settings.FEATURE_TWILIO_ENABLED,
     )
     _cache_set(cache_key, ctx)
@@ -528,7 +438,7 @@ async def create_tenant(data: dict[str, Any]) -> Tenant:
         tenant = Tenant(
             slug=slug,
             business_name=data["business_name"],
-            business_type=data.get("business_type", "custom"),
+            business_type=data.get("business_type", "coaching_institute"),
             business_phone=data.get("owner_phone", ""),
             business_address=data.get("business_address", ""),
             google_maps_url=maps_url,
@@ -540,8 +450,8 @@ async def create_tenant(data: dict[str, Any]) -> Tenant:
             plan=data.get("plan", "starter"),
             status=TenantStatus.PENDING,
             test_caller_phone=_generate_test_phone(),
-            test_patient_names=[DEFAULT_TEST_PATIENT_NAME],
-            test_patient_name=DEFAULT_TEST_PATIENT_NAME,
+            test_student_names=[DEFAULT_TEST_STUDENT_NAME],
+            test_student_name=DEFAULT_TEST_STUDENT_NAME,
             business_hours=_DEFAULT_BUSINESS_HOURS,
         )
         session.add(tenant)
@@ -588,13 +498,12 @@ async def update_tenant(tenant_id: uuid.UUID, data: dict[str, Any]) -> Tenant | 
             "business_name", "business_type", "business_phone", "business_address",
             "business_website", "google_maps_url", "timezone", "agent_name", "greeting_message",
             "system_prompt_override", "voice_config", "end_call_phrases",
-            "vapi_api_key", "vapi_assistant_id", "vapi_phone_number_id",
-            "vapi_webhook_secret", "twilio_account_sid", "twilio_auth_token",
+            "twilio_account_sid", "twilio_auth_token",
             "twilio_phone_number", "escalation_phone", "escalation_transfer_number",
             "appointment_types", "business_hours", "holidays", "knowledge_base",
             "emergency_guidance", "demo_mode", "plan",
             "reminder_settings", "review_settings",
-            "feature_vapi_enabled", "feature_twilio_enabled",
+            "feature_twilio_enabled",
             "agent_active",
         }
         # Normalize holidays — strip duplicates by date, drop blanks, sort ASC

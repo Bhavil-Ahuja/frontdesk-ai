@@ -41,15 +41,15 @@ class TestBookingHappyPath:
     """Tests for the standard booking flow."""
 
     @pytest.mark.asyncio
-    async def test_01_book_with_specific_doctor(self, auth_token, providers, conversation_id):
+    async def test_01_book_with_specific_instructor(self, auth_token, providers, conversation_id):
         """
-        Scenario 1: New patient books with a specific doctor.
-        Patient asks for a consultation with doc1 → agent should fetch slots,
+        Scenario 1: New caller books with a specific instructor.
+        Caller asks for a consultation with instr1 → agent should fetch slots,
         collect info, and book with the correct provider.
         """
-        doc1 = next((p for p in providers if "doc1" in p["name"].lower()), None)
+        doc1 = next((p for p in providers if "instr1" in p["name"].lower()), None)
         if not doc1:
-            pytest.skip("No provider named 'doc1' found")
+            pytest.skip("No provider named 'instr1' found")
 
         # Find a future date (2 days from now, skip weekends)
         target = _next_weekday(days_ahead=2)
@@ -58,7 +58,7 @@ class TestBookingHappyPath:
         replies = await chat_multi(auth_token, [
             f"Hi, I'd like to book a consultation with {doc1['name']} on {target_str}",
             "Yes, that's my number. 10 AM works",
-            "My name is Test Patient One, phone is +1-555-0101, DOB is January 15, 1990",
+            "My name is Test Caller One, phone is +1-555-0101, DOB is January 15, 1990",
             "Yes, please confirm the booking",
         ], conversation_id)
 
@@ -70,7 +70,7 @@ class TestBookingHappyPath:
 
         # Verify appointment exists in DB
         appts = await get_appointments(auth_token)
-        booked = [a for a in appts if a.get("patient_phone", "").endswith("0101")
+        booked = [a for a in appts if a.get("student_phone", "").endswith("0101")
                    and a["status"] == "CONFIRMED"]
         assert len(booked) >= 1, "Booking not found in appointments"
 
@@ -81,8 +81,8 @@ class TestBookingHappyPath:
     @pytest.mark.asyncio
     async def test_02_book_with_auto_provider(self, auth_token, conversation_id):
         """
-        Scenario 2: Patient asks for an appointment without specifying a doctor.
-        Agent should offer available providers and let patient choose.
+        Scenario 2: Caller asks for an appointment without specifying an instructor.
+        Agent should offer available providers and let caller choose.
         """
         target = _next_weekday(days_ahead=3)
         target_str = target.strftime("%A")
@@ -97,7 +97,7 @@ class TestBookingHappyPath:
         assert is_natural(combined), f"Response leaked JSON: {combined[:200]}"
         # Agent should offer times (possibly with provider names)
         assert mentions_any(combined, ["available", "opening", "slot", "AM", "PM", "morning",
-                                     "doc1", "doc2", "doctor", "time", "schedule"]), \
+                                     "instr1", "instr2", "instructor", "time", "schedule"]), \
             f"Expected time offerings, got: {combined[:300]}"
 
     @pytest.mark.asyncio
@@ -131,10 +131,10 @@ class TestRescheduleHappyPath:
     """Tests for the reschedule flow."""
 
     @pytest.mark.asyncio
-    async def test_04_reschedule_same_doctor(self, auth_token, conversation_id):
+    async def test_04_reschedule_same_instructor(self, auth_token, conversation_id):
         """
-        Scenario 4: Reschedule same doctor, different time.
-        Patient asks to move their appointment → agent uses booking_uid
+        Scenario 4: Reschedule same instructor, different time.
+        Caller asks to move their appointment → agent uses booking_uid
         and reschedules.
         """
         # First, we need an existing appointment. Check if one exists.
@@ -161,8 +161,8 @@ class TestRescheduleHappyPath:
     @pytest.mark.asyncio
     async def test_05_reschedule_with_provider_change(self, auth_token, providers, conversation_id):
         """
-        Scenario 5: Reschedule and change to a different doctor.
-        Patient says "reschedule to tomorrow with doc1" — verify the provider
+        Scenario 5: Reschedule and change to a different instructor.
+        Caller says "reschedule to tomorrow with instr1" — verify the provider
         changes in addition to the time.
         """
         if len(providers) < 2:
@@ -201,8 +201,8 @@ class TestRescheduleHappyPath:
     @pytest.mark.asyncio
     async def test_06_own_slot_available_during_reschedule(self, auth_token, conversation_id):
         """
-        Scenario 6: Patient's own slot should be available when rescheduling.
-        If patient has 4:00 PM and asks to reschedule, 4:00 PM should still
+        Scenario 6: Caller's own slot should be available when rescheduling.
+        If caller has 4:00 PM and asks to reschedule, 4:00 PM should still
         appear as available (exclude_booking_uid in action).
         """
         appts = await get_appointments(auth_token)
@@ -221,11 +221,11 @@ class TestRescheduleHappyPath:
         ], conversation_id)
 
         reply = replies[0]
-        # The patient's own time slot should NOT be blocked
+        # The caller's own time slot should NOT be blocked
         # We can't deterministically assert the exact time shows up,
         # but the day should have availability (not "fully booked")
         assert mentions_none(reply, ["fully booked", "no availability", "no openings"]), \
-            f"Patient's own day shows as fully booked — exclude_booking_uid may not be working: {reply[:200]}"
+            f"Caller's own day shows as fully booked — exclude_booking_uid may not be working: {reply[:200]}"
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -239,7 +239,7 @@ class TestCancelHappyPath:
     async def test_07_cancel_appointment(self, auth_token, conversation_id):
         """
         Scenario 7: Cancel an appointment via chat.
-        Patient says "cancel my appointment" → agent cancels it.
+        Caller says "cancel my appointment" → agent cancels it.
         """
         appts = await get_appointments(auth_token)
         confirmed = [a for a in appts if a["status"] == "CONFIRMED"
@@ -388,10 +388,10 @@ class TestRescheduleEdgeCases:
     @pytest.mark.asyncio
     async def test_19_reschedule_no_existing_appointment(self, auth_token):
         """
-        Scenario 19: Patient with no appointment tries to reschedule.
+        Scenario 19: Caller with no appointment tries to reschedule.
         Agent should explain there's nothing to reschedule.
         """
-        # Use a unique phone so this patient has no history
+        # Use a unique phone so this caller has no history
         conv_id = str(uuid.uuid4())
         unique_phone = f"+1555099{uuid.uuid4().hex[:4]}"
 
@@ -405,9 +405,9 @@ class TestRescheduleEdgeCases:
         # (exact behavior depends on whether this phone has records)
 
     @pytest.mark.asyncio
-    async def test_20_reschedule_same_time_different_doctor(self, auth_token, providers, conversation_id):
+    async def test_20_reschedule_same_time_different_instructor(self, auth_token, providers, conversation_id):
         """
-        Scenario 20: Keep the same time but switch to a different doctor.
+        Scenario 20: Keep the same time but switch to a different instructor.
         """
         if len(providers) < 2:
             pytest.skip("Need at least 2 providers")
@@ -501,7 +501,7 @@ class TestSlotEdgeCases:
     async def test_24_boundary_slot_at_closing(self, auth_token, tenant_info, conversation_id):
         """
         Scenario 24: Last slot should not extend past business closing time.
-        If clinic closes at 6 PM and appointment is 15 min, last slot = 5:45 PM.
+        If institute closes at 6 PM and appointment is 15 min, last slot = 5:45 PM.
         """
         target = _next_weekday(days_ahead=2)
         target_str = target.strftime("%A, %B %d")
@@ -629,7 +629,7 @@ class TestGCalSync:
         replies = await chat_multi(auth_token, [
             f"Book a consultation on {target_str} at 9 AM",
             "Yes, that's my number",
-            "Test GCal Patient, phone +1-555-0131, DOB March 3, 1995",
+            "Test GCal Caller, phone +1-555-0131, DOB March 3, 1995",
             "Yes, please confirm",
         ], conversation_id)
         elapsed = time.time() - t0
@@ -642,7 +642,7 @@ class TestGCalSync:
         # Clean up
         appts = await get_appointments(auth_token)
         for a in appts:
-            if a.get("patient_phone", "").endswith("0131") and a["status"] == "CONFIRMED":
+            if a.get("student_phone", "").endswith("0131") and a["status"] == "CONFIRMED":
                 await cancel_appointment(auth_token, a["id"])
 
     @pytest.mark.asyncio
@@ -688,10 +688,10 @@ class TestMultiProvider:
     """Edge cases for multi-provider scheduling."""
 
     @pytest.mark.asyncio
-    async def test_33_same_time_different_doctors(self, auth_token, providers, conversation_id):
+    async def test_33_same_time_different_instructors(self, auth_token, providers, conversation_id):
         """
-        Scenario 33: Same time should be available with different doctors.
-        If doc1 is booked at 10 AM, doc2 should still be available at 10 AM.
+        Scenario 33: Same time should be available with different instructors.
+        If instr1 is booked at 10 AM, instr2 should still be available at 10 AM.
         """
         if len(providers) < 2:
             pytest.skip("Need at least 2 providers")
@@ -700,20 +700,20 @@ class TestMultiProvider:
         target_str = target.strftime("%A, %B %d")
 
         replies = await chat_multi(auth_token, [
-            f"What doctors are available for consultation on {target_str} at 10 AM?",
+            f"What instructors are available for consultation on {target_str} at 10 AM?",
         ], conversation_id)
 
         reply = replies[0]
         assert is_natural(reply)
         # Should mention at least one provider's availability
-        assert mentions_any(reply, ["available", "doc1", "doc2",
-                                     "doctor", "provider", "10"]), \
+        assert mentions_any(reply, ["available", "instr1", "instr2",
+                                     "instructor", "provider", "10"]), \
             f"Expected provider availability info, got: {reply[:200]}"
 
     @pytest.mark.asyncio
-    async def test_34_unavailable_doctor_suggests_alternative(self, auth_token, providers, conversation_id):
+    async def test_34_unavailable_instructor_suggests_alternative(self, auth_token, providers, conversation_id):
         """
-        Scenario 34: Requesting a fully booked doctor should suggest alternatives.
+        Scenario 34: Requesting a fully booked instructor should suggest alternatives.
         We use a Sunday (closed) to trigger the "no slots" path and check
         if alternatives are offered.
         """

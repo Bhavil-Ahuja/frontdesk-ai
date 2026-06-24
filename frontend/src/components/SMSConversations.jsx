@@ -12,6 +12,8 @@ import {
   Inbox,
   Search,
   User,
+  Plus,
+  X,
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
@@ -31,10 +33,25 @@ export default function SMSConversations() {
   const [refreshing, setRefreshing] = useState(false);
   const [showTestData, setShowTestData] = useState(false);
   const [search, setSearch] = useState('');
+
+  // Compose state
+  const [composeText, setComposeText] = useState('');
+  const [sending, setSending] = useState(false);
+
+  // Outbound calling state
+  const [calling, setCalling] = useState(false);
+  const [callSuccess, setCallSuccess] = useState(false);
+
+  // New conversation modal
+  const [showNewConv, setShowNewConv] = useState(false);
+  const [newPhone, setNewPhone] = useState('');
+  const [newMessage, setNewMessage] = useState('');
+  const [newSending, setNewSending] = useState(false);
+
   const messagesEndRef = useRef(null);
+  const composeRef = useRef(null);
   const searchTimeout = useRef(null);
   const initialLoadDone = useRef(false);
-  const searchInputRef = useRef(null);
 
   const fetchConversations = useCallback(async (showRefresh = false) => {
     if (showRefresh) setRefreshing(true);
@@ -57,12 +74,11 @@ export default function SMSConversations() {
   const fetchMessages = useCallback(async (phone) => {
     setLoadingMessages(true);
     try {
-      const params = new URLSearchParams({ patient_phone: phone });
+      const params = new URLSearchParams({ student_phone: phone });
       if (showTestData) params.set('include_test', 'true');
       const data = await apiFetch(`/api/sms/messages?${params.toString()}`);
       setMessages(data || []);
       setError(null);
-      // Scroll to bottom after render
       setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
     } catch (err) {
       setError(err.message || 'Failed to load messages');
@@ -72,22 +88,24 @@ export default function SMSConversations() {
   }, [showTestData]);
 
   useEffect(() => {
-    // Only show full-page spinner on initial load, not on search-driven re-fetches
-    if (!initialLoadDone.current) {
-      setLoading(true);
-    }
+    if (!initialLoadDone.current) setLoading(true);
     if (searchTimeout.current) clearTimeout(searchTimeout.current);
     searchTimeout.current = setTimeout(() => {
-      fetchConversations().then(() => {
-        initialLoadDone.current = true;
-      });
+      fetchConversations().then(() => { initialLoadDone.current = true; });
     }, 300);
     return () => clearTimeout(searchTimeout.current);
   }, [fetchConversations]);
 
+  // Re-fetch open conversation messages when showTestData toggle changes
+  useEffect(() => {
+    if (selectedPhone) fetchMessages(selectedPhone);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetchMessages]);
+
   function selectConversation(phone, name) {
     setSelectedPhone(phone);
     setSelectedName(name || null);
+    setComposeText('');
     fetchMessages(phone);
   }
 
@@ -95,12 +113,83 @@ export default function SMSConversations() {
     setSelectedPhone(null);
     setSelectedName(null);
     setMessages([]);
+    setComposeText('');
+  }
+
+  async function handleSend() {
+    const text = composeText.trim();
+    if (!text || !selectedPhone || sending) return;
+    setSending(true);
+    setError(null);
+    try {
+      await apiFetch('/api/sms/send', {
+        method: 'POST',
+        body: JSON.stringify({ to: selectedPhone, message: text }),
+      });
+      setComposeText('');
+      // Refresh both thread and conversation list
+      await fetchMessages(selectedPhone);
+      fetchConversations();
+    } catch (err) {
+      setError(err.message || 'Failed to send message');
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function handleCall() {
+    if (!selectedPhone || calling) return;
+    setCalling(true);
+    setError(null);
+    try {
+      await apiFetch('/api/calls/outbound', {
+        method: 'POST',
+        body: JSON.stringify({
+          phone: selectedPhone,
+          name: selectedName || 'Student',
+        }),
+      });
+      setCallSuccess(true);
+      setTimeout(() => setCallSuccess(false), 4000);
+    } catch (err) {
+      // If no calling platform configured, fall back to tel: link
+      if (err.message?.includes('not configured')) {
+        window.location.href = `tel:${selectedPhone}`;
+      } else {
+        setError(err.message || 'Call failed');
+      }
+    } finally {
+      setCalling(false);
+    }
+  }
+
+  async function handleNewConversation() {
+    const phone = newPhone.trim();
+    const msg = newMessage.trim();
+    if (!phone || !msg || newSending) return;
+    setNewSending(true);
+    setError(null);
+    try {
+      await apiFetch('/api/sms/send', {
+        method: 'POST',
+        body: JSON.stringify({ to: phone, message: msg }),
+      });
+      setShowNewConv(false);
+      setNewPhone('');
+      setNewMessage('');
+      await fetchConversations();
+      selectConversation(phone, null);
+    } catch (err) {
+      setError(err.message || 'Failed to send message');
+    } finally {
+      setNewSending(false);
+    }
   }
 
   if (loading && !conversations.length) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500"></div>
+        <div className="w-8 h-8 border-2 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin"></div>
       </div>
     );
   }
@@ -119,8 +208,8 @@ export default function SMSConversations() {
             </button>
           )}
           <div className="min-w-0">
-            <h2 className="text-xl md:text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
-              <MessageSquare className="w-6 md:w-7 h-6 md:h-7 text-primary-500 shrink-0" />
+            <h1 className="text-xl md:text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
+              <MessageSquare className="w-6 md:w-7 h-6 md:h-7 text-indigo-500 shrink-0" />
               {selectedPhone ? (
                 <span className="truncate text-base md:text-2xl">
                   {selectedName || selectedPhone}
@@ -128,7 +217,7 @@ export default function SMSConversations() {
               ) : (
                 'SMS'
               )}
-            </h2>
+            </h1>
             {selectedPhone && selectedName && (
               <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5 ml-8 md:ml-9">
                 {selectedPhone}
@@ -136,15 +225,42 @@ export default function SMSConversations() {
             )}
             {!selectedPhone && (
               <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                Two-way SMS between patients and the AI agent.
+                Two-way SMS between contacts and the AI agent.
               </p>
             )}
           </div>
         </div>
-        <div className="flex items-center gap-2">
+
+        <div className="flex items-center gap-2 flex-wrap">
           {!selectedPhone && (
-            <TestDataToggle enabled={showTestData} onChange={setShowTestData} />
+            <>
+              <TestDataToggle enabled={showTestData} onChange={setShowTestData} />
+              <button
+                onClick={() => setShowNewConv(true)}
+                className="flex items-center gap-2 px-4 py-2.5 bg-indigo-500 text-white rounded-lg text-sm font-medium hover:bg-indigo-600 transition-colors"
+              >
+                <Plus className="w-4 h-4" />
+                New Message
+              </button>
+            </>
           )}
+
+          {/* Call button when in a conversation */}
+          {selectedPhone && (
+            <button
+              onClick={handleCall}
+              disabled={calling}
+              className={`flex items-center gap-2 px-4 py-2.5 border rounded-lg text-sm font-medium transition-colors disabled:opacity-50 ${
+                callSuccess
+                  ? 'bg-green-50 dark:bg-green-900/30 border-green-200 dark:border-green-700 text-green-700 dark:text-green-400'
+                  : 'bg-emerald-50 dark:bg-emerald-900/30 border-emerald-200 dark:border-emerald-700 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-900/50'
+              }`}
+            >
+              <Phone className={`w-4 h-4 ${calling ? 'animate-pulse' : ''}`} />
+              {calling ? 'Calling…' : callSuccess ? 'Call Placed ✓' : 'Call'}
+            </button>
+          )}
+
           <button
             onClick={() =>
               selectedPhone ? fetchMessages(selectedPhone) : fetchConversations(true)
@@ -152,9 +268,7 @@ export default function SMSConversations() {
             disabled={refreshing || loadingMessages}
             className="flex items-center gap-2 px-4 py-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 rounded-lg text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-700/50 disabled:opacity-50 transition-colors"
           >
-            <RefreshCw
-              className={`w-4 h-4 ${refreshing || loadingMessages ? 'animate-spin' : ''}`}
-            />
+            <RefreshCw className={`w-4 h-4 ${refreshing || loadingMessages ? 'animate-spin' : ''}`} />
             Refresh
           </button>
         </div>
@@ -165,17 +279,15 @@ export default function SMSConversations() {
         <div className="relative mb-4">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
           <input
-            ref={searchInputRef}
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search by name or phone..."
-            className="w-full pl-10 pr-10 py-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 dark:bg-gray-700 dark:text-white"
+            className="w-full pl-10 pr-10 py-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:bg-gray-700 dark:text-white"
           />
-          {/* Inline searching spinner */}
           {search && refreshing && (
             <div className="absolute right-3 top-1/2 -translate-y-1/2">
-              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary-500"></div>
+              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-indigo-500"></div>
             </div>
           )}
         </div>
@@ -188,35 +300,107 @@ export default function SMSConversations() {
         </div>
       )}
 
+      {/* New Conversation Modal */}
+      {showNewConv && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="w-full max-w-md bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-700 p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-white">New Message</h2>
+              <button
+                onClick={() => { setShowNewConv(false); setNewPhone(''); setNewMessage(''); }}
+                className="p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                  Phone Number
+                </label>
+                <input
+                  type="tel"
+                  value={newPhone}
+                  onChange={(e) => setNewPhone(e.target.value)}
+                  placeholder="+1 (555) 000-0000"
+                  className="w-full px-3 py-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 dark:bg-gray-800 dark:text-white"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                  Message
+                </label>
+                <textarea
+                  value={newMessage}
+                  onChange={(e) => setNewMessage(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleNewConversation(); }
+                  }}
+                  placeholder="Type your message..."
+                  rows={4}
+                  className="w-full px-3 py-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 dark:bg-gray-800 dark:text-white resize-none"
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-2 mt-4">
+              <button
+                onClick={() => { setShowNewConv(false); setNewPhone(''); setNewMessage(''); }}
+                className="flex-1 px-4 py-2.5 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg text-sm font-medium hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleNewConversation}
+                disabled={!newPhone.trim() || !newMessage.trim() || newSending}
+                className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-indigo-500 text-white rounded-lg text-sm font-medium hover:bg-indigo-600 disabled:opacity-50 transition-colors"
+              >
+                <Send className="w-4 h-4" />
+                {newSending ? 'Sending...' : 'Send'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Conversation list or message thread */}
       {!selectedPhone ? (
-        /* Conversation list */
         conversations.length === 0 ? (
-          <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-12 text-center">
+          <div className="bg-white dark:bg-gray-900/60 rounded-2xl border border-gray-200/80 dark:border-white/5 p-12 text-center">
             <Inbox className="w-12 h-12 text-gray-300 mx-auto mb-3" />
             <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-1">
               {search ? 'No conversations match your search' : 'No conversations yet'}
             </h3>
-            <p className="text-sm text-gray-500 dark:text-gray-400">
+            <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
               {search
                 ? 'Try a different name or phone number.'
-                : 'SMS conversations will appear here when patients text your Twilio number or receive reminders and reply back.'}
+                : 'SMS conversations will appear here when contacts text your number or receive reminders and reply back.'}
             </p>
+            {!search && (
+              <button
+                onClick={() => setShowNewConv(true)}
+                className="inline-flex items-center gap-2 px-4 py-2.5 bg-indigo-500 text-white rounded-lg text-sm font-medium hover:bg-indigo-600 transition-colors"
+              >
+                <Plus className="w-4 h-4" />
+                Send First Message
+              </button>
+            )}
           </div>
         ) : (
-          <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+          <div className="bg-white dark:bg-gray-900/60 rounded-2xl border border-gray-200/80 dark:border-white/5 overflow-hidden">
             {conversations.map((conv, idx) => (
               <button
-                key={conv.patient_phone}
-                onClick={() => selectConversation(conv.patient_phone, conv.patient_name)}
+                key={conv.student_phone}
+                onClick={() => selectConversation(conv.student_phone, conv.caller_name)}
                 className={`w-full flex items-center gap-4 p-4 text-left hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors ${
                   idx > 0 ? 'border-t border-gray-100 dark:border-gray-700' : ''
                 }`}
               >
                 {/* Avatar */}
-                <div className="w-10 h-10 rounded-full bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-400 flex items-center justify-center text-sm font-semibold shrink-0">
-                  {conv.patient_name ? (
-                    conv.patient_name.charAt(0).toUpperCase()
+                <div className="w-10 h-10 rounded-full bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-400 flex items-center justify-center text-sm font-semibold shrink-0">
+                  {conv.caller_name ? (
+                    conv.caller_name.charAt(0).toUpperCase()
                   ) : (
                     <Phone className="w-4 h-4" />
                   )}
@@ -226,25 +410,23 @@ export default function SMSConversations() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between">
                     <div className="min-w-0">
-                      {conv.patient_name ? (
+                      {conv.caller_name ? (
                         <>
                           <span className="font-semibold text-gray-900 dark:text-white text-sm truncate block">
-                            {conv.patient_name}
+                            {conv.caller_name}
                           </span>
                           <span className="text-xs text-gray-400 dark:text-gray-500">
-                            {conv.patient_phone}
+                            {conv.student_phone}
                           </span>
                         </>
                       ) : (
                         <span className="font-semibold text-gray-900 dark:text-white text-sm">
-                          {conv.patient_phone}
+                          {conv.student_phone}
                         </span>
                       )}
                     </div>
                     <span className="text-xs text-gray-400 shrink-0 ml-2">
-                      {conv.last_message_at
-                        ? fmtRelative(conv.last_message_at, tz)
-                        : ''}
+                      {conv.last_message_at ? fmtRelative(conv.last_message_at, tz) : ''}
                     </span>
                   </div>
                   <div className="flex items-center gap-2 mt-0.5">
@@ -269,20 +451,24 @@ export default function SMSConversations() {
         )
       ) : (
         /* Message thread */
-        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+        <div className="bg-white dark:bg-gray-900/60 rounded-2xl border border-gray-200/80 dark:border-white/5 overflow-hidden flex flex-col">
           {loadingMessages ? (
             <div className="flex items-center justify-center h-64">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500"></div>
+              <div className="w-8 h-8 border-2 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin"></div>
             </div>
           ) : messages.length === 0 ? (
-            <div className="p-12 text-center">
+            <div className="p-12 text-center flex-1">
               <MessageSquare className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-              <p className="text-sm text-gray-500 dark:text-gray-400">No messages found for this number.</p>
+              <p className="text-sm text-gray-500 dark:text-gray-400">No messages yet. Send one below.</p>
             </div>
           ) : (
-            <div className="max-h-[600px] overflow-y-auto overscroll-y-contain p-4 space-y-3 bg-gray-50 dark:bg-gray-900" style={{ WebkitOverflowScrolling: 'touch' }}>
+            <div
+              className="overflow-y-auto overscroll-y-contain p-4 space-y-3 bg-gray-50 dark:bg-gray-900 flex-1"
+              style={{ maxHeight: '520px', WebkitOverflowScrolling: 'touch' }}
+            >
               {messages.map((msg) => {
                 const isOutbound = msg.direction === 'OUTBOUND';
+                const isAdmin = msg.sender_type === 'admin';
                 return (
                   <div
                     key={msg.id}
@@ -291,25 +477,29 @@ export default function SMSConversations() {
                     <div
                       className={`max-w-[70%] rounded-2xl px-4 py-2.5 ${
                         isOutbound
-                          ? 'bg-primary-500 text-white rounded-br-md'
+                          ? isAdmin
+                            ? 'bg-violet-500 text-white rounded-br-md'
+                            : 'bg-indigo-500 text-white rounded-br-md'
                           : 'bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 text-gray-900 dark:text-white rounded-bl-md'
                       }`}
                     >
-                      {/* Direction label */}
+                      {/* Direction/sender label */}
                       <div
                         className={`flex items-center gap-1 mb-1 text-xs ${
-                          isOutbound ? 'text-primary-100' : 'text-gray-400'
+                          isOutbound
+                            ? isAdmin ? 'text-violet-100' : 'text-indigo-100'
+                            : 'text-gray-400'
                         }`}
                       >
                         {isOutbound ? (
                           <>
                             <ArrowUp className="w-3 h-3" />
-                            AI Agent
+                            {isAdmin ? 'You' : 'AI Agent'}
                           </>
                         ) : (
                           <>
                             <ArrowDown className="w-3 h-3" />
-                            Patient
+                            Contact
                           </>
                         )}
                       </div>
@@ -320,13 +510,13 @@ export default function SMSConversations() {
                       {/* Timestamp */}
                       <div
                         className={`flex items-center gap-1 mt-1 text-xs ${
-                          isOutbound ? 'text-primary-200' : 'text-gray-400'
+                          isOutbound
+                            ? isAdmin ? 'text-violet-200' : 'text-indigo-200'
+                            : 'text-gray-400'
                         }`}
                       >
                         <Clock className="w-3 h-3" />
-                        {msg.created_at
-                          ? formatDateTime(msg.created_at, tz)
-                          : ''}
+                        {msg.created_at ? formatDateTime(msg.created_at, tz) : ''}
                       </div>
                     </div>
                   </div>
@@ -335,11 +525,37 @@ export default function SMSConversations() {
               <div ref={messagesEndRef} />
             </div>
           )}
+
+          {/* Compose bar */}
+          <div className="border-t border-gray-100 dark:border-gray-700 p-3 flex items-end gap-2 bg-white dark:bg-gray-900">
+            <textarea
+              ref={composeRef}
+              value={composeText}
+              onChange={(e) => {
+                setComposeText(e.target.value);
+                // Auto-resize
+                e.target.style.height = 'auto';
+                e.target.style.height = Math.min(e.target.scrollHeight, 128) + 'px';
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
+              }}
+              placeholder="Type a message… (Enter to send, Shift+Enter for new line)"
+              rows={1}
+              className="flex-1 resize-none px-3 py-2.5 border border-gray-200 dark:border-gray-600 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 dark:bg-gray-800 dark:text-white overflow-hidden"
+              style={{ minHeight: '40px', maxHeight: '128px' }}
+            />
+            <button
+              onClick={handleSend}
+              disabled={!composeText.trim() || sending}
+              className="flex items-center gap-1.5 px-4 py-2.5 bg-indigo-500 text-white rounded-xl text-sm font-medium hover:bg-indigo-600 disabled:opacity-50 transition-colors shrink-0"
+            >
+              <Send className="w-4 h-4" />
+              {sending ? 'Sending…' : 'Send'}
+            </button>
+          </div>
         </div>
       )}
     </div>
   );
 }
-
-// ── Helpers ─────────────────────────────────────────────────────────────────
-// formatRelativeTime is now imported from lib/timezone.js as fmtRelative

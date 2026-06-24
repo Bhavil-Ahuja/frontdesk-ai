@@ -20,11 +20,7 @@ import PhoneInput, { countryFromTimezone } from './ui/PhoneInput';
 import { timezoneOptions } from '../lib/timezones';
 
 const BUSINESS_TYPES = [
-  { value: 'dental', label: 'Dental Office' },
-  { value: 'hospital', label: 'Hospital' },
-  { value: 'clinic', label: 'Clinic' },
-  { value: 'veterinary', label: 'Veterinary' },
-  { value: 'physiotherapy', label: 'Physiotherapy' },
+  { value: 'coaching_institute', label: 'Coaching Institute' },
   { value: 'custom', label: 'Other / Custom' },
 ];
 
@@ -129,14 +125,13 @@ export default function TenantRegister() {
     form.password.length === 0 || form.password === form.password_confirm;
 
   const inputClass =
-    'w-full px-4 py-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none';
+    'w-full px-3.5 py-2.5 border border-gray-200 dark:border-white/10 rounded-xl text-sm bg-gray-50 dark:bg-white/5 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-white/25 focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 outline-none transition-all';
   const inputWithIconClass =
-    'w-full pl-10 pr-4 py-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none';
+    'w-full pl-10 pr-4 py-2.5 border border-gray-200 dark:border-white/10 rounded-xl text-sm bg-gray-50 dark:bg-white/5 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-white/25 focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 outline-none transition-all';
   const labelClass = 'block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5';
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-primary-50 via-gray-50 to-blue-50 dark:from-gray-900 dark:via-gray-900 dark:to-gray-900 py-12 px-4 relative">
-      {/* Theme toggle */}
+    <div className="min-h-screen bg-gray-50 dark:bg-[#0a0a0f] py-10 px-4 relative">
       <div className="absolute top-4 right-4">
         <ThemeToggle />
       </div>
@@ -146,17 +141,17 @@ export default function TenantRegister() {
         <div className="text-center mb-8">
           <Link
             to="/"
-            className="inline-flex items-center gap-2 mb-6 text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"
+            className="inline-flex items-center gap-1.5 mb-6 text-sm text-gray-400 dark:text-white/30 hover:text-gray-600 dark:hover:text-white/60 transition-colors"
           >
             ← Back to home
           </Link>
-          <div className="mx-auto w-14 h-14 bg-primary-500 rounded-2xl flex items-center justify-center mb-4 shadow-lg shadow-primary-500/30">
-            <Sparkles className="w-7 h-7 text-white" />
+          <div className="mx-auto w-12 h-12 rounded-2xl bg-indigo-500 flex items-center justify-center mb-4 shadow-xl shadow-indigo-500/30">
+            <Sparkles className="w-6 h-6 text-white" />
           </div>
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Get Started with FrontDesk AI</h1>
-          <p className="text-gray-500 dark:text-gray-400 mt-2 max-w-xl mx-auto">
+          <h1 className="text-2xl md:text-3xl font-bold text-gray-900 dark:text-white">Get Started with FrontDesk AI</h1>
+          <p className="text-gray-500 dark:text-gray-400 mt-2 max-w-xl mx-auto text-sm">
             Register your business to get an AI-powered voice agent that handles scheduling,
-            reminders, and patient calls 24/7.
+            reminders, and enquiry calls 24/7.
           </p>
         </div>
 
@@ -169,9 +164,9 @@ export default function TenantRegister() {
           )}
 
           {/* Business Information */}
-          <div className="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-sm p-6 space-y-5">
+          <div className="bg-white dark:bg-gray-900/60 rounded-2xl border border-gray-200/80 dark:border-white/5 p-6 space-y-5">
             <h3 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
-              <Building2 className="w-5 h-5 text-primary-500" />
+              <Building2 className="w-5 h-5 text-indigo-500" />
               Business Information
             </h3>
 
@@ -184,7 +179,7 @@ export default function TenantRegister() {
                   type="text"
                   value={form.business_name}
                   onChange={(e) => updateField('business_name', e.target.value)}
-                  placeholder="Sunrise Clinic"
+                  placeholder="Vidya Coaching Institute"
                   required
                   minLength={2}
                   className={inputClass}
@@ -256,9 +251,9 @@ export default function TenantRegister() {
                   />
                 </div>
                 <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
-                  Paste a Google Maps share link to your clinic. Used by admins to
-                  verify your location and shared with patients in SMS/email
-                  reminders. Open Google Maps → search for your clinic → tap
+                  Paste a Google Maps share link to your business. Used by admins to
+                  verify your location and shared with callers in SMS/email
+                  reminders. Open Google Maps → search for your business → tap
                   "Share" → "Copy link".
                 </p>
               </div>
@@ -266,9 +261,9 @@ export default function TenantRegister() {
           </div>
 
           {/* Owner Contact */}
-          <div className="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-sm p-6 space-y-5">
+          <div className="bg-white dark:bg-gray-900/60 rounded-2xl border border-gray-200/80 dark:border-white/5 p-6 space-y-5">
             <h3 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
-              <User className="w-5 h-5 text-primary-500" />
+              <User className="w-5 h-5 text-indigo-500" />
               Owner / Contact
             </h3>
 
@@ -301,7 +296,7 @@ export default function TenantRegister() {
                     type="email"
                     value={form.owner_email}
                     onChange={(e) => updateField('owner_email', e.target.value)}
-                    placeholder="jane@sunrise-clinic.com"
+                    placeholder="jane@yourbusiness.com"
                     required
                     autoComplete="email"
                     className={inputWithIconClass}
@@ -329,15 +324,15 @@ export default function TenantRegister() {
           </div>
 
           {/* Escalation — required so emergencies always have a live human fallback */}
-          <div className="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-sm p-6 space-y-5">
+          <div className="bg-white dark:bg-gray-900/60 rounded-2xl border border-gray-200/80 dark:border-white/5 p-6 space-y-5">
             <h3 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
-              <PhoneCall className="w-5 h-5 text-primary-500" />
-              Emergency Escalation
+              <PhoneCall className="w-5 h-5 text-indigo-500" />
+              Call Escalation
             </h3>
             <p className="text-sm text-gray-500 dark:text-gray-400 -mt-2">
-              When a caller has a medical emergency or asks for a human, the AI will
-              transfer the call to this number. This is required so emergencies always
-              reach a live person.
+              When a caller needs human assistance or the AI cannot resolve their request,
+              it will transfer the call to this number. This is required so callers can
+              always reach a live person.
             </p>
 
             <div>
@@ -347,7 +342,7 @@ export default function TenantRegister() {
                   id="escalation-same"
                   checked={escalationSameAsPhone}
                   onChange={(e) => handleEscalationCheckbox(e.target.checked)}
-                  className="w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-primary-500 focus:ring-primary-500"
+                  className="w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-indigo-500 focus:ring-indigo-500"
                 />
                 <label htmlFor="escalation-same" className="text-sm text-gray-600 dark:text-gray-400 cursor-pointer">
                   Same as owner phone number
@@ -370,16 +365,16 @@ export default function TenantRegister() {
                 icon={PhoneCall}
               />
               <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
-                Usually your front desk or on-call provider. You can add custom
-                emergency guidance text later from the Agent Config page.
+                Usually your front desk or on-call staff. You can add custom
+                escalation guidance later from the Agent Config page.
               </p>
             </div>
           </div>
 
           {/* Password */}
-          <div className="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-sm p-6 space-y-5">
+          <div className="bg-white dark:bg-gray-900/60 rounded-2xl border border-gray-200/80 dark:border-white/5 p-6 space-y-5">
             <h3 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
-              <Lock className="w-5 h-5 text-primary-500" />
+              <Lock className="w-5 h-5 text-indigo-500" />
               Create a Password
             </h3>
 
@@ -420,7 +415,7 @@ export default function TenantRegister() {
                     autoComplete="new-password"
                     className={`w-full pl-10 pr-4 py-2.5 border rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:ring-2 outline-none ${
                       passwordsMatch
-                        ? 'border-gray-200 dark:border-gray-600 focus:ring-primary-500 focus:border-primary-500'
+                        ? 'border-gray-200 dark:border-gray-600 focus:ring-indigo-500 focus:border-indigo-500'
                         : 'border-red-300 dark:border-red-600 focus:ring-red-500 focus:border-red-500'
                     }`}
                   />
@@ -441,7 +436,7 @@ export default function TenantRegister() {
                 <ol className="text-sm text-blue-700 dark:text-blue-400 mt-1 space-y-1 list-decimal list-inside">
                   <li>Your account is created and submitted for admin review</li>
                   <li>An admin approves you (usually within 24 hours)</li>
-                  <li>You'll be guided through connecting Vapi, Google Calendar, and Twilio</li>
+                  <li>You'll be guided through connecting Google Calendar — SMS is handled by the platform</li>
                   <li>Your AI agent goes live and starts answering calls</li>
                 </ol>
               </div>
@@ -452,18 +447,18 @@ export default function TenantRegister() {
           <div className="flex items-center justify-between gap-4 pt-2">
             <p className="text-sm text-gray-500 dark:text-gray-400">
               Already have an account?{' '}
-              <Link to="/login" className="font-medium text-primary-600 dark:text-primary-400 hover:text-primary-700 dark:hover:text-primary-300">
+              <Link to="/login" className="font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300">
                 Sign in
               </Link>
             </p>
             <button
               type="submit"
               disabled={!isValid() || submitting}
-              className="flex items-center gap-2 px-6 py-3 bg-primary-500 text-white rounded-lg text-sm font-medium hover:bg-primary-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-lg shadow-primary-500/30"
+              className="inline-flex items-center gap-2 px-6 py-3 rounded-xl text-sm font-semibold text-white bg-indigo-500 shadow-lg shadow-indigo-500/25 hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-all btn-press"
             >
               {submitting ? (
                 <>
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                   Submitting...
                 </>
               ) : (

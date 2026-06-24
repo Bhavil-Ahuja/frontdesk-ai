@@ -25,11 +25,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from datetime import timezone as tz
-
 from backend.config import settings
 from backend.models.tenant import Tenant
-from backend.services import auth_service, llm_service, patient_service
+from backend.services import auth_service, llm_service, caller_service
 from backend.services.tenant_service import resolve_by_id, TenantContext
 
 logger = logging.getLogger(__name__)
@@ -56,12 +54,12 @@ class ChatRequest(BaseModel):
             "If omitted, uses the tenant's default test_caller_phone."
         ),
     )
-    test_patient_name: Optional[str] = Field(
+    test_student_name: Optional[str] = Field(
         default=None,
         description=(
-            "Override the test patient name for this chat session. "
-            "Must be one of the tenant's registered test_patient_names. "
-            "If omitted, uses the tenant's default test_patient_name."
+            "Override the test caller name for this chat session. "
+            "Must be one of the tenant's registered test_student_names. "
+            "If omitted, uses the tenant's default test_student_name."
         ),
     )
 
@@ -111,10 +109,9 @@ async def chat_stream(
     if not tenant_ctx:
         logger.warning("[Chat] No TenantContext for user %s — tools will be limited", current_user.slug)
 
-    # ── Pre-create session with patient context (first message only) ────
-    # Use the tenant's test_caller_phone as the caller number so the Test
-    # Agent chat works identically to a real phone call — patient lookup,
-    # greeting by name, awareness of upcoming appointments, etc.
+    # ── Pre-create session with caller phone (first message only) ──────
+    # Pass the test caller phone as caller_number so the agent has it in
+    # the system prompt and can call lookup_caller on first real intent.
     existing_session = llm_service.get_session(session_key)
     if not existing_session and tenant_ctx and tenant_ctx.test_caller_phone:
         # Allow the client to pick which test phone to use for this session.
@@ -129,66 +126,27 @@ async def chat_stream(
             else:
                 logger.warning("[Chat] Requested test_phone %s not in tenant's list — using default",
                                body.test_phone)
-        patient_context = None
-        try:
-            patient_context = await patient_service.get_patient_history(
-                caller_phone,
-                tenant_id=tenant_ctx.tenant_id,
-                tz_name=tenant_ctx.timezone,
-            )
-        except Exception as exc:
-            logger.warning("[Chat] Patient lookup failed for test phone %s: %s",
-                           caller_phone, exc)
 
-        # If no real patient record exists for the test phone, build a
-        # clean new-patient context so the agent can demo booking flows.
-        # This is prompt-only — NO fake records are written to the DB.
-        # The patient name comes from the test_callers mapping (phone → name).
-        if not patient_context:
-            # Look up the test patient name from test_callers by phone
-            test_patient_name = "Test Patient"  # fallback
-            for tc in (tenant_ctx.test_callers or []):
-                if tc.get("phone") == caller_phone:
-                    test_patient_name = tc.get("name", "Test Patient")
-                    break
-            else:
-                # Fallback to legacy fields if no match in test_callers
-                if body.test_patient_name:
-                    test_patient_name = body.test_patient_name
-                elif tenant_ctx.test_patient_name:
-                    test_patient_name = tenant_ctx.test_patient_name
-            logger.info("[Chat] Resolved test patient name '%s' for phone %s", test_patient_name, caller_phone)
-            # For test mode, we create a NEW patient with no history.
-            # This avoids confusion from fake appointments mixing with real ones.
-            patient_context = {
-                "patient": {
-                    "name": test_patient_name,
-                    "phone": caller_phone,
-                    "dob": None,  # Unknown — agent must ASK for DOB
-                    "is_new": True,  # New patient — no fake data
-                    "visit_count": 0,
-                    "preferred_type": None,  # Unknown — agent must ASK
-                    "allergies": "",
-                    "notes": "",
-                },
-                "upcoming_appointments": [],
-                "past_appointments": [],
-                "last_visit": None,
-                "months_since_last_visit": None,
-            }
-            logger.info("[Chat] Built clean test patient context for phone %s (new patient, no fake history)",
-                        caller_phone)
+        # Lightweight name lookup — just enough for the greeting "Hi Ravi!"
+        caller_name = ""
+        try:
+            caller_rec = await caller_service.get_caller_by_phone(
+                caller_phone, tenant_id=tenant_ctx.tenant_id,
+            )
+            if caller_rec:
+                caller_name = caller_rec.name
+        except Exception as exc:
+            logger.warning("[Chat] Name lookup failed for %s: %s", caller_phone, exc)
 
         llm_service.create_session(
             session_key,
             caller_number=caller_phone,
             tenant_ctx=tenant_ctx,
-            patient_context=patient_context,
+            caller_name=caller_name,
             is_test=True,  # Test Agent chat — flag all created data as test
         )
-        logger.info("[Chat] Pre-created session with test_caller_phone=%s patient=%s",
-                    caller_phone,
-                    patient_context["patient"]["name"] if patient_context else "new caller")
+        logger.info("[Chat] Pre-created session: phone=%s name=%s",
+                    caller_phone, caller_name or "new caller")
 
     logger.info(
         "[Chat] tenant=%s conv=%s msg=%r",
@@ -219,7 +177,7 @@ def _session_key(user: Tenant, conversation_id: Optional[str], test_phone: Optio
     """
     Build a deterministic session key so multi-turn chats keep their history.
     Scoped per-tenant to prevent cross-tenant leakage in shared dev environments.
-    Includes test_phone so switching callers creates a fresh session with correct patient context.
+    Includes test_phone so switching callers creates a fresh session with correct caller context.
     """
     conv = conversation_id or "default"
     phone_suffix = f"-{test_phone}" if test_phone else ""

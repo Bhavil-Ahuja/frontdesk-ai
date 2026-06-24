@@ -8,10 +8,11 @@ DELETE /api/providers/{provider_id} -> soft-delete (deactivate) a provider
 """
 
 import logging
+import re
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from backend.models.tenant import Tenant
 from backend.services import auth_service, provider_service
@@ -20,8 +21,23 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/providers", tags=["Providers"])
 
+_HHMM_RE = re.compile(r"^\d{2}:\d{2}$")
+
 
 # -- Request / Response schemas ------------------------------------------------
+
+
+class DemoTimeSlot(BaseModel):
+    """A fixed demo class time window, e.g. {"start": "08:00", "end": "10:00"}."""
+    start: str
+    end: str
+
+    @field_validator("start", "end")
+    @classmethod
+    def validate_hhmm(cls, v: str) -> str:
+        if not _HHMM_RE.match(v):
+            raise ValueError("Time must be in HH:MM format (e.g. '08:00')")
+        return v
 
 
 class ProviderCreateRequest(BaseModel):
@@ -32,6 +48,10 @@ class ProviderCreateRequest(BaseModel):
     calendar_id: Optional[str] = None
     max_concurrent: int = Field(default=1, ge=1, le=10)
     business_hours_override: Optional[dict[str, Any]] = None
+    # Coaching-institute fields
+    subject: Optional[str] = None
+    # Day-keyed demo windows: {"monday": [{"start": "08:00", "end": "10:00"}], "tuesday": null, ...}
+    demo_time_slots: Optional[dict[str, Optional[list[DemoTimeSlot]]]] = None
 
 
 class ProviderUpdateRequest(BaseModel):
@@ -42,6 +62,10 @@ class ProviderUpdateRequest(BaseModel):
     calendar_id: Optional[str] = None
     max_concurrent: Optional[int] = Field(default=None, ge=1, le=10)
     business_hours_override: Optional[dict[str, Any]] = None
+    # Coaching-institute fields
+    subject: Optional[str] = None
+    # Day-keyed demo windows: {"monday": [{"start": "08:00", "end": "10:00"}], "tuesday": null, ...}
+    demo_time_slots: Optional[dict[str, Optional[list[DemoTimeSlot]]]] = None
 
 
 # -- Routes --------------------------------------------------------------------
@@ -77,6 +101,11 @@ async def create_provider(
             calendar_id=req.calendar_id,
             business_hours_override=req.business_hours_override,
             max_concurrent=req.max_concurrent,
+            subject=req.subject,
+            demo_time_slots={
+                day: [s.model_dump() for s in slots] if slots else None
+                for day, slots in req.demo_time_slots.items()
+            } if req.demo_time_slots else None,
         )
         return provider
     except Exception as exc:
