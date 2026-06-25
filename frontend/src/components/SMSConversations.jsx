@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import {
   MessageSquare,
   ArrowLeft,
@@ -21,12 +22,15 @@ import { formatDateTime, formatRelativeTime as fmtRelative } from '../lib/timezo
 import TestDataToggle from './ui/TestDataToggle';
 
 export default function SMSConversations() {
+  const navigate = useNavigate();
+  const { callerId: urlCallerId } = useParams();
   const { user } = useAuth();
   const tz = user?.timezone || 'America/Chicago';
   const [conversations, setConversations] = useState([]);
   const [messages, setMessages] = useState([]);
   const [selectedPhone, setSelectedPhone] = useState(null);
   const [selectedName, setSelectedName] = useState(null);
+  const [selectedCallerId, setSelectedCallerId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [error, setError] = useState(null);
@@ -102,19 +106,51 @@ export default function SMSConversations() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchMessages]);
 
-  function selectConversation(phone, name) {
+  function selectConversation(phone, name, callerId) {
     setSelectedPhone(phone);
     setSelectedName(name || null);
+    setSelectedCallerId(callerId || null);
     setComposeText('');
     fetchMessages(phone);
+    if (callerId) {
+      navigate(`/sms/${callerId}`, { replace: true });
+    }
   }
 
   function goBack() {
     setSelectedPhone(null);
     setSelectedName(null);
+    setSelectedCallerId(null);
     setMessages([]);
     setComposeText('');
+    navigate('/sms', { replace: true });
   }
+
+  // Sync conversation open/close with URL
+  useEffect(() => {
+    if (!urlCallerId) {
+      // Browser navigated back to /sms — close any open thread
+      if (selectedPhone) {
+        setSelectedPhone(null);
+        setSelectedName(null);
+        setSelectedCallerId(null);
+        setMessages([]);
+        setComposeText('');
+      }
+      return;
+    }
+    if (!conversations.length || selectedPhone) return;
+    const id = parseInt(urlCallerId, 10);
+    const conv = conversations.find((c) => c.caller_id === id);
+    if (conv) {
+      setSelectedPhone(conv.student_phone);
+      setSelectedName(conv.caller_name || null);
+      setSelectedCallerId(conv.caller_id || null);
+      setComposeText('');
+      fetchMessages(conv.student_phone);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlCallerId, conversations]);
 
   async function handleSend() {
     const text = composeText.trim();
@@ -212,7 +248,16 @@ export default function SMSConversations() {
               <MessageSquare className="w-6 md:w-7 h-6 md:h-7 text-indigo-500 shrink-0" />
               {selectedPhone ? (
                 <span className="truncate text-base md:text-2xl">
-                  {selectedName || selectedPhone}
+                  {selectedCallerId ? (
+                    <button
+                      onClick={() => navigate(`/contacts/${selectedCallerId}`)}
+                      className="text-indigo-600 dark:text-indigo-400 hover:underline font-bold"
+                    >
+                      {selectedName || selectedPhone}
+                    </button>
+                  ) : (
+                    selectedName || selectedPhone
+                  )}
                 </span>
               ) : (
                 'SMS'
@@ -392,7 +437,7 @@ export default function SMSConversations() {
             {conversations.map((conv, idx) => (
               <button
                 key={conv.student_phone}
-                onClick={() => selectConversation(conv.student_phone, conv.caller_name)}
+                onClick={() => selectConversation(conv.student_phone, conv.caller_name, conv.caller_id)}
                 className={`w-full flex items-center gap-4 p-4 text-left hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors ${
                   idx > 0 ? 'border-t border-gray-100 dark:border-gray-700' : ''
                 }`}

@@ -46,7 +46,7 @@ class ProviderCreateRequest(BaseModel):
     title: Optional[str] = None
     appointment_types: Optional[list[str]] = None
     calendar_id: Optional[str] = None
-    max_concurrent: int = Field(default=1, ge=1, le=10)
+    slot_capacity: int = Field(default=1, ge=1, le=10)
     business_hours_override: Optional[dict[str, Any]] = None
     # Coaching-institute fields
     subject: Optional[str] = None
@@ -60,7 +60,7 @@ class ProviderUpdateRequest(BaseModel):
     title: Optional[str] = None
     appointment_types: Optional[list[str]] = None
     calendar_id: Optional[str] = None
-    max_concurrent: Optional[int] = Field(default=None, ge=1, le=10)
+    slot_capacity: Optional[int] = Field(default=None, ge=1, le=10)
     business_hours_override: Optional[dict[str, Any]] = None
     # Coaching-institute fields
     subject: Optional[str] = None
@@ -100,7 +100,7 @@ async def create_provider(
             appointment_types=req.appointment_types,
             calendar_id=req.calendar_id,
             business_hours_override=req.business_hours_override,
-            max_concurrent=req.max_concurrent,
+            slot_capacity=req.slot_capacity,
             subject=req.subject,
             demo_time_slots={
                 day: [s.model_dump() for s in slots] if slots else None

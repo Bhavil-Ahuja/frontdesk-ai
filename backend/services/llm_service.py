@@ -128,14 +128,9 @@ def _refresh_system_time(session: dict[str, Any]) -> None:
     except Exception:
         tz = ZoneInfo(DEFAULT_TIMEZONE)
     now = datetime.now(tz)
-    time_str = now.strftime("%I:%M %p").lstrip("0")
-    if now.hour < 12:
-        period = "morning"
-    elif now.hour < 17:
-        period = "afternoon"
-    else:
-        period = "evening"
-    new_line = f"CURRENT TIME is {time_str} {period} ({tz_name})."
+    time_str_24 = now.strftime("%H:%M")
+    time_str_12 = now.strftime("%I:%M %p").lstrip("0")
+    new_line = f"CURRENT TIME is {time_str_24} ({time_str_12}) in {tz_name}."
     msgs[0]["content"] = re.sub(
         r"CURRENT TIME is .+?\.",
         new_line,
@@ -425,6 +420,7 @@ def create_session(
     caller_context: dict | None = None,  # deprecated — ignored; caller data fetched lazily via lookup_caller
     caller_name: str = "",
     is_test: bool = False,
+    providers: list[dict] | None = None,
 ) -> dict[str, Any]:
     """Initialise a new conversation session for a call.
 
@@ -439,6 +435,8 @@ def create_session(
         is_test: When True, all data created during this session (callers,
             appointments, waitlist entries, SMS logs) will be flagged as test
             data so it can be filtered out of production views.
+        providers: Pre-fetched provider list for injecting the authoritative
+            demo subjects section. Pass from async callers to avoid sync/async mismatch.
     """
     session = {
         "messages": [
@@ -448,6 +446,7 @@ def create_session(
                     tenant_ctx=tenant_ctx,
                     caller_phone=caller_number,
                     caller_name=caller_name,
+                    providers=providers,
                 ),
             }
         ],

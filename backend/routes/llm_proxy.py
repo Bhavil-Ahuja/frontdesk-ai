@@ -17,7 +17,7 @@ import asyncio
 import json
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -176,11 +176,21 @@ async def chat_completions(request: Request):
         except Exception as exc:
             logger.warning("[LLM Proxy] Name lookup failed: %s", exc)
 
+    # Pre-fetch providers for authoritative demo subjects injection
+    _proxy_providers: list[dict] = []
+    try:
+        if tenant_ctx:
+            from backend.services import provider_service as _ps
+            _proxy_providers = await _ps.list_providers(tenant_ctx.tenant_id)
+    except Exception as _pe:
+        logger.warning("[LLM Proxy] Provider fetch failed: %s", _pe)
+
     # ALWAYS inject our full system prompt — replace Vapi's generic one
     system_prompt = build_system_prompt(
         tenant_ctx=tenant_ctx,
         caller_phone=caller_phone,
         caller_name=caller_name,
+        providers=_proxy_providers,
     )
     if messages and messages[0].get("role") == "system":
         vapi_prompt = messages[0].get("content", "")
@@ -1471,7 +1481,7 @@ async def _execute_tool(
             date = args.get("date", "")
             if not date:
                 from datetime import timedelta
-                date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+                date = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
 
             slots = await calendar_service.get_available_slots(
                 date_from=date,
@@ -1663,7 +1673,7 @@ async def _execute_tool(
                 requested_dt = dt_parser.parse(slot_time)
                 target_hour = requested_dt.hour
                 target_minute = requested_dt.minute
-                correct_date = requested_dt.replace(year=datetime.now().year)
+                correct_date = requested_dt.replace(year=datetime.now(timezone.utc).year)
                 date_str = correct_date.strftime("%Y-%m-%d")
 
                 available = await calendar_service.get_available_slots(
@@ -1725,11 +1735,13 @@ async def _execute_tool(
                 elapsed = (time.time() - t0) * 1000
                 logger.info("[Tool Exec] book_appointment → SUCCESS in %.0fms: %s", elapsed, result)
 
-                # Format confirmation for the LLM
+                # Format confirmation for the LLM (tenant-timezone-aware)
                 try:
-                    booked_dt = datetime.fromisoformat(slot_time)
-                    time_str = booked_dt.strftime("%I:%M %p").lstrip("0")
-                    date_str = booked_dt.strftime("%A, %B %d")
+                    from backend.tools.platform import _fmt_slot_display
+                    _proxy_tz = tenant_ctx.timezone if tenant_ctx else DEFAULT_TIMEZONE
+                    time_str, date_str = _fmt_slot_display(slot_time, _proxy_tz)
+                    if not date_str:
+                        date_str = "the requested date"
                 except Exception:
                     time_str = slot_time
                     date_str = "the requested date"

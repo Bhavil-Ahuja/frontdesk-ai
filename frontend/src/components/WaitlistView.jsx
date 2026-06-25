@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   ClipboardList,
   X,
@@ -16,11 +17,12 @@ import {
   CalendarCheck,
   Calendar,
   CalendarPlus,
+  Search,
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import { useModal } from '../contexts/ModalContext';
 import { useAuth } from '../contexts/AuthContext';
-import { formatDate, formatTime } from '../lib/timezone';
+import { formatDate, formatTime, formatDateTime } from '../lib/timezone';
 import ThemedDateTimePicker from './ui/ThemedDateTimePicker';
 import TestDataToggle, { TestBadge } from './ui/TestDataToggle';
 
@@ -68,6 +70,7 @@ const STATUS_CONFIG = {
 };
 
 export default function WaitlistView() {
+  const navigate = useNavigate();
   const { user } = useAuth();
   const { confirm } = useModal();
   const tz = user?.timezone || 'America/Chicago';
@@ -76,6 +79,7 @@ export default function WaitlistView() {
   const [error, setError] = useState(null);
   const [filterStatus, setFilterStatus] = useState('');
   const [refreshing, setRefreshing] = useState(false);
+  const [search, setSearch] = useState('');
   const [promoteEntry, setPromoteEntry] = useState(null);
   const [promoteTime, setPromoteTime] = useState('');
   const [promoteSubmitting, setPromoteSubmitting] = useState(false);
@@ -126,10 +130,20 @@ export default function WaitlistView() {
   }
 
   function openPromote(entry) {
-    // Default the datetime-local input to the entry's preferred date +
-    // time window start (or 09:00 if no time preference).
-    const time = entry.preferred_time_start || '09:00';
-    setPromoteTime(`${entry.preferred_date}T${time}`);
+    // For BOOKED entries, prefill with the existing appointment time (tenant-local).
+    // For others, default to preferred date + time window start.
+    if (entry.appointment_scheduled_at) {
+      const dt = new Date(entry.appointment_scheduled_at);
+      const localStr = new Intl.DateTimeFormat('sv-SE', {
+        timeZone: tz,
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit',
+      }).format(dt).replace(' ', 'T').slice(0, 16);
+      setPromoteTime(localStr);
+    } else {
+      const time = entry.preferred_time_start || '09:00';
+      setPromoteTime(`${entry.preferred_date}T${time}`);
+    }
     setPromoteError(null);
     setPromoteEntry(entry);
   }
@@ -188,7 +202,7 @@ export default function WaitlistView() {
   }
 
   // Second step — admin has reviewed conflicts and chose to proceed anyway.
-  // The faculty member is ready, so we bypass the provider/time concurrency check.
+  // The faculty member is ready, so we bypass the provider/time slot capacity check.
   async function handleForcePromote() {
     if (!promoteEntry || !promoteTime) return;
     setPromoteSubmitting(true);
@@ -286,6 +300,26 @@ export default function WaitlistView() {
         })}
       </div>
 
+      {/* Search bar */}
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search by name or phone…"
+          className="w-full pl-9 pr-4 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 transition-colors"
+        />
+        {search && (
+          <button
+            onClick={() => setSearch('')}
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        )}
+      </div>
+
       {/* Filter indicator */}
       {filterStatus && (
         <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
@@ -301,21 +335,30 @@ export default function WaitlistView() {
       )}
 
       {/* Entries list */}
-      {entries.length === 0 ? (
+      {(() => {
+        const q = search.trim().toLowerCase();
+        const filtered = q
+          ? entries.filter(
+              (e) =>
+                e.student_name?.toLowerCase().includes(q) ||
+                e.student_phone?.toLowerCase().includes(q),
+            )
+          : entries;
+        return filtered.length === 0 ? (
         <div className="bg-white dark:bg-gray-900/60 rounded-2xl border border-gray-200/80 dark:border-white/5 p-12 text-center">
           <ClipboardList className="w-12 h-12 text-gray-300 mx-auto mb-3" />
           <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-1">
-            {filterStatus ? 'No matching entries' : 'Waitlist is empty'}
+            {filterStatus || search ? 'No matching entries' : 'Waitlist is empty'}
           </h3>
           <p className="text-sm text-gray-500 dark:text-gray-400">
-            {filterStatus
-              ? `No entries with status "${filterStatus}". Try clearing the filter.`
+            {filterStatus || search
+              ? 'Try clearing the search or filter.'
               : 'When callers request a fully-booked slot, the AI agent will offer to add them here.'}
           </p>
         </div>
       ) : (
         <div className="space-y-3">
-          {entries.map((entry) => {
+          {filtered.map((entry) => {
             const cfg = STATUS_CONFIG[entry.status] || STATUS_CONFIG.WAITING;
             const StatusIcon = cfg.icon;
             return (
@@ -334,7 +377,16 @@ export default function WaitlistView() {
                   {/* Main content */}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-semibold text-gray-900 dark:text-white">{entry.student_name}</span>
+                      {entry.caller_id ? (
+                        <button
+                          onClick={() => navigate(`/contacts/${entry.caller_id}`)}
+                          className="font-semibold text-indigo-600 dark:text-indigo-400 hover:underline"
+                        >
+                          {entry.student_name}
+                        </button>
+                      ) : (
+                        <span className="font-semibold text-gray-900 dark:text-white">{entry.student_name}</span>
+                      )}
                       <span
                         className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${cfg.bg} ${cfg.text}`}
                       >
@@ -362,6 +414,12 @@ export default function WaitlistView() {
                             {entry.preferred_time_end && `–${entry.preferred_time_end}`}
                           </span>
                         )}
+                        {entry.appointment_scheduled_at && (
+                          <span className="flex items-center gap-0.5 text-green-600 dark:text-green-400 ml-1">
+                            <CheckCircle2 className="w-3 h-3" />
+                            {formatDateTime(entry.appointment_scheduled_at, tz)}
+                          </span>
+                        )}
                       </span>
                       {entry.provider_name && (
                         <span className="flex items-center gap-1">
@@ -378,7 +436,8 @@ export default function WaitlistView() {
                         <span>Notified {formatDate(entry.notified_at, tz)}</span>
                       )}
                       {entry.booked_at && (
-                        <span className="text-green-600">
+                        <span className="text-green-600 flex items-center gap-1">
+                          <CalendarCheck className="w-3 h-3" />
                           Booked {formatDate(entry.booked_at, tz)}
                         </span>
                       )}
@@ -386,15 +445,19 @@ export default function WaitlistView() {
                   </div>
 
                   {/* Actions */}
-                  {entry.status === 'WAITING' || entry.status === 'NOTIFIED' ? (
+                  {(entry.status === 'WAITING' || entry.status === 'NOTIFIED' || entry.status === 'BOOKED') ? (
                     <div className="flex items-center gap-1 shrink-0">
                       <button
                         onClick={() => openPromote(entry)}
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 rounded-lg hover:bg-green-100 dark:hover:bg-green-900/50 transition-colors"
-                        title="Promote to a booked appointment"
+                        className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg transition-colors ${
+                          entry.status === 'BOOKED'
+                            ? 'text-indigo-700 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100 dark:hover:bg-indigo-900/50'
+                            : 'text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 hover:bg-green-100 dark:hover:bg-green-900/50'
+                        }`}
+                        title={entry.status === 'BOOKED' ? 'Adjust appointment time' : 'Promote to a booked appointment'}
                       >
                         <CalendarPlus className="w-4 h-4" />
-                        Promote
+                        {entry.status === 'BOOKED' ? 'Adjust' : 'Promote'}
                       </button>
                       <button
                         onClick={() => handleCancel(entry.id)}
@@ -410,7 +473,8 @@ export default function WaitlistView() {
             );
           })}
         </div>
-      )}
+      );
+      })()}
 
       {/* Promote modal */}
       {promoteEntry && (

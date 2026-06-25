@@ -237,9 +237,11 @@ export default function LocalChat() {
   }, []);
 
   // Add a new test caller (generates phone, user provides name)
-  async function handleAddCaller() {
-    const name = newCallerName.trim();
-    if (!name || name.length < 2) {
+  async function handleAddCaller(nameOverride) {
+    // If no explicit name provided, generate a placeholder (will be updated by AI from chat)
+    const name = (typeof nameOverride === 'string' ? nameOverride : newCallerName).trim()
+      || `Caller ${testCallers.length + 1}`;
+    if (name.length < 2) {
       setError('Name must be at least 2 characters.');
       return;
     }
@@ -836,6 +838,8 @@ export default function LocalChat() {
               }
               return next;
             });
+            // Re-fetch callers — AI may have updated the caller's name during the turn
+            fetchConfig();
             continue;
           }
 
@@ -1005,8 +1009,9 @@ export default function LocalChat() {
               </div>
             </div>
             <button
-              onClick={() => setAddingCaller(true)}
-              className="p-1.5 hover:bg-gray-100 dark:hover:bg-white/8 rounded-lg transition-colors btn-press text-gray-400 hover:text-gray-600 dark:hover:text-white/70"
+              onClick={() => handleAddCaller()}
+              disabled={testCallers.length >= 10}
+              className="p-1.5 hover:bg-indigo-50 dark:hover:bg-indigo-950/30 rounded-lg transition-colors btn-press text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 disabled:opacity-40 disabled:cursor-not-allowed"
               title="Add new test caller"
             >
               <Plus className="w-4 h-4" />

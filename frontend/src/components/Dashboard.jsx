@@ -390,8 +390,8 @@ export default function Dashboard() {
         {/* Call Outcomes Donut */}
         <ChartCard title="Call Outcomes" subtitle="All-time breakdown">
           {outcomesData.length > 0 ? (
-            <div className="flex items-center gap-5 h-[220px]">
-              <div className="relative shrink-0" style={{ width: 160, height: 160 }}>
+            <div className="flex flex-col items-center gap-3">
+              <div className="relative" style={{ width: 160, height: 160 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Pie
@@ -409,6 +409,7 @@ export default function Dashboard() {
                       ))}
                     </Pie>
                     <Tooltip
+                      wrapperStyle={{ zIndex: 100 }}
                       content={({ active, payload }) => {
                         if (!active || !payload?.length) return null;
                         const d = payload[0].payload;
@@ -429,17 +430,13 @@ export default function Dashboard() {
                   <span className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">total</span>
                 </div>
               </div>
-              <div className="flex flex-col gap-2 text-xs flex-1 min-w-0">
+              {/* Legend below chart */}
+              <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 text-xs w-full">
                 {outcomesData.map((d) => (
-                  <div key={d.name} className="flex items-center gap-2 min-w-0">
+                  <div key={d.name} className="flex items-center gap-1.5 min-w-0">
                     <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: d.color }} />
-                    <span className="text-gray-600 dark:text-gray-400 flex-1 truncate">{d.name}</span>
-                    <span className="font-semibold text-gray-900 dark:text-white tabular-nums">{d.value}</span>
-                    {totalOutcomes > 0 && (
-                      <span className="text-gray-400 dark:text-gray-500 tabular-nums w-10 text-right shrink-0">
-                        {((d.value / totalOutcomes) * 100).toFixed(0)}%
-                      </span>
-                    )}
+                    <span className="text-gray-600 dark:text-gray-400 truncate">{d.name}</span>
+                    <span className="font-semibold text-gray-900 dark:text-white tabular-nums ml-auto">{d.value}</span>
                   </div>
                 ))}
               </div>

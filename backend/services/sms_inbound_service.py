@@ -221,8 +221,9 @@ async def _handle_confirmation(
         appt.confirmed_by_student = True
         await session.commit()
 
-    date_str = appt.scheduled_at.strftime("%A, %B %d")
-    time_str = appt.scheduled_at.strftime("%I:%M %p").lstrip("0")
+    _local_appt = sms_service._to_local_time(appt.scheduled_at, tenant_ctx)
+    date_str = _local_appt.strftime("%A, %B %d")
+    time_str = _local_appt.strftime("%I:%M %p").lstrip("0")
     biz_name = tenant_ctx.business_name
 
     logger.info(
@@ -328,8 +329,9 @@ async def _handle_cancel_request(
             appt.id, exc,
         )
 
-    display_date = scheduled_at.strftime("%A, %B %d")
-    display_time = scheduled_at.strftime("%I:%M %p").lstrip("0")
+    _local_cancel = sms_service._to_local_time(scheduled_at, tenant_ctx)
+    display_date = _local_cancel.strftime("%A, %B %d")
+    display_time = _local_cancel.strftime("%I:%M %p").lstrip("0")
     biz_phone = tenant_ctx.business_phone or tenant_ctx.escalation_phone
     call_part = f"call us at {biz_phone} or j" if biz_phone else "J"
 

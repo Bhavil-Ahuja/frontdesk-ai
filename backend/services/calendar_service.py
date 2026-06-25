@@ -74,7 +74,7 @@ def _resolve_appointment_config(
     tenant_ctx: Any | None,
 ) -> tuple[int, int]:
     """
-    Resolve ``duration_minutes`` and ``max_concurrent`` from the tenant's
+    Resolve ``duration_minutes`` and ``slot_capacity`` from the tenant's
     appointment_types config for the given appointment type key (e.g.
     "consultation", "follow_up").
 
@@ -99,13 +99,13 @@ def _resolve_appointment_config(
     for at in tenant_ctx.appointment_types:
         if slugify_appointment_type(at.get("code", "")) == key:
             duration = at.get("duration_minutes", DEFAULT_APPOINTMENT_DURATION_MINUTES)
-            max_conc = at.get("max_concurrent", 1)
+            max_conc = at.get("slot_capacity", 1)
             return duration, max_conc
 
     # No key match — fall back to the first configured type
     first = tenant_ctx.appointment_types[0]
     duration = first.get("duration_minutes", DEFAULT_APPOINTMENT_DURATION_MINUTES)
-    max_conc = first.get("max_concurrent", 1)
+    max_conc = first.get("slot_capacity", 1)
     return duration, max_conc
 
 
@@ -153,7 +153,7 @@ async def get_available_slots(
         date_to: ISO date string (YYYY-MM-DD) — end of window.
         tenant_ctx: TenantContext for multi-tenant routing.
         appointment_type_key: Raw appointment type key (e.g. "consultation")
-            used to resolve duration and max_concurrent from tenant config.
+            used to resolve duration and slot_capacity from tenant config.
         provider_id: Optional provider UUID — uses their calendar_id and
             business hours override if set.
         exclude_booking_uid: If provided, excludes this booking from the
@@ -189,10 +189,10 @@ async def get_available_slots(
     # ── Priority 1: Native scheduling (DB is source of truth) ───────────
     if tenant_ctx:
         duration, max_conc = _resolve_appointment_config(appointment_type_key, tenant_ctx)
-        logger.info("[Calendar][%s] Using native scheduler (type=%s, duration=%d, max_concurrent=%d)",
+        logger.info("[Calendar][%s] Using native scheduler (type=%s, duration=%d, slot_capacity=%d)",
                     tenant_ctx.slug, appointment_type_key, duration, max_conc)
 
-        # Use provider-aware slots which handles per-provider concurrency
+        # Use provider-aware slots which handles per-provider slot capacity
         provider_uuid = None
         if provider_id:
             try:
@@ -207,7 +207,7 @@ async def get_available_slots(
             tenant_id=tenant_ctx.tenant_id,
             business_hours=effective_hours,
             tz_name=tz,
-            max_concurrent=max_conc,
+            slot_capacity=max_conc,
             provider_id=provider_uuid,
             exclude_booking_uid=exclude_booking_uid,
             appointment_type=appointment_type_key,

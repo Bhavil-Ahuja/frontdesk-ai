@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from backend.config import settings
 from backend.database import async_session
 from backend.models.call import Call, CallOutcome
+from backend.models.caller import Caller
 from backend.models.platform_config import PlatformConfig
 from backend.models.tenant import Tenant
 from backend.services import auth_service
@@ -281,10 +282,29 @@ async def bolna_webhook(request: Request) -> dict[str, str]:
                 logger.info("[Bolna Webhook] Duplicate execution_id=%s — skipping", execution_id)
                 return {"status": "duplicate"}
 
+            # Resolve caller_id via phone match (for test-data filtering in dashboard)
+            caller_id = None
+            if caller_number and tenant_id:
+                from backend.services.caller_service import _phone_digits_tail, _phone_col_clean
+                from sqlalchemy import and_
+                tail = _phone_digits_tail(caller_number)
+                caller_q = await session.execute(
+                    select(Caller).where(
+                        and_(
+                            Caller.tenant_id == tenant_id,
+                            _phone_col_clean(Caller.phone).endswith(tail),
+                        )
+                    ).limit(1)
+                )
+                caller_rec = caller_q.scalar_one_or_none()
+                if caller_rec:
+                    caller_id = caller_rec.id
+
             call = Call(
                 tenant_id=tenant_id,
                 vapi_call_id=execution_id,          # reuse vapi_call_id column for bolna execution_id
                 caller_number=caller_number or None,
+                caller_id=caller_id,
                 duration_seconds=duration_seconds,
                 outcome=outcome,
                 transcript=[{"role": "full", "content": transcript_text}] if transcript_text else [],

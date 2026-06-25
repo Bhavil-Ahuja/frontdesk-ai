@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   CalendarDays,
   CalendarCheck,
@@ -54,6 +55,7 @@ const TYPE_COLORS = {
 };
 
 export default function AppointmentManager() {
+  const navigate = useNavigate();
   const { user } = useAuth();
   const { toast } = useModal();
   const tz = user?.timezone || 'America/Chicago';
@@ -700,7 +702,23 @@ export default function AppointmentManager() {
               </button>
             </div>
             <div className="p-4 md:p-6 space-y-5">
-              <DetailRow icon={User} label="Contact" value={selectedApt.student_name} />
+              {/* Contact — clickable if caller_id available */}
+              <div className="flex items-start gap-3">
+                <User className="w-4 h-4 text-gray-400 dark:text-gray-500 mt-0.5" />
+                <div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">Contact</p>
+                  {selectedApt.caller_id ? (
+                    <button
+                      onClick={() => navigate(`/contacts/${selectedApt.caller_id}`)}
+                      className="text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:underline text-left"
+                    >
+                      {selectedApt.student_name}
+                    </button>
+                  ) : (
+                    <p className="text-sm font-medium text-gray-900 dark:text-white">{selectedApt.student_name}</p>
+                  )}
+                </div>
+              </div>
               {/* Phone with call + message actions */}
               <div className="flex items-start gap-3">
                 <div className="flex-1">
@@ -729,7 +747,15 @@ export default function AppointmentManager() {
               </div>
               <DetailRow icon={Mail} label="Email" value={selectedApt.student_email || '—'} />
               <DetailRow icon={CalendarDays} label="Type" value={selectedApt.appointment_type_display || selectedApt.appointment_type} />
-              <DetailRow icon={UserCog} label="Faculty" value={selectedApt.provider_name || '—'} />
+              <DetailRow
+                icon={UserCog}
+                label="Faculty"
+                value={selectedApt.provider_name
+                  ? (selectedApt.provider_subject
+                      ? `${selectedApt.provider_name} · ${selectedApt.provider_subject}`
+                      : selectedApt.provider_name)
+                  : '—'}
+              />
               <DetailRow
                 icon={Clock}
                 label="Scheduled"

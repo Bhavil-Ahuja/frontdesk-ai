@@ -16,7 +16,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
-from sqlalchemy import func, select, and_
+from sqlalchemy import func, select, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import settings
@@ -52,7 +52,7 @@ def _normalise_appointment_types(types: list[dict]) -> list[dict]:
          canonical ``slugify_appointment_type`` from defaults.py.
       2. If two types produce the same slug, a numeric suffix is appended
          (``cleaning``, ``cleaning_2``, ``cleaning_3``…).
-      3. Sane defaults are enforced for duration and concurrency.
+      3. Sane defaults are enforced for duration and slot capacity.
       4. Empty/blank names are silently dropped.
     """
     seen_codes: dict[str, int] = {}  # code → count of occurrences
@@ -77,7 +77,7 @@ def _normalise_appointment_types(types: list[dict]) -> list[dict]:
             "code": code,
             "name": name,
             "duration_minutes": max(5, min(480, int(at.get("duration_minutes") or 60))),
-            "max_concurrent": max(1, min(50, int(at.get("max_concurrent") or 1))),
+            "slot_capacity": max(1, min(50, int(at.get("slot_capacity") or 1))),
         })
 
     return normalised
@@ -163,8 +163,29 @@ async def get_dashboard_stats(
             return Caller.is_test == False  # noqa: E712
         return Caller.is_test == True  # noqa: E712
 
+    def _call_test_filter():
+        """
+        Filter calls by test status via LEFT JOIN to Caller.
+        Calls with no matching Caller (caller_id IS NULL) are treated as real calls.
+        """
+        if not include_test:
+            # Keep orphan calls (no Caller record) and real-caller calls
+            return or_(Caller.id.is_(None), Caller.is_test == False)  # noqa: E712
+        # Only known test-caller calls
+        return Caller.is_test == True  # noqa: E712
+
+    def _call_query_base():
+        """Base select with LEFT JOIN to Caller for test filtering."""
+        return (
+            select(func.count())
+            .select_from(Call)
+            .outerjoin(Caller, Call.caller_id == Caller.id)
+        )
+
     # Today's calls
-    today_count_q = select(func.count()).where(and_(Call.started_at >= today_start, _tenant_filter(Call)))
+    today_count_q = _call_query_base().where(
+        and_(Call.started_at >= today_start, _tenant_filter(Call), _call_test_filter())
+    )
     today_calls = (await db.execute(today_count_q)).scalar() or 0
 
     # This week's AI-booked appointments
@@ -180,25 +201,34 @@ async def get_dashboard_stats(
 
     # Escalation rate (last 30 days)
     thirty_days_ago = now - timedelta(days=30)
-    total_calls_q = select(func.count()).where(and_(Call.started_at >= thirty_days_ago, _tenant_filter(Call)))
+    total_calls_q = _call_query_base().where(
+        and_(Call.started_at >= thirty_days_ago, _tenant_filter(Call), _call_test_filter())
+    )
     total_calls = (await db.execute(total_calls_q)).scalar() or 0
 
-    escalated_q = select(func.count()).where(
+    escalated_q = _call_query_base().where(
         and_(
             Call.started_at >= thirty_days_ago,
             Call.outcome == CallOutcome.ESCALATED,
             _tenant_filter(Call),
+            _call_test_filter(),
         )
     )
     escalated = (await db.execute(escalated_q)).scalar() or 0
     escalation_rate = round((escalated / total_calls * 100) if total_calls > 0 else 0, 1)
 
     # Average call duration (last 30 days)
-    avg_dur_q = select(func.avg(Call.duration_seconds)).where(
-        and_(
-            Call.started_at >= thirty_days_ago,
-            Call.duration_seconds.isnot(None),
-            _tenant_filter(Call),
+    avg_dur_q = (
+        select(func.avg(Call.duration_seconds))
+        .select_from(Call)
+        .outerjoin(Caller, Call.caller_id == Caller.id)
+        .where(
+            and_(
+                Call.started_at >= thirty_days_ago,
+                Call.duration_seconds.isnot(None),
+                _tenant_filter(Call),
+                _call_test_filter(),
+            )
         )
     )
     avg_duration = (await db.execute(avg_dur_q)).scalar() or 0
@@ -206,7 +236,9 @@ async def get_dashboard_stats(
     # Outcome breakdown
     outcomes: dict[str, int] = {}
     for outcome in CallOutcome:
-        cnt_q = select(func.count()).where(and_(Call.outcome == outcome, _tenant_filter(Call)))
+        cnt_q = _call_query_base().where(
+            and_(Call.outcome == outcome, _tenant_filter(Call), _call_test_filter())
+        )
         outcomes[outcome.value] = (await db.execute(cnt_q)).scalar() or 0
 
     # Calls per day this week
@@ -214,8 +246,8 @@ async def get_dashboard_stats(
     for i in range(7):
         day = week_start + timedelta(days=i)
         day_end = day + timedelta(days=1)
-        cnt_q = select(func.count()).where(
-            and_(Call.started_at >= day, Call.started_at < day_end, _tenant_filter(Call))
+        cnt_q = _call_query_base().where(
+            and_(Call.started_at >= day, Call.started_at < day_end, _tenant_filter(Call), _call_test_filter())
         )
         count = (await db.execute(cnt_q)).scalar() or 0
         calls_per_day.append({
@@ -378,6 +410,25 @@ async def get_config(current_user: Tenant = Depends(auth_service.get_current_use
             await session.commit()
             tenant_service.invalidate_cache(str(t.id))
 
+    # Resolve real caller names from the callers table so the Test Agent
+    # sidebar reflects the name the AI learned during conversation (not the
+    # placeholder "Caller N" set at creation time).
+    raw_test_callers = tenant_service._merge_test_callers(t)
+    if raw_test_callers:
+        phones = [c["phone"] for c in raw_test_callers if c.get("phone")]
+        if phones:
+            async with async_session() as name_session:
+                rows = await name_session.execute(
+                    select(Caller.phone, Caller.name)
+                    .where(Caller.tenant_id == t.id, Caller.phone.in_(phones))
+                )
+                real_names: dict[str, str] = {row.phone: row.name for row in rows if row.name}
+            raw_test_callers = [
+                {**c, "name": real_names.get(c["phone"], c.get("name", ""))}
+                for c in raw_test_callers
+            ]
+    resolved_test_callers = raw_test_callers
+
     voice_cfg = t.voice_config or {}
     return {
         "agent_active": bool(t.agent_active) if t.agent_active is not None else (t.status.value == "ACTIVE" if t.status else False),
@@ -409,8 +460,8 @@ async def get_config(current_user: Tenant = Depends(auth_service.get_current_use
         "google_calendar_email": t.google_calendar_email or "",
         # Feature flags — effective state (global AND per-tenant)
         "twilio_enabled": settings.FEATURE_TWILIO_ENABLED and (t.feature_twilio_enabled if t.feature_twilio_enabled is not None else True),
-        # Test Agent — unified callers (phone + name pairs)
-        "test_callers": tenant_service._merge_test_callers(t),
+        # Test Agent — unified callers (phone + name pairs), names resolved from callers table
+        "test_callers": resolved_test_callers,
         # Legacy fields (kept for backwards compat)
         "test_caller_phone": t.test_caller_phone or "",
         "test_caller_phones": t.test_caller_phones or [],
@@ -429,6 +480,8 @@ async def get_config(current_user: Tenant = Depends(auth_service.get_current_use
         },
         # Coaching-institute courses (stored under knowledge_base.courses)
         "courses": (t.knowledge_base or {}).get("courses", []),
+        # Max demo classes per student (stored under knowledge_base.max_demo_classes_per_student)
+        "max_demo_classes_per_student": (t.knowledge_base or {}).get("max_demo_classes_per_student"),
         # Business type — read-only, set at registration
         "business_type": t.business_type.value if t.business_type else "general",
     }
@@ -493,16 +546,31 @@ async def update_config(
     if "appointment_types" in update_fields and isinstance(update_fields["appointment_types"], list):
         update_fields["appointment_types"] = _normalise_appointment_types(update_fields["appointment_types"])
 
-    # Merge courses into knowledge_base JSONB (stored at knowledge_base.courses)
+    # Merge coaching settings into knowledge_base JSONB
+    # (courses and max_demo_classes_per_student are not direct columns)
+    _kb_patch: dict[str, Any] = {}
     if "courses" in data and isinstance(data["courses"], list):
-        del update_fields["courses"]  # not a direct column; merge into knowledge_base
+        if "courses" in update_fields:
+            del update_fields["courses"]  # handled via knowledge_base merge below
+        _kb_patch["courses"] = data["courses"]
+    if "max_demo_classes_per_student" in data:
+        _raw_max = data["max_demo_classes_per_student"]
+        if _raw_max is None or str(_raw_max).strip() == "":
+            _kb_patch["max_demo_classes_per_student"] = None
+        else:
+            try:
+                _kb_patch["max_demo_classes_per_student"] = max(0, int(_raw_max))
+            except (ValueError, TypeError):
+                pass  # ignore malformed value
+
+    if _kb_patch:
         async with async_session() as _s:
             from backend.models.tenant import Tenant as _Tenant
             _res = await _s.execute(select(_Tenant).where(_Tenant.id == current_user.id))
             _t = _res.scalar_one_or_none()
             if _t is not None:
                 existing_kb = dict(_t.knowledge_base or {})
-                existing_kb["courses"] = data["courses"]
+                existing_kb.update(_kb_patch)
                 update_fields["knowledge_base"] = existing_kb
 
     if "voice_id" in data or "voice_provider" in data:

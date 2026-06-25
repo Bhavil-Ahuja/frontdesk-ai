@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import { useModal } from '../contexts/ModalContext';
+import { useAuth } from '../contexts/AuthContext';
 import {
   STATUS_CONFIG,
   PLAN_LABELS,
@@ -50,6 +51,8 @@ export default function TenantAdmin() {
   const [searchQuery, setSearchQuery] = useState('');
   const [error, setError] = useState(null);
   const { toast } = useModal();
+  const { user } = useAuth();
+  const tz = user?.timezone || 'America/Chicago';
 
   // Support tickets state
   const [ticketStats, setTicketStats] = useState(null);
@@ -586,7 +589,7 @@ function TenantTicketGroup({ group }) {
                 <div className="flex items-center gap-2 mt-0.5 text-xs text-gray-400 dark:text-gray-500">
                   <span>{TICKET_CATEGORY_LABELS[ticket.category] || ticket.category}</span>
                   <span>·</span>
-                  <span>{new Date(ticket.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                  <span>{new Date(ticket.created_at).toLocaleDateString('en-US', { timeZone: tz, month: 'short', day: 'numeric', year: 'numeric' })}</span>
                   {ticket.message_count > 0 && (
                     <>
                       <span>·</span>

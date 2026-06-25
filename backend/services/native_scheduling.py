@@ -57,7 +57,7 @@ async def get_native_slots(
     tenant_id: uuid.UUID | None = None,
     business_hours: dict[str, Any] | None = None,
     tz_name: str = DEFAULT_TIMEZONE,
-    max_concurrent: int = 1,
+    slot_capacity: int = 1,
     exclude_booking_uid: str | None = None,
     appointment_type: str = "",
 ) -> list[str]:
@@ -65,13 +65,13 @@ async def get_native_slots(
     Compute available time slots on `date_str` for an appointment of
     `duration_minutes` length.
 
-    Supports concurrent bookings: instead of treating any overlap as a
+    Supports multiple bookings per slot: instead of treating any overlap as a
     conflict, we count how many existing confirmed appointments overlap each
     candidate slot and only mark it unavailable when the count reaches
-    ``max_concurrent``.
+    ``slot_capacity``.
 
     Concurrency is **appointment-type scoped**: only existing appointments of
-    the same type count toward the ``max_concurrent`` limit. A "cleaning" at
+    the same type count toward the ``slot_capacity`` limit. A "cleaning" at
     3:45 PM does not affect whether a "consultation" can start at 4:00 PM —
     they are independent resource pools.
 
@@ -86,7 +86,7 @@ async def get_native_slots(
          the tenant's local timezone, then convert to UTC
       3. Fetch existing CONFIRMED appointments *of the same type* for that
          UTC range + tenant
-      4. Count overlaps per slot — block only when count ≥ max_concurrent
+      4. Count overlaps per slot — block only when count ≥ slot_capacity
       5. Return remaining slots as timezone-aware ISO datetime strings in
          the tenant's local timezone (e.g. "2026-05-06T09:00:00-05:00")
 
@@ -96,13 +96,13 @@ async def get_native_slots(
         tenant_id: scope to this tenant's appointments
         business_hours: tenant's business_hours JSON (from Agent Config)
         tz_name: tenant's timezone string
-        max_concurrent: how many overlapping bookings are allowed per slot
+        slot_capacity: how many overlapping bookings are allowed per slot
             before it's considered full. Default 1 (classic single-booking).
         exclude_booking_uid: if provided, excludes this booking from the
             overlap check. Used during rescheduling so the caller's own
             appointment doesn't block the new time they want to move to.
         appointment_type: when set, only count existing appointments of the
-            same type toward the concurrency limit (case-insensitive).
+            same type toward the slot capacity limit (case-insensitive).
             Different types are treated as independent resource pools.
 
     Returns:
@@ -181,7 +181,7 @@ async def get_native_slots(
         )
         if tenant_id:
             query = query.where(Caller.tenant_id == tenant_id)
-        # Only count appointments of the SAME type toward the concurrency
+        # Only count appointments of the SAME type toward the slot capacity
         # limit — different types are independent resource pools.
         # Stored values are normalised at booking time via
         # slugify_appointment_type, so a simple lower() match works.
@@ -197,8 +197,8 @@ async def get_native_slots(
         result = await session.execute(query)
         existing_appointments = list(result.scalars().all())
 
-    logger.info("[NativeSched] %s: %d candidates, %d existing appts (type=%s, max_concurrent=%d, exclude=%s)",
-                date_str, len(candidate_slots_utc), len(existing_appointments), appointment_type or "all", max_concurrent,
+    logger.info("[NativeSched] %s: %d candidates, %d existing appts (type=%s, slot_capacity=%d, exclude=%s)",
+                date_str, len(candidate_slots_utc), len(existing_appointments), appointment_type or "all", slot_capacity,
                 exclude_booking_uid or "none")
 
     # ── Count overlaps per slot (all in UTC) ─────────────────────────────
@@ -228,14 +228,14 @@ async def get_native_slots(
             if slot_utc < booked_end and slot_end_utc > booked_start:
                 overlap_count += 1
                 # Early exit: no need to keep counting past the limit
-                if overlap_count >= max_concurrent:
+                if overlap_count >= slot_capacity:
                     break
-        if overlap_count < max_concurrent:
+        if overlap_count < slot_capacity:
             # Return in tenant's local timezone with offset for unambiguous parsing
             available.append(slot_local.isoformat())
 
-    logger.info("[NativeSched] %s: %d available slots (after filtering, max_concurrent=%d)",
-                date_str, len(available), max_concurrent)
+    logger.info("[NativeSched] %s: %d available slots (after filtering, slot_capacity=%d)",
+                date_str, len(available), slot_capacity)
     return available
 
 
@@ -248,7 +248,7 @@ async def get_provider_aware_slots(
     tenant_id: uuid.UUID | None = None,
     business_hours: dict[str, Any] | None = None,
     tz_name: str = DEFAULT_TIMEZONE,
-    max_concurrent: int = 1,
+    slot_capacity: int = 1,
     provider_id: uuid.UUID | None = None,
     holidays: list[dict[str, Any]] | None = None,
     exclude_booking_uid: str | None = None,
@@ -256,15 +256,15 @@ async def get_provider_aware_slots(
     subject: str | None = None,
 ) -> dict[str, Any]:
     """
-    Get available slots with provider-level concurrency tracking.
+    Get available slots with provider-level slot capacity tracking.
 
-    Unlike get_native_slots (which checks global concurrency), this function:
-    - Considers each provider's max_concurrent limit separately
+    Unlike get_native_slots (which checks global slot capacity), this function:
+    - Considers each provider's slot_capacity limit separately
     - Returns which providers are available for each slot
     - Supports filtering to a specific provider
 
     Concurrency is **appointment-type scoped**: only existing appointments of
-    the same type count toward each provider's ``max_concurrent`` limit.
+    the same type count toward each provider's ``slot_capacity`` limit.
     Different appointment types are independent resource pools — a "cleaning"
     does not consume capacity for "consultation" slots.
 
@@ -444,10 +444,10 @@ async def get_provider_aware_slots(
 
     if not providers and not is_demo_class:
         # No providers configured — fall back to global slot availability
-        logger.info("[NativeSched] No providers found, using global availability (max_concurrent=%d)", max_concurrent)
+        logger.info("[NativeSched] No providers found, using global availability (slot_capacity=%d)", slot_capacity)
         simple_slots = await get_native_slots(
             date_str, duration_minutes, tenant_id, business_hours, tz_name,
-            max_concurrent=max_concurrent, exclude_booking_uid=exclude_booking_uid,
+            slot_capacity=slot_capacity, exclude_booking_uid=exclude_booking_uid,
             appointment_type=appointment_type,
         )
         return {
@@ -463,7 +463,7 @@ async def get_provider_aware_slots(
             providers=providers,
             tenant_id=tenant_id,
             appointment_type=appointment_type,
-            max_concurrent=max_concurrent,
+            slot_capacity=slot_capacity,
             exclude_booking_uid=exclude_booking_uid,
             provider_id=provider_id,
         )
@@ -485,7 +485,7 @@ async def get_provider_aware_slots(
                 )
             )
         )
-        # Only count appointments of the SAME type toward the concurrency
+        # Only count appointments of the SAME type toward the slot capacity
         # limit — different types are independent resource pools.
         if appointment_type:
             appt_query = appt_query.where(
@@ -531,9 +531,9 @@ async def get_provider_aware_slots(
 
             # Use the stricter of provider's own limit and the appointment
             # type's global limit. This ensures a provider can't exceed the
-            # type-level concurrency even if their personal limit is higher.
-            provider_limit = provider.max_concurrent or 1
-            max_conc = min(provider_limit, max_concurrent) if max_concurrent > 0 else provider_limit
+            # type-level slot capacity even if their personal limit is higher.
+            provider_limit = provider.slot_capacity or 1
+            max_conc = min(provider_limit, slot_capacity) if slot_capacity > 0 else provider_limit
             if overlap_count < max_conc:
                 available_providers.append({
                     "id": str(provider.id),
@@ -567,7 +567,7 @@ async def _get_demo_class_slots(
     providers,
     tenant_id,
     appointment_type,
-    max_concurrent,
+    slot_capacity,
     exclude_booking_uid,
     provider_id,
 ) -> dict[str, Any]:
@@ -664,8 +664,8 @@ async def _get_demo_class_slots(
                 1 for bs, be in bookings
                 if slot_utc < be and slot_end_utc > bs
             )
-            provider_limit = p.max_concurrent or 1
-            max_conc = min(provider_limit, max_concurrent) if max_concurrent > 0 else provider_limit
+            provider_limit = p.slot_capacity or 1
+            max_conc = min(provider_limit, slot_capacity) if slot_capacity > 0 else provider_limit
 
             if overlap_count < max_conc:
                 key = (slot_local.isoformat(), duration)
@@ -805,7 +805,7 @@ async def create_native_booking(
         is_test=is_test,
     )
 
-    # ── Resolve tenant (needed for timezone, demo duration, and concurrency) ──
+    # ── Resolve tenant (needed for timezone, demo duration, and slot capacity) ──
     from backend.services.calendar_service import _resolve_appointment_config
     from backend.models.tenant import Tenant as _Tenant
 
@@ -830,7 +830,7 @@ async def create_native_booking(
                 duration_minutes, provider_id,
             )
 
-    # ── Pre-booking concurrency check ─────────────────────────────────────────
+    # ── Pre-booking slot capacity check ─────────────────────────────────────────
     # Verify that the slot hasn't filled up since get_available_slots was
     # called. This closes the race window between slot-check and insert.
     _max_conc = 1
@@ -870,7 +870,7 @@ async def create_native_booking(
             if _overlap_count >= _max_conc:
                 logger.warning(
                     "[NativeSched] Pre-booking check FAILED — slot at %s is full "
-                    "(%d/%d concurrent for type=%s)",
+                    "(%d/%d slots for type=%s)",
                     start_time, _overlap_count, _max_conc, appointment_type,
                 )
                 return {"status": "CONFLICT", "reason": "slot_taken"}
@@ -1003,7 +1003,7 @@ async def reschedule_native_booking(
 
         # ── Verify the new time slot is available ────────────────────────
         # Count confirmed appointments at the new time (excluding this one)
-        # to enforce max_concurrent. Resolve config from tenant.
+        # to enforce slot_capacity. Resolve config from tenant.
         from backend.services.calendar_service import _resolve_appointment_config
         from backend.models.tenant import Tenant
 
@@ -1061,7 +1061,7 @@ async def reschedule_native_booking(
         if overlap_count >= max_conc:
             logger.warning(
                 "[NativeSched] Reschedule blocked — new time %s is full "
-                "(%d/%d concurrent for type=%s)",
+                "(%d/%d slots for type=%s)",
                 new_start_time, overlap_count, max_conc, appt.appointment_type,
             )
             return {"status": "CONFLICT", "reason": "slot_full"}

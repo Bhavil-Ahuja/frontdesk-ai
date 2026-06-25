@@ -115,9 +115,9 @@ _MIGRATIONS: list[str] = [
         END IF;
     END $$;""",
 
-    # ── appointments — drop the old single-concurrency unique index.
-    #    With max_concurrent > 1, multiple bookings at the same time/provider
-    #    are allowed. Concurrency is now enforced at the application level via
+    # ── appointments — drop the old single-slot-capacity unique index.
+    #    With slot_capacity > 1, multiple bookings at the same time/provider
+    #    are allowed. Slot capacity is now enforced at the application level via
     #    pre-booking checks in create_native_booking and reschedule_native_booking.
     "DROP INDEX IF EXISTS uniq_appt_provider_time",
 
@@ -350,6 +350,47 @@ _MIGRATIONS: list[str] = [
 
     # Step 4: Drop student_phone from sms_messages (derive from caller.phone).
     "ALTER TABLE sms_messages DROP COLUMN IF EXISTS student_phone",
+
+    # ── calls table — add caller_id FK for test-data filtering via Caller join ─
+    "ALTER TABLE calls ADD COLUMN IF NOT EXISTS caller_id UUID REFERENCES callers(id) ON DELETE SET NULL",
+    "CREATE INDEX IF NOT EXISTS ix_calls_caller_id ON calls(caller_id)",
+    # Backfill: match by last-10-digit phone tail within same tenant
+    """UPDATE calls c SET caller_id = cal.id
+       FROM callers cal
+       WHERE cal.tenant_id = c.tenant_id
+         AND RIGHT(regexp_replace(cal.phone, '[^0-9]', '', 'g'), 10)
+             = RIGHT(regexp_replace(c.caller_number, '[^0-9]', '', 'g'), 10)
+         AND c.caller_id IS NULL
+         AND c.caller_number IS NOT NULL""",
+
+    # ── providers — rename max_concurrent → slot_capacity ───────────────────────
+    """DO $$ BEGIN
+        ALTER TABLE faculty RENAME COLUMN max_concurrent TO slot_capacity;
+    EXCEPTION WHEN OTHERS THEN
+        RAISE NOTICE 'faculty.slot_capacity rename skipped (already done): %', SQLERRM;
+    END $$;""",
+
+    # ── tenants — migrate appointment_types JSON key max_concurrent → slot_capacity
+    # Updates every element in the appointment_types JSONB array that still has
+    # the old key, renaming it to slot_capacity and preserving the value.
+    """UPDATE tenants
+       SET appointment_types = (
+           SELECT jsonb_agg(
+               CASE
+                   WHEN elem ? 'max_concurrent'
+                   THEN (elem - 'max_concurrent') || jsonb_build_object('slot_capacity', elem->'max_concurrent')
+                   ELSE elem
+               END
+           )
+           FROM jsonb_array_elements(appointment_types) AS elem
+       )
+       WHERE appointment_types IS NOT NULL
+         AND EXISTS (
+             SELECT 1 FROM jsonb_array_elements(appointment_types) AS e
+             WHERE e ? 'max_concurrent'
+         )""",
+    # ── waitlist_entries — store booked appointment time after promote ─────────
+    "ALTER TABLE waitlist_entries ADD COLUMN IF NOT EXISTS appointment_scheduled_at TIMESTAMPTZ",
 ]
 
 

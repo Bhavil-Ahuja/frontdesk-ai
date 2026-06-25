@@ -135,7 +135,7 @@ class Tenant(Base):
     appointment_types = Column(
         JSONB, nullable=False,
         default=lambda: [
-            {"code": "consultation", "name": "Consultation", "duration_minutes": 45, "max_concurrent": 1},
+            {"code": "consultation", "name": "Consultation", "duration_minutes": 45, "slot_capacity": 1},
         ],
     )
     business_hours = Column(

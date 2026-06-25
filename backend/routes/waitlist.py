@@ -33,7 +33,7 @@ class PromoteRequest(BaseModel):
     force: bool = Field(
         False,
         description=(
-            "If True, bypass the provider/time concurrency check. Use only when "
+            "If True, bypass the provider/time slot capacity check. Use only when "
             "the admin has confirmed the double-book in the UI (e.g. the faculty member "
             "has explicitly agreed to take an overlapping appointment)."
         ),

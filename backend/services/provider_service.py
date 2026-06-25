@@ -37,7 +37,7 @@ _UPDATABLE_FIELDS = frozenset({
     "appointment_types",
     "calendar_id",
     "business_hours_override",
-    "max_concurrent",
+    "slot_capacity",
     "subject",
     "demo_time_slots",
     "is_active",
@@ -61,7 +61,7 @@ def provider_to_dict(p) -> dict:
         "id": str(p.id),
         "name": p.name,
         "title": p.title,
-        "max_concurrent": p.max_concurrent or 1,
+        "slot_capacity": p.slot_capacity or 1,
         "appointment_types": p.appointment_types or [],
         "calendar_id": p.calendar_id,
         "business_hours_override": p.business_hours_override,
@@ -80,7 +80,7 @@ async def create_provider(
     appointment_types: list[str] = None,
     calendar_id: str = None,
     business_hours_override: dict = None,
-    max_concurrent: int = 1,
+    slot_capacity: int = 1,
     subject: str = None,
     demo_time_slots: dict | None = None,
 ) -> dict:
@@ -97,7 +97,7 @@ async def create_provider(
             If omitted, the tenant's primary calendar is used.
         business_hours_override: Optional per-provider business hours that
             override the tenant defaults.  Same shape as ``tenant.business_hours``.
-        max_concurrent: Maximum overlapping appointments this provider can handle.
+        slot_capacity: Maximum overlapping appointments this provider can handle.
             Default 1 (single-booking). Set higher for providers who can see
             multiple callers in parallel slots.
 
@@ -112,7 +112,7 @@ async def create_provider(
             appointment_types=[slugify_appointment_type(t) for t in appointment_types] if appointment_types else [],
             calendar_id=calendar_id,
             business_hours_override=business_hours_override,
-            max_concurrent=max(1, max_concurrent),
+            slot_capacity=max(1, slot_capacity),
             subject=subject.strip() if subject else None,
             demo_time_slots=demo_time_slots if demo_time_slots else None,
             is_active=True,
@@ -354,7 +354,7 @@ async def auto_assign_provider(
     Strategy:
       1. Get all active providers matching the appointment_type.
       2. For each provider, check if they have capacity at the requested time
-         (respect max_concurrent and existing bookings).
+         (respect slot_capacity and existing bookings).
       3. Pick the provider with the fewest bookings that day (load balancing).
 
     Returns:
@@ -413,9 +413,9 @@ async def auto_assign_provider(
         )
         day_bookings = result.scalars().all()
 
-    # Build per-provider booking counts and concurrent check
+    # Build per-provider booking counts and slot capacity check
     provider_day_counts: dict[uuid.UUID, int] = {p.id: 0 for p in candidates}
-    provider_concurrent: dict[uuid.UUID, int] = {p.id: 0 for p in candidates}
+    provider_slot_counts: dict[uuid.UUID, int] = {p.id: 0 for p in candidates}
 
     for appt in day_bookings:
         if appt.provider_id in provider_day_counts:
@@ -424,13 +424,12 @@ async def auto_assign_provider(
             appt_start = appt.scheduled_at
             appt_end = appt_start + timedelta(minutes=appt.duration_minutes or 30)
             if appt_start < slot_end and appt_end > slot_start:
-                provider_concurrent[appt.provider_id] += 1
+                provider_slot_counts[appt.provider_id] += 1
 
     # Filter to providers with available capacity at the requested time
     available = []
     for p in candidates:
-        max_conc = p.max_concurrent or 1
-        if provider_concurrent[p.id] < max_conc:
+        if provider_slot_counts[p.id] < (p.slot_capacity or 1):
             available.append(p)
 
     if not available:
@@ -445,12 +444,12 @@ async def auto_assign_provider(
     selected = available[0]
 
     logger.info(
-        "[Provider] Auto-assigned %s (%s) for %s at %s (day_bookings=%d, concurrent=%d/%d)",
+        "[Provider] Auto-assigned %s (%s) for %s at %s (day_bookings=%d, slot=%d/%d)",
         selected.name, selected.id, appointment_type,
         requested_datetime.isoformat(),
         provider_day_counts[selected.id],
-        provider_concurrent[selected.id],
-        selected.max_concurrent or 1,
+        provider_slot_counts[selected.id],
+        selected.slot_capacity or 1,
     )
     return {
         "id": str(selected.id),

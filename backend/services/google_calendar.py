@@ -206,15 +206,15 @@ async def get_available_slots(
     duration_minutes: int = DEFAULT_APPOINTMENT_DURATION_MINUTES,
     business_hours: dict[str, Any] | None = None,
     calendar_id: str = "primary",
-    max_concurrent: int = 1,
+    slot_capacity: int = 1,
 ) -> list[str]:
     """
     Check Google Calendar availability using the Events List API, then generate
     open slots based on the tenant's configured business hours.
 
-    Supports concurrent bookings: instead of treating any overlap as "busy"
+    Supports multiple bookings per slot: instead of treating any overlap as "busy"
     (like FreeBusy does), we count how many events overlap each candidate slot
-    and only mark it unavailable when the count reaches ``max_concurrent``.
+    and only mark it unavailable when the count reaches ``slot_capacity``.
 
     Args:
         refresh_token: Tenant's stored Google OAuth refresh token.
@@ -226,7 +226,7 @@ async def get_available_slots(
             {"monday": {"open": "08:00", "close": "18:00"}, ...}.
             Falls back to 9 AM – 5 PM Mon–Fri if not provided.
         calendar_id: Google Calendar ID (default "primary").
-        max_concurrent: How many overlapping bookings are allowed per slot
+        slot_capacity: How many overlapping bookings are allowed per slot
             before it's considered full. Default 1 (classic single-booking).
 
     Returns:
@@ -242,8 +242,8 @@ async def get_available_slots(
     time_min = datetime.fromisoformat(f"{date_from}T00:00:00").replace(tzinfo=tz_obj)
     time_max = datetime.fromisoformat(f"{date_to}T23:59:59").replace(tzinfo=tz_obj)
 
-    logger.info("[GoogleCal] Events List query: %s to %s (%s, max_concurrent=%d)",
-                date_from, date_to, timezone, max_concurrent)
+    logger.info("[GoogleCal] Events List query: %s to %s (%s, slot_capacity=%d)",
+                date_from, date_to, timezone, slot_capacity)
 
     try:
         # ── Fetch actual events (replaces FreeBusy) ─────────────────────
@@ -329,10 +329,10 @@ async def get_available_slots(
                     if slot_start_tz < ev_end and slot_end_tz > ev_start:
                         overlap_count += 1
                         # Early exit: no need to keep counting past the limit
-                        if overlap_count >= max_concurrent:
+                        if overlap_count >= slot_capacity:
                             break
 
-                if overlap_count < max_concurrent:
+                if overlap_count < slot_capacity:
                     slots.append(slot_start_tz.isoformat())
 
                 # Advance by 15 minutes
@@ -347,8 +347,8 @@ async def get_available_slots(
 
             current_date += timedelta(days=1)
 
-        logger.info("[GoogleCal] Generated %d available slots for %s to %s (max_concurrent=%d)",
-                    len(slots), date_from, date_to, max_concurrent)
+        logger.info("[GoogleCal] Generated %d available slots for %s to %s (slot_capacity=%d)",
+                    len(slots), date_from, date_to, slot_capacity)
         return slots
 
     except httpx.HTTPStatusError as exc:

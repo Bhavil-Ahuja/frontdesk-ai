@@ -53,6 +53,8 @@ class AppointmentOut(BaseModel):
     created_at: Optional[datetime]
     provider_id: Optional[str] = None
     provider_name: Optional[str] = None
+    provider_subject: Optional[str] = None
+    caller_id: Optional[str] = None
     is_test: bool = False
 
     class Config:
@@ -123,15 +125,15 @@ async def list_appointments(
     result = await db.execute(query)
     appointments = result.scalars().all()
 
-    # Batch-fetch provider names for appointments that have provider_id
+    # Batch-fetch provider names + subjects for appointments that have provider_id
     provider_ids = {a.provider_id for a in appointments if a.provider_id}
-    provider_map = {}
+    provider_map: dict = {}  # {id: (name, subject)}
     if provider_ids:
         prov_result = await db.execute(
             select(Provider).where(Provider.id.in_(provider_ids))
         )
         for p in prov_result.scalars().all():
-            provider_map[p.id] = p.name
+            provider_map[p.id] = (p.name, getattr(p, "subject", None))
 
     # Build slug → display name map from tenant's appointment_types config
     type_display_map: dict[str, str] = {}
@@ -162,7 +164,9 @@ async def list_appointments(
             notes=a.notes,
             created_at=a.created_at,
             provider_id=str(a.provider_id) if a.provider_id else None,
-            provider_name=provider_map.get(a.provider_id) if a.provider_id else None,
+            provider_name=provider_map.get(a.provider_id, (None, None))[0] if a.provider_id else None,
+            provider_subject=provider_map.get(a.provider_id, (None, None))[1] if a.provider_id else None,
+            caller_id=str(a.caller_id) if a.caller_id else None,
             is_test=a.is_test or False,
         )
         for a in appointments

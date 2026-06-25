@@ -30,6 +30,7 @@ class Call(Base):
     tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=True, index=True)
     vapi_call_id = Column(String(255), unique=True, nullable=True, index=True)
     caller_number = Column(String(20), nullable=True)
+    caller_id = Column(UUID(as_uuid=True), ForeignKey("callers.id"), nullable=True, index=True)
     started_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     ended_at = Column(DateTime(timezone=True), nullable=True)
     duration_seconds = Column(Integer, nullable=True)

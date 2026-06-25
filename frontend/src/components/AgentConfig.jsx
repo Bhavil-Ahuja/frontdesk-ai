@@ -39,6 +39,7 @@ const VOICE_OPTIONS = [
 
 export default function AgentConfig() {
   const { isAdmin, user } = useAuth();
+  const tz = user?.timezone || 'America/Chicago';
   const { confirm, prompt, toast } = useModal();
   const [config, setConfig] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -215,7 +216,13 @@ export default function AgentConfig() {
   }
 
   async function handleClearTestData() {
-    if (!window.confirm('Delete ALL test data (contacts, appointments, waitlist, SMS) created via Test Agent? This cannot be undone.')) return;
+    const ok = await confirm({
+      title: 'Clear All Test Data?',
+      message: 'This will permanently delete all contacts, appointments, waitlist entries, and SMS records created via the Test Agent. This cannot be undone.',
+      confirmText: 'Clear Test Data',
+      variant: 'danger',
+    });
+    if (!ok) return;
     setClearingTestData(true);
     setTestDataResult(null);
     try {
@@ -600,6 +607,8 @@ function UsageBar({ label, used, limit, unit, color = 'primary' }) {
 }
 
 function UsagePlanSection() {
+  const { user } = useAuth();
+  const tz = user?.timezone || 'America/Chicago';
   const [usage, setUsage] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -658,7 +667,7 @@ function UsagePlanSection() {
             unit="SMS"
           />
           <p className="text-xs text-gray-400 dark:text-gray-500">
-            Billing period started {new Date(usage.period_start).toLocaleDateString()}.
+            Billing period started {new Date(usage.period_start).toLocaleDateString('en-US', { timeZone: tz, month: 'short', day: 'numeric', year: 'numeric' })}.
             Usage resets monthly. Contact support to upgrade your plan.
           </p>
         </div>

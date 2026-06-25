@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
 import {
   ArrowLeft,
   Clock,
@@ -42,18 +43,18 @@ const PRIORITY_CONFIG = {
   URGENT: 'text-red-600 dark:text-red-400',
 };
 
-function fmt(iso) {
+function fmt(iso, tz = 'America/Chicago') {
   if (!iso) return '—';
   return new Date(iso).toLocaleString('en-US', {
-    month: 'short', day: 'numeric', year: 'numeric',
+    timeZone: tz, month: 'short', day: 'numeric', year: 'numeric',
     hour: 'numeric', minute: '2-digit', hour12: true,
   });
 }
 
-function fmtShort(iso) {
+function fmtShort(iso, tz = 'America/Chicago') {
   if (!iso) return '—';
   return new Date(iso).toLocaleString('en-US', {
-    month: 'short', day: 'numeric',
+    timeZone: tz, month: 'short', day: 'numeric',
     hour: 'numeric', minute: '2-digit', hour12: true,
   });
 }
@@ -85,14 +86,14 @@ function MetaItem({ icon: Icon, label, value }) {
 }
 
 // SYSTEM event pill — renders as a timeline marker, not a chat bubble
-function SystemEvent({ msg }) {
+function SystemEvent({ msg, tz }) {
   return (
     <div className="flex items-center gap-3 py-1">
       <div className="flex-1 h-px bg-gray-200 dark:bg-gray-700" />
       <div className="flex items-center gap-1.5 shrink-0 px-3 py-1 rounded-full bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
         <RefreshCw className="w-3 h-3 text-gray-400" />
         <span className="text-[11px] text-gray-500 dark:text-gray-400">{msg.body}</span>
-        <span className="text-[10px] text-gray-400 dark:text-gray-500 ml-1">{fmtShort(msg.created_at)}</span>
+        <span className="text-[10px] text-gray-400 dark:text-gray-500 ml-1">{fmtShort(msg.created_at, tz)}</span>
       </div>
       <div className="flex-1 h-px bg-gray-200 dark:bg-gray-700" />
     </div>
@@ -100,7 +101,7 @@ function SystemEvent({ msg }) {
 }
 
 // Regular chat bubble (TENANT or ADMIN)
-function ChatBubble({ msg }) {
+function ChatBubble({ msg, tz }) {
   const isAdmin = msg.sender_type === 'ADMIN';
   return (
     <div className={`flex ${isAdmin ? 'justify-end' : 'justify-start'}`}>
@@ -116,7 +117,7 @@ function ChatBubble({ msg }) {
           </p>
         </div>
         <p className="text-sm text-gray-800 dark:text-gray-200 whitespace-pre-wrap leading-relaxed">{msg.body}</p>
-        <p className="text-[10px] text-gray-400 mt-1.5">{fmtShort(msg.created_at)}</p>
+        <p className="text-[10px] text-gray-400 mt-1.5">{fmtShort(msg.created_at, tz)}</p>
       </div>
     </div>
   );
@@ -152,6 +153,8 @@ export default function TicketDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { toast } = useModal();
+  const { user } = useAuth();
+  const tz = user?.timezone || 'America/Chicago';
   const messagesEndRef = useRef(null);
 
   const [ticket, setTicket] = useState(null);
@@ -326,11 +329,11 @@ export default function TicketDetail() {
           {/* Meta grid */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-5 mt-6 pt-5 border-t border-gray-100 dark:border-white/5">
             <MetaItem icon={Building2} label="Tenant" value={ticket.tenant_name || ticket.tenant_slug || '—'} />
-            <MetaItem icon={Calendar} label="Submitted" value={fmt(ticket.created_at)} />
+            <MetaItem icon={Calendar} label="Submitted" value={fmt(ticket.created_at, tz)} />
             <MetaItem
               icon={CheckCircle}
               label="Resolved at"
-              value={ticket.resolved_at ? fmt(ticket.resolved_at) : '—'}
+              value={ticket.resolved_at ? fmt(ticket.resolved_at, tz) : '—'}
             />
             <MetaItem icon={User} label="Resolved by" value={ticket.resolved_by || '—'} />
           </div>
@@ -376,8 +379,8 @@ export default function TicketDetail() {
           <div className="space-y-3">
             {messages.map((msg) =>
               msg.sender_type === 'SYSTEM'
-                ? <SystemEvent key={msg.id} msg={msg} />
-                : <ChatBubble key={msg.id} msg={msg} />
+                ? <SystemEvent key={msg.id} msg={msg} tz={tz} />
+                : <ChatBubble key={msg.id} msg={msg} tz={tz} />
             )}
             <div ref={messagesEndRef} />
           </div>

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   Users,
@@ -18,12 +19,14 @@ import {
   CheckCircle,
   CheckCircle2,
   XCircle,
+  CalendarClock,
   User,
   ArrowUp,
   ArrowDown,
   Hash,
   RefreshCw,
   SortAsc,
+  Send,
   Trash2,
   Check,
 } from 'lucide-react';
@@ -32,6 +35,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useModal } from '../contexts/ModalContext';
 import { formatDateTime, formatDate, formatRelativeTime as fmtRelative } from '../lib/timezone';
 import ThemedSelect from './ui/ThemedSelect';
+import ThemedDateTimePicker from './ui/ThemedDateTimePicker';
 import TestDataToggle, { TestBadge } from './ui/TestDataToggle';
 
 // ── Status badge colors ────────────────────────────────────────────────────
@@ -681,13 +685,21 @@ function CallerProfile({ callerId, tz, onBack }) {
             </div>
 
             <div className="flex items-center gap-4 mt-2 text-sm text-gray-500 dark:text-gray-400 flex-wrap">
-              <span className="flex items-center gap-1">
+              <a
+                href={`tel:${p.phone}`}
+                className="flex items-center gap-1 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors"
+                onClick={(e) => e.stopPropagation()}
+              >
                 <Phone className="w-3.5 h-3.5" /> {p.phone}
-              </span>
+              </a>
               {p.email && (
-                <span className="flex items-center gap-1">
+                <a
+                  href={`mailto:${p.email}`}
+                  className="flex items-center gap-1 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors"
+                  onClick={(e) => e.stopPropagation()}
+                >
                   <Mail className="w-3.5 h-3.5" /> {p.email}
-                </span>
+                </a>
               )}
               {p.date_of_birth && (
                 <span className="flex items-center gap-1">
@@ -872,10 +884,11 @@ function CallerProfile({ callerId, tz, onBack }) {
           isPastAppointment={isPastAppointment}
           setConfirmAction={setConfirmAction}
           updatingStatus={updatingStatus}
+          onRescheduleSuccess={fetchProfile}
         />
       )}
       {activeTab === 'calls' && <CallsTab calls={calls} tz={tz} />}
-      {activeTab === 'sms' && <SMSTab messages={smsMessages} tz={tz} />}
+      {activeTab === 'sms' && <SMSTab messages={smsMessages} tz={tz} callerPhone={p.phone} onMessageSent={fetchProfile} />}
 
       {/* Confirmation modal (mirrors AppointmentManager.jsx) */}
       {confirmAction && (
@@ -958,6 +971,7 @@ function AppointmentsTab({
   isPastAppointment,
   setConfirmAction,
   updatingStatus,
+  onRescheduleSuccess,
 }) {
   const rowProps = {
     tz,
@@ -966,6 +980,7 @@ function AppointmentsTab({
     isPastAppointment,
     setConfirmAction,
     updatingStatus,
+    onRescheduleSuccess,
   };
   return (
     <div className="space-y-4">
@@ -1010,18 +1025,44 @@ function AppointmentRow({
   isPastAppointment,
   setConfirmAction,
   updatingStatus,
+  onRescheduleSuccess,
 }) {
   const status = STATUS_COLORS[appt.status] || STATUS_COLORS.CONFIRMED;
   const isExpanded = expandedApptId === appt.id;
   const isPast = isPastAppointment(appt);
 
+  // Reschedule local state
+  const [rescheduleOpen, setRescheduleOpen] = useState(false);
+  const [rescheduleTime, setRescheduleTime] = useState('');
+  const [rescheduling, setRescheduling] = useState(false);
+
+  async function handleReschedule() {
+    if (!rescheduleTime) return;
+    setRescheduling(true);
+    try {
+      const utcIso = new Date(rescheduleTime).toISOString();
+      await apiFetch(`/api/appointments/${appt.id}`, {
+        method: 'PATCH',
+        body: { scheduled_at: utcIso },
+      });
+      setRescheduleOpen(false);
+      setRescheduleTime('');
+      onRescheduleSuccess?.();
+    } catch (err) {
+      console.error('Reschedule failed:', err);
+    } finally {
+      setRescheduling(false);
+    }
+  }
+
   // Decide whether any actions are available for this appointment
   const hasPastPendingActions = isPast && appt.status === 'CONFIRMED';
   const hasCorrectAttended = appt.status === 'NO_SHOW';
   const hasCorrectNoShow = appt.status === 'COMPLETED';
+  const hasReschedule = (appt.status === 'CONFIRMED' || appt.status === 'RESCHEDULED') && !isPast;
   const hasCancel = appt.status === 'CONFIRMED' && !isPast;
   const hasAnyActions =
-    hasPastPendingActions || hasCorrectAttended || hasCorrectNoShow || hasCancel;
+    hasPastPendingActions || hasCorrectAttended || hasCorrectNoShow || hasReschedule || hasCancel;
   const hasHistory = appt.status_history && appt.status_history.length > 0;
   const isExpandable = hasAnyActions || hasHistory;
 
@@ -1059,7 +1100,7 @@ function AppointmentRow({
             {appt.scheduled_at ? formatDateTime(appt.scheduled_at, tz) : ''}{' '}
             · {appt.duration_minutes} min
             {appt.provider_name && (
-              <span className="ml-1">· <UserCog className="w-3 h-3 inline -mt-0.5" /> {appt.provider_name}</span>
+              <span className="ml-1">· <UserCog className="w-3 h-3 inline -mt-0.5" /> {appt.provider_name}{appt.provider_subject ? ` · ${appt.provider_subject}` : ''}</span>
             )}
           </p>
         </div>
@@ -1180,7 +1221,83 @@ function AppointmentRow({
             </button>
           )}
 
-          {hasCancel && (
+          {hasReschedule && (
+            <div className="space-y-2">
+              {!rescheduleOpen ? (
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => {
+                      // Pre-fill with current scheduled time
+                      if (appt.scheduled_at) {
+                        const d = new Date(appt.scheduled_at);
+                        const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000)
+                          .toISOString().slice(0, 16);
+                        setRescheduleTime(local);
+                      }
+                      setRescheduleOpen(true);
+                    }}
+                    className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 bg-blue-50 dark:bg-blue-950/30 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-800/50 rounded-lg text-xs font-medium hover:bg-blue-100 dark:hover:bg-blue-950/50 transition-colors"
+                  >
+                    <CalendarClock className="w-3.5 h-3.5" />
+                    Reschedule
+                  </button>
+                  {hasCancel && (
+                    <button
+                      onClick={() => setConfirmAction({ action: 'cancel', id: appt.id })}
+                      disabled={updatingStatus}
+                      className="flex-1 py-2 px-3 bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-800 rounded-lg text-xs font-medium hover:bg-red-100 dark:hover:bg-red-900/50 disabled:opacity-50 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <>
+                  <button
+                    onClick={() => setRescheduleOpen(false)}
+                    className="w-full py-2 px-3 border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-400 rounded-lg text-xs font-medium hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                  >
+                    Cancel Reschedule
+                  </button>
+                  {createPortal(
+                    <div
+                      className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/50"
+                      onClick={() => setRescheduleOpen(false)}
+                    >
+                      <div
+                        className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-full max-w-md p-5 space-y-4"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <p className="text-sm font-semibold text-blue-700 dark:text-blue-400">Pick a new date & time:</p>
+                        <ThemedDateTimePicker
+                          value={rescheduleTime}
+                          onChange={setRescheduleTime}
+                        />
+                        <div className="flex gap-2">
+                          <button
+                            onClick={handleReschedule}
+                            disabled={!rescheduleTime || rescheduling}
+                            className="flex-1 py-2 px-3 bg-blue-500 text-white rounded-lg text-xs font-medium hover:bg-blue-600 disabled:opacity-50 transition-colors"
+                          >
+                            {rescheduling ? 'Saving…' : 'Confirm Reschedule'}
+                          </button>
+                          <button
+                            onClick={() => setRescheduleOpen(false)}
+                            className="py-2 px-3 border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-400 rounded-lg text-xs font-medium hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    </div>,
+                    document.body
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
+          {!hasReschedule && hasCancel && (
             <button
               onClick={() => setConfirmAction({ action: 'cancel', id: appt.id })}
               disabled={updatingStatus}
@@ -1291,41 +1408,96 @@ function CallsTab({ calls, tz }) {
   );
 }
 
-function SMSTab({ messages, tz }) {
-  if (messages.length === 0) {
-    return <EmptyState icon={MessageSquare} message="No SMS messages." />;
+function SMSTab({ messages, tz, callerPhone, onMessageSent }) {
+  const [composeText, setComposeText] = useState('');
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState(null);
+
+  async function handleSend() {
+    const text = composeText.trim();
+    if (!text || !callerPhone || sending) return;
+    setSending(true);
+    setSendError(null);
+    try {
+      await apiFetch('/api/sms/send', {
+        method: 'POST',
+        body: { to: callerPhone, message: text },
+      });
+      setComposeText('');
+      onMessageSent?.();
+    } catch (err) {
+      setSendError(err.message || 'Failed to send');
+    } finally {
+      setSending(false);
+    }
   }
+
   return (
-    <div className="bg-white dark:bg-gray-900/60 rounded-2xl border border-gray-200/80 dark:border-white/5 max-h-[500px] overflow-y-auto overscroll-y-contain p-4 space-y-2" style={{ WebkitOverflowScrolling: 'touch' }}>
-      {/* Messages are newest first from API, reverse for chat order */}
-      {[...messages].reverse().map((msg) => {
-        const isOutbound = msg.direction === 'OUTBOUND';
-        return (
-          <div key={msg.id} className={`flex ${isOutbound ? 'justify-end' : 'justify-start'}`}>
-            <div
-              className={`max-w-[70%] rounded-2xl px-3 py-2 ${
-                isOutbound
-                  ? 'bg-indigo-500 text-white rounded-br-md'
-                  : 'bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white rounded-bl-md'
-              }`}
-            >
-              <div className={`flex items-center gap-1 mb-0.5 text-[10px] ${
-                isOutbound ? 'text-indigo-100' : 'text-gray-400'
-              }`}>
-                {isOutbound ? (
-                  <><ArrowUp className="w-2.5 h-2.5" /> AI</>
-                ) : (
-                  <><ArrowDown className="w-2.5 h-2.5" /> Caller</>
-                )}
+    <div className="space-y-3">
+      {messages.length === 0 ? (
+        <EmptyState icon={MessageSquare} message="No SMS messages." />
+      ) : (
+        <div className="bg-white dark:bg-gray-900/60 rounded-2xl border border-gray-200/80 dark:border-white/5 max-h-[400px] overflow-y-auto overscroll-y-contain p-4 space-y-2" style={{ WebkitOverflowScrolling: 'touch' }}>
+          {[...messages].reverse().map((msg) => {
+            const isOutbound = msg.direction === 'OUTBOUND';
+            const isAdmin = msg.sender_type === 'admin';
+            return (
+              <div key={msg.id} className={`flex ${isOutbound ? 'justify-end' : 'justify-start'}`}>
+                <div
+                  className={`max-w-[70%] rounded-2xl px-3 py-2 ${
+                    isOutbound
+                      ? isAdmin
+                        ? 'bg-emerald-500 text-white rounded-br-md'
+                        : 'bg-indigo-500 text-white rounded-br-md'
+                      : 'bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white rounded-bl-md'
+                  }`}
+                >
+                  <div className={`flex items-center gap-1 mb-0.5 text-[10px] ${
+                    isOutbound ? 'text-white/60' : 'text-gray-400'
+                  }`}>
+                    {isOutbound ? (
+                      <><ArrowUp className="w-2.5 h-2.5" /> {isAdmin ? 'You' : 'AI'}</>
+                    ) : (
+                      <><ArrowDown className="w-2.5 h-2.5" /> Caller</>
+                    )}
+                  </div>
+                  <p className="text-sm whitespace-pre-wrap break-words">{msg.body}</p>
+                  <p className={`text-[10px] mt-1 ${isOutbound ? 'text-white/50' : 'text-gray-400'}`}>
+                    {msg.created_at ? formatDateTime(msg.created_at, tz) : ''}
+                  </p>
+                </div>
               </div>
-              <p className="text-sm whitespace-pre-wrap break-words">{msg.body}</p>
-              <p className={`text-[10px] mt-1 ${isOutbound ? 'text-indigo-200' : 'text-gray-400'}`}>
-                {msg.created_at ? formatDateTime(msg.created_at, tz) : ''}
-              </p>
-            </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Compose */}
+      {callerPhone && (
+        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-3 space-y-2">
+          <textarea
+            value={composeText}
+            onChange={(e) => setComposeText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleSend();
+            }}
+            placeholder="Type a message…"
+            rows={2}
+            className="w-full resize-none text-sm bg-transparent text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none"
+          />
+          {sendError && <p className="text-xs text-red-500">{sendError}</p>}
+          <div className="flex justify-end">
+            <button
+              onClick={handleSend}
+              disabled={!composeText.trim() || sending}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-500 text-white rounded-lg text-xs font-medium hover:bg-indigo-600 disabled:opacity-50 transition-colors"
+            >
+              <Send className="w-3.5 h-3.5" />
+              {sending ? 'Sending…' : 'Send'}
+            </button>
           </div>
-        );
-      })}
+        </div>
+      )}
     </div>
   );
 }

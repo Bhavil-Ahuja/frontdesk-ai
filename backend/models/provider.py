@@ -36,10 +36,10 @@ class Provider(Base):
     # e.g. ["consultation", "follow_up"]  — empty list means ALL types
     appointment_types = Column(JSONB, nullable=False, default=list)
 
-    # Maximum concurrent appointments this provider can handle at the same time.
-    # e.g., 2 means they can see 2 callers simultaneously in overlapping slots.
+    # How many appointments can be booked into the same time slot.
+    # e.g., 2 means the provider can see 2 callers simultaneously in overlapping slots.
     # Default 1 = single-booking (classic one-at-a-time scheduling).
-    max_concurrent = Column(Integer, nullable=False, default=1)
+    slot_capacity = Column(Integer, nullable=False, default=1)
 
     # Optional Google Calendar ID for this specific provider.
     # If null, uses the tenant's primary calendar.

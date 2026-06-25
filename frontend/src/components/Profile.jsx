@@ -17,6 +17,7 @@ import { useAuth } from '../contexts/AuthContext';
 
 export default function Profile() {
   const { user, refreshUser, isAdmin } = useAuth();
+  const tz = user?.timezone || 'America/Chicago';
   const [name, setName] = useState(user?.name || '');
   const [businessName, setBusinessName] = useState(user?.business_name || '');
   const [saving, setSaving] = useState(false);
@@ -320,7 +321,7 @@ export default function Profile() {
                   </p>
                   <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
                     by {log.changed_by} &middot;{' '}
-                    {log.created_at ? new Date(log.created_at).toLocaleString() : '—'}
+                    {log.created_at ? new Date(log.created_at).toLocaleString('en-US', { timeZone: tz, month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—'}
                   </p>
                 </div>
               </div>

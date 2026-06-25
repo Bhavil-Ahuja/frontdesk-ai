@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import { useModal } from '../contexts/ModalContext';
+import ThemedTimePicker from './ui/ThemedTimePicker';
 
 const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 
@@ -50,7 +51,7 @@ const EMPTY_PROVIDER = {
   title: '',
   appointment_types: [],
   calendar_id: '',
-  max_concurrent: '1',
+  slot_capacity: '1',
   business_hours_override: null,
   subject: '',
   demo_time_slots: {},
@@ -105,7 +106,7 @@ export default function ProviderManager() {
       title: provider.title || '',
       appointment_types: provider.appointment_types || [],
       calendar_id: provider.calendar_id || '',
-      max_concurrent: String(provider.max_concurrent || 1),
+      slot_capacity: String(provider.slot_capacity || 1),
       business_hours_override: provider.business_hours_override || null,
       subject: provider.subject || '',
       // Handle legacy array format gracefully — reset to empty dict
@@ -132,7 +133,7 @@ export default function ProviderManager() {
         title: form.title.trim() || null,
         appointment_types: form.appointment_types.filter((t) => t.toLowerCase() !== 'consultation').length > 0 ? form.appointment_types.filter((t) => t.toLowerCase() !== 'consultation') : null,
         calendar_id: form.calendar_id.trim() || null,
-        max_concurrent: parseInt(form.max_concurrent, 10) || 1,
+        slot_capacity: parseInt(form.slot_capacity, 10) || 1,
         business_hours_override: form.business_hours_override,
         subject: form.subject.trim() || null,
         demo_time_slots: Object.values(form.demo_time_slots || {}).some((v) => v && v.length > 0) ? form.demo_time_slots : null,
@@ -309,17 +310,17 @@ export default function ProviderManager() {
           </div>
 
 
-          {/* Max Concurrent Appointments */}
+          {/* Slot Capacity */}
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5 flex items-center gap-1.5">
               <Users className="w-4 h-4 text-gray-400" />
-              Max Concurrent Appointments
+              Slot Capacity
             </label>
             <input
               type="text"
               inputMode="numeric"
-              value={form.max_concurrent}
-              onChange={(e) => setForm((f) => ({ ...f, max_concurrent: e.target.value.replace(/[^0-9]/g, '') }))}
+              value={form.slot_capacity}
+              onChange={(e) => setForm((f) => ({ ...f, slot_capacity: e.target.value.replace(/[^0-9]/g, '') }))}
               className="w-24 px-4 py-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:bg-gray-700 dark:text-white"
             />
             <p className="text-xs text-gray-400 mt-1">
@@ -395,7 +396,7 @@ export default function ProviderManager() {
                           </button>
                           {isOpen && (
                             <>
-                              <TimeSelect
+                              <ThemedTimePicker
                                 value={hours.open}
                                 onChange={(val) => {
                                   const bh = { ...form.business_hours_override };
@@ -404,7 +405,7 @@ export default function ProviderManager() {
                                 }}
                               />
                               <span className="text-gray-400 text-xs">to</span>
-                              <TimeSelect
+                              <ThemedTimePicker
                                 value={hours.close}
                                 onChange={(val) => {
                                   const bh = { ...form.business_hours_override };
@@ -423,7 +424,7 @@ export default function ProviderManager() {
                     <div className="ml-20 flex flex-wrap items-center gap-2">
                       {daySlots.map((window, idx) => (
                         <div key={idx} className="flex items-center gap-1">
-                          <TimeSelect
+                          <ThemedTimePicker
                             value={window.start}
                             onChange={(val) => {
                               const slots = [...daySlots];
@@ -432,7 +433,7 @@ export default function ProviderManager() {
                             }}
                           />
                           <span className="text-gray-400 text-xs">→</span>
-                          <TimeSelect
+                          <ThemedTimePicker
                             value={window.end}
                             onChange={(val) => {
                               const slots = [...daySlots];
@@ -558,9 +559,9 @@ export default function ProviderManager() {
                       ) : (
                         <span className="text-xs text-gray-400 italic">All appointment types</span>
                       )}
-                      {(p.max_concurrent || 1) > 1 && (
+                      {(p.slot_capacity || 1) > 1 && (
                         <span className="text-xs text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 px-2 py-0.5 rounded-full">
-                          {p.max_concurrent} concurrent
+                          {p.slot_capacity} slots
                         </span>
                       )}
                       {p.subject && (

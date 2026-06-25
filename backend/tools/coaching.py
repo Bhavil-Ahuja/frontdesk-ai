@@ -159,7 +159,7 @@ class CoachingToolProvider:
                         "batch_id": at.get("code", ""),
                         "course": at_name,
                         "duration_minutes": at.get("duration_minutes", 60),
-                        "max_concurrent": at.get("max_concurrent", 1),
+                        "slot_capacity": at.get("slot_capacity", 1),
                         "note": "Contact us to confirm seat availability.",
                     })
 

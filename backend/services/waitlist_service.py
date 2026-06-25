@@ -96,7 +96,7 @@ async def add_to_waitlist(
             tz = ZoneInfo(DEFAULT_TIMEZONE)
         today_local = datetime.now(tz).date()
     except Exception:
-        today_local = datetime.utcnow().date()
+        today_local = datetime.now(timezone.utc).date()
 
     if target_date < today_local:
         friendly = target_date.strftime("%A, %B %d")
@@ -426,6 +426,7 @@ async def get_waitlist_entries(
     return [
         {
             "id": str(e.id),
+            "caller_id": str(e.caller_id) if e.caller_id else None,
             "student_name": e.student_name,
             "student_phone": e.student_phone,
             "student_email": e.student_email,
@@ -438,6 +439,7 @@ async def get_waitlist_entries(
             "status": e.status.value if e.status else None,
             "notified_at": e.notified_at.isoformat() if e.notified_at else None,
             "booked_at": e.booked_at.isoformat() if e.booked_at else None,
+            "appointment_scheduled_at": e.appointment_scheduled_at.isoformat() if e.appointment_scheduled_at else None,
             "expires_at": e.expires_at.isoformat() if e.expires_at else None,
             "created_at": e.created_at.isoformat() if e.created_at else None,
             "is_test": e.is_test or False,
@@ -949,8 +951,27 @@ async def promote_to_appointment(
         entry_provider_id = entry.provider_id
         entry_is_test = entry.is_test or False
 
-    # Book the appointment through the same path the AI uses
+    # Book the appointment through the same path the AI uses.
+    # The admin UI sends a naive datetime (e.g. "2026-06-26T14:00:00") that is
+    # in the tenant's LOCAL timezone, not UTC. Attach the tenant tz here so
+    # create_native_booking converts it correctly to UTC for storage. Without
+    # this, a naive string is assumed UTC → calendar shows wrong time (e.g.
+    # 2 PM local becomes 7:30 PM IST when displayed back).
     booking_start = scheduled_at
+    try:
+        _bs_dt = datetime.fromisoformat(booking_start)
+        if _bs_dt.tzinfo is None:
+            from zoneinfo import ZoneInfo as _ZI
+            from backend.defaults import DEFAULT_TIMEZONE as _DT
+            _tz_name = getattr(tenant_ctx, "timezone", None) if tenant_ctx else None
+            try:
+                _bs_dt = _bs_dt.replace(tzinfo=_ZI(_tz_name or _DT))
+            except Exception:
+                _bs_dt = _bs_dt.replace(tzinfo=_ZI(_DT))
+            booking_start = _bs_dt.isoformat()
+    except (ValueError, TypeError):
+        pass  # leave booking_start as-is; create_native_booking will catch parse errors
+
     try:
         booking = await calendar_service.book_appointment(
             caller_info=caller_info,
@@ -976,7 +997,8 @@ async def promote_to_appointment(
     if isinstance(booking, dict) and booking.get("status") == "CONFLICT":
         if force:
             try:
-                forced_dt = datetime.fromisoformat(scheduled_at)
+                # Use booking_start (already tz-aware with tenant tz) not raw scheduled_at
+                forced_dt = datetime.fromisoformat(booking_start)
                 if forced_dt.tzinfo is None:
                     forced_dt = forced_dt.replace(tzinfo=timezone.utc)
                 # Walk forward by a few seconds at a time until the unique
@@ -1032,8 +1054,17 @@ async def promote_to_appointment(
             )
             return None
 
-    # Mark the entry BOOKED
+    # Mark the entry BOOKED; record the actual appointment time for display
     now = datetime.now(timezone.utc)
+    try:
+        appt_dt = datetime.fromisoformat(booking_start)
+        if appt_dt.tzinfo is None:
+            appt_dt = appt_dt.replace(tzinfo=timezone.utc)
+        else:
+            appt_dt = appt_dt.astimezone(timezone.utc)
+    except (ValueError, TypeError):
+        appt_dt = None
+
     async with async_session() as session:
         result = await session.execute(
             select(WaitlistEntry).where(WaitlistEntry.id == entry_id)
@@ -1042,6 +1073,7 @@ async def promote_to_appointment(
         if entry:
             entry.status = WaitlistStatus.BOOKED
             entry.booked_at = now
+            entry.appointment_scheduled_at = appt_dt
             await session.commit()
 
     # SMS the caller about the promotion (use the time we actually booked,

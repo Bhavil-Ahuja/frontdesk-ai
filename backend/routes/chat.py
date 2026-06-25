@@ -138,12 +138,21 @@ async def chat_stream(
         except Exception as exc:
             logger.warning("[Chat] Name lookup failed for %s: %s", caller_phone, exc)
 
+        # Pre-fetch providers so the system prompt can inject authoritative demo subjects
+        providers: list[dict] = []
+        try:
+            from backend.services import provider_service as _ps
+            providers = await _ps.list_providers(tenant_ctx.tenant_id)
+        except Exception as exc:
+            logger.warning("[Chat] Provider fetch failed: %s", exc)
+
         llm_service.create_session(
             session_key,
             caller_number=caller_phone,
             tenant_ctx=tenant_ctx,
             caller_name=caller_name,
             is_test=True,  # Test Agent chat — flag all created data as test
+            providers=providers,
         )
         logger.info("[Chat] Pre-created session: phone=%s name=%s",
                     caller_phone, caller_name or "new caller")

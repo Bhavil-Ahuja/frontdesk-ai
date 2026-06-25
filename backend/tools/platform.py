@@ -36,6 +36,31 @@ from backend.services import calendar_service, sms_service
 logger = logging.getLogger(__name__)
 
 
+# ── Timezone-aware display formatting ────────────────────────────────────────
+
+def _fmt_slot_display(slot_time_str: str, tz_name: str) -> tuple[str, str]:
+    """Convert a slot ISO string to (display_time, display_date) in the tenant timezone.
+
+    Returns e.g. ("10:00 AM", "Friday, Jun 27") — safe for the LLM to say verbatim.
+    Never raises; falls back to the raw string on parse failure.
+    """
+    try:
+        from zoneinfo import ZoneInfo
+        from dateutil import parser as _dtp
+        tz = ZoneInfo(tz_name or DEFAULT_TIMEZONE)
+        dt = _dtp.parse(slot_time_str)
+        # Ensure we're in tenant timezone regardless of embedded offset
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(tz)
+        else:
+            dt = dt.replace(tzinfo=tz)
+        display_time = dt.strftime("%-I:%M %p")   # "10:00 AM" — no leading zero
+        display_date = dt.strftime("%A, %B %d")   # "Friday, June 27"
+        return display_time, display_date
+    except Exception:
+        return slot_time_str, ""
+
+
 # ── Tool schemas (OpenAI function-calling format) ─────────────────────────────
 
 TOOL_SCHEMAS: list[dict] = [
@@ -907,7 +932,7 @@ class PlatformToolProvider:
         date = args.get("date", "")
         if not date:
             from datetime import timedelta
-            date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+            date = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
 
         # ── Date correction: resolve user's day-of-week to actual date ──
         if session:
@@ -987,7 +1012,7 @@ class PlatformToolProvider:
             tenant_id=tenant_ctx.tenant_id if tenant_ctx else None,
             business_hours=tenant_ctx.business_hours if tenant_ctx else None,
             tz_name=office_tz_name,
-            max_concurrent=max_conc,
+            slot_capacity=max_conc,
             provider_id=provider_uuid,
             holidays=(tenant_ctx.holidays if tenant_ctx and getattr(tenant_ctx, "holidays", None) else None),
             exclude_booking_uid=exclude_uid,
@@ -1064,25 +1089,18 @@ class PlatformToolProvider:
         for slot_data in provider_slots:
             slot_time = slot_data.get("time", "")
             available_provs = slot_data.get("available_providers", [])
-            try:
-                from dateutil import parser as dt_parser
-                dt = dt_parser.parse(slot_time)
-                time_label = dt.strftime("%I:%M %p").lstrip("0")
-                if _tz_abbr:
-                    time_label += f" {_tz_abbr}"
-                formatted_slots.append({
-                    "time_label": time_label,
-                    "exact_slot_time": slot_time,
-                    "available_providers": available_provs,
-                    "duration_minutes": slot_data.get("duration_minutes"),
-                })
-            except Exception:
-                formatted_slots.append({
-                    "time_label": slot_time,
-                    "exact_slot_time": slot_time,
-                    "available_providers": available_provs,
-                    "duration_minutes": slot_data.get("duration_minutes"),
-                })
+            display_time, display_date = _fmt_slot_display(slot_time, office_tz_name)
+            time_label = display_time
+            if _tz_abbr and display_time != slot_time:
+                time_label += f" {_tz_abbr}"
+            formatted_slots.append({
+                "time_label": time_label,
+                "display_time": display_time,
+                "display_date": display_date,
+                "exact_slot_time": slot_time,
+                "available_providers": available_provs,
+                "duration_minutes": slot_data.get("duration_minutes"),
+            })
 
         try:
             from dateutil import parser as dt_parser
@@ -1260,7 +1278,7 @@ class PlatformToolProvider:
                 tenant_id=tenant_ctx.tenant_id if tenant_ctx else None,
                 business_hours=tenant_ctx.business_hours if tenant_ctx else None,
                 tz_name=office_tz_name,
-                max_concurrent=max_conc,
+                slot_capacity=max_conc,
                 provider_id=provider_uuid,
                 holidays=holidays,
                 appointment_type=appt_type,
@@ -1291,16 +1309,14 @@ class PlatformToolProvider:
             for slot_data in raw_slots[:5]:
                 slot_time = slot_data.get("time", "")
                 available_provs = slot_data.get("available_providers", [])
-                try:
-                    from dateutil import parser as _dtp
-                    _dt = _dtp.parse(slot_time)
-                    time_label = _dt.strftime("%I:%M %p").lstrip("0")
-                    if _tz_abbr:
-                        time_label += f" {_tz_abbr}"
-                except Exception:
-                    time_label = slot_time
+                display_time, display_date = _fmt_slot_display(slot_time, office_tz_name)
+                time_label = display_time
+                if _tz_abbr and display_time != slot_time:
+                    time_label += f" {_tz_abbr}"
                 formatted.append({
                     "time_label": time_label,
+                    "display_time": display_time,
+                    "display_date": display_date,
                     "exact_slot_time": slot_time,
                     "available_providers": available_provs,
                     "duration_minutes": slot_data.get("duration_minutes"),
@@ -1442,7 +1458,7 @@ class PlatformToolProvider:
             requested_dt = dt_parser.parse(slot_time)
             target_hour = requested_dt.hour
             target_minute = requested_dt.minute
-            correct_date = requested_dt.replace(year=datetime.now().year)
+            correct_date = requested_dt.replace(year=datetime.now(timezone.utc).year)
             date_str = correct_date.strftime("%Y-%m-%d")
 
             available = await calendar_service.get_available_slots(
@@ -1474,6 +1490,132 @@ class PlatformToolProvider:
                 logger.warning("[Call %s] No slot match found — using original: %s", call_id, slot_time)
         except Exception as match_exc:
             logger.warning("[Call %s] Slot matching failed: %s — using original", call_id, match_exc)
+
+        # ── Demo class checks (coaching institutes only) ──────────────────────
+        if "demo" in appt_type.lower() and tenant_ctx:
+            _demo_tenant_id = getattr(tenant_ctx, "tenant_id", None)
+            _demo_kb = getattr(tenant_ctx, "knowledge_base", None) or {}
+            _demo_max = _demo_kb.get("max_demo_classes_per_student")
+            _demo_raw_phone = args.get("phone", "")
+
+            try:
+                from backend.services import caller_service as _cs_demo
+                _demo_phone = _cs_demo._normalise_phone(_demo_raw_phone)
+            except Exception:
+                _demo_phone = _demo_raw_phone
+
+            if _demo_tenant_id and _demo_phone:
+                try:
+                    from backend.database import async_session as _get_demo_session
+                    from sqlalchemy import select as _sa_sel, func as _sa_fn, and_ as _sa_and
+                    from backend.models.appointment import (
+                        Appointment as _DemoAppt, AppointmentStatus as _DemoStatus,
+                    )
+                    from backend.models.caller import Caller as _DemoCaller
+                    from dateutil import parser as _dtp_demo
+                    from datetime import timedelta as _td_demo
+
+                    # Resolve slot to UTC for window comparison
+                    _demo_slot_dt = _dtp_demo.parse(slot_time)
+                    if _demo_slot_dt.tzinfo is None:
+                        from zoneinfo import ZoneInfo as _DemoZI
+                        _demo_slot_dt = _demo_slot_dt.replace(
+                            tzinfo=_DemoZI(tenant_ctx.timezone or DEFAULT_TIMEZONE)
+                        )
+                    _demo_slot_utc = _demo_slot_dt.astimezone(timezone.utc)
+
+                    # Slot duration (for overlap window)
+                    _demo_dur = 60
+                    for _demo_at in (getattr(tenant_ctx, "appointment_types", None) or []):
+                        if _demo_at.get("code") == appt_type:
+                            _demo_dur = int(_demo_at.get("duration_minutes", 60))
+                            break
+                    _demo_slot_end_utc = _demo_slot_utc + _td_demo(minutes=_demo_dur)
+
+                    # Shared base: this phone × this tenant × any demo type
+                    _demo_base = [
+                        _DemoAppt.student_phone == _demo_phone,
+                        _DemoCaller.tenant_id == _demo_tenant_id,
+                        _DemoAppt.appointment_type.ilike("%demo%"),
+                    ]
+
+                    async with _get_demo_session() as _demo_db:
+                        # 1. Overlap check: existing CONFIRMED demo whose window
+                        #    intersects [slot_start, slot_end).  Uses symmetric window
+                        #    so a demo that starts before but ends after slot_start is caught.
+                        _overlap_q = (
+                            _sa_sel(_sa_fn.count())
+                            .select_from(_DemoAppt)
+                            .join(_DemoCaller, _DemoAppt.caller_id == _DemoCaller.id)
+                            .where(
+                                _sa_and(
+                                    *_demo_base,
+                                    _DemoAppt.status == _DemoStatus.CONFIRMED,
+                                    # existing.start < new_end  AND  existing.start > new_start - duration
+                                    _DemoAppt.scheduled_at < _demo_slot_end_utc,
+                                    _DemoAppt.scheduled_at > _demo_slot_utc - _td_demo(minutes=_demo_dur),
+                                )
+                            )
+                        )
+                        _demo_overlap = (await _demo_db.execute(_overlap_q)).scalar() or 0
+                        if _demo_overlap > 0:
+                            logger.warning(
+                                "[Call %s] Demo overlap blocked — phone=%s already has demo at %s",
+                                call_id, _demo_phone, slot_time,
+                            )
+                            return {
+                                "ok": False,
+                                "error": "demo_overlap",
+                                "summary_for_assistant": (
+                                    "This student already has a demo class scheduled at that time. "
+                                    "Inform them they cannot attend two demo sessions simultaneously "
+                                    "and offer a different available time slot."
+                                ),
+                            }
+
+                        # 2. Max demo count check
+                        if _demo_max is not None:
+                            try:
+                                _demo_max_int = int(_demo_max)
+                            except (ValueError, TypeError):
+                                _demo_max_int = None
+
+                            if _demo_max_int and _demo_max_int > 0:
+                                _count_q = (
+                                    _sa_sel(_sa_fn.count())
+                                    .select_from(_DemoAppt)
+                                    .join(_DemoCaller, _DemoAppt.caller_id == _DemoCaller.id)
+                                    .where(
+                                        _sa_and(
+                                            *_demo_base,
+                                            _DemoAppt.status.in_(
+                                                [_DemoStatus.CONFIRMED, _DemoStatus.COMPLETED]
+                                            ),
+                                        )
+                                    )
+                                )
+                                _demo_count = (await _demo_db.execute(_count_q)).scalar() or 0
+                                if _demo_count >= _demo_max_int:
+                                    logger.warning(
+                                        "[Call %s] Demo limit reached — phone=%s has %d/%d demos",
+                                        call_id, _demo_phone, _demo_count, _demo_max_int,
+                                    )
+                                    return {
+                                        "ok": False,
+                                        "error": "demo_limit_reached",
+                                        "summary_for_assistant": (
+                                            f"This student has already attended {_demo_count} demo "
+                                            f"class(es), which is the maximum of {_demo_max_int} allowed. "
+                                            "Politely let them know that no additional demo sessions "
+                                            "are available for them. Offer to connect them with a "
+                                            "counsellor who can discuss enrollment directly — use "
+                                            "escalate_to_human to transfer them."
+                                        ),
+                                    }
+                except Exception as _demo_chk_exc:
+                    logger.warning(
+                        "[Call %s] Demo class check failed (non-blocking): %s", call_id, _demo_chk_exc
+                    )
 
         booking_notes = args.get("notes", "").strip() or None
         result = await calendar_service.book_appointment(
@@ -1580,12 +1722,9 @@ class PlatformToolProvider:
 
             elapsed = (time.time() - t0) * 1000
             logger.info("[Call %s] book_appointment → SUCCESS in %.0fms: %s", call_id, elapsed, result)
-            try:
-                booked_dt = datetime.fromisoformat(slot_time)
-                time_str = booked_dt.strftime("%I:%M %p").lstrip("0")
-                date_str = booked_dt.strftime("%A, %B %d")
-            except Exception:
-                time_str = slot_time
+            tenant_tz_name = tenant_ctx.timezone if tenant_ctx else DEFAULT_TIMEZONE
+            time_str, date_str = _fmt_slot_display(slot_time, tenant_tz_name)
+            if not date_str:
                 date_str = "the requested date"
 
             provider_msg = f" with {provider_name}" if provider_name else ""
@@ -1629,6 +1768,81 @@ class PlatformToolProvider:
                     "Ask the caller for these details."
                 ),
             }
+
+        # ── Demo reschedule overlap check ──────────────────────────────────────
+        if tenant_ctx and getattr(tenant_ctx, "tenant_id", None):
+            try:
+                from backend.database import async_session as _get_rs_session
+                from sqlalchemy import select as _sa_rs_sel, func as _sa_rs_fn, and_ as _sa_rs_and
+                from backend.models.appointment import (
+                    Appointment as _RsAppt, AppointmentStatus as _RsStatus,
+                )
+                from backend.models.caller import Caller as _RsCaller
+                from dateutil import parser as _dtp_rs
+                from datetime import timedelta as _td_rs
+
+                async with _get_rs_session() as _rs_db:
+                    # Look up the existing appointment to get phone + type
+                    _rs_existing = (
+                        await _rs_db.execute(
+                            _sa_rs_sel(_RsAppt).where(_RsAppt.cal_booking_uid == booking_uid)
+                        )
+                    ).scalar_one_or_none()
+
+                    if _rs_existing and "demo" in (_rs_existing.appointment_type or "").lower():
+                        _rs_phone = _rs_existing.student_phone  # already stored normalised
+
+                        _rs_new_dt = _dtp_rs.parse(new_slot_time)
+                        if _rs_new_dt.tzinfo is None:
+                            from zoneinfo import ZoneInfo as _RsZI
+                            _rs_new_dt = _rs_new_dt.replace(
+                                tzinfo=_RsZI(tenant_ctx.timezone or DEFAULT_TIMEZONE)
+                            )
+                        _rs_new_utc = _rs_new_dt.astimezone(timezone.utc)
+
+                        _rs_dur = 60
+                        for _rs_at in (getattr(tenant_ctx, "appointment_types", None) or []):
+                            if _rs_at.get("code") == _rs_existing.appointment_type:
+                                _rs_dur = int(_rs_at.get("duration_minutes", 60))
+                                break
+                        _rs_new_end_utc = _rs_new_utc + _td_rs(minutes=_rs_dur)
+
+                        _rs_overlap_q = (
+                            _sa_rs_sel(_sa_rs_fn.count())
+                            .select_from(_RsAppt)
+                            .join(_RsCaller, _RsAppt.caller_id == _RsCaller.id)
+                            .where(
+                                _sa_rs_and(
+                                    _RsAppt.student_phone == _rs_phone,
+                                    _RsCaller.tenant_id == tenant_ctx.tenant_id,
+                                    _RsAppt.appointment_type.ilike("%demo%"),
+                                    _RsAppt.status == _RsStatus.CONFIRMED,
+                                    _RsAppt.cal_booking_uid != booking_uid,  # exclude current
+                                    _RsAppt.scheduled_at < _rs_new_end_utc,
+                                    _RsAppt.scheduled_at > _rs_new_utc - _td_rs(minutes=_rs_dur),
+                                )
+                            )
+                        )
+                        _rs_overlap = (await _rs_db.execute(_rs_overlap_q)).scalar() or 0
+                        if _rs_overlap > 0:
+                            logger.warning(
+                                "[Call %s] Demo reschedule overlap blocked — phone=%s already has demo at %s",
+                                call_id, _rs_phone, new_slot_time,
+                            )
+                            return {
+                                "success": False,
+                                "error": "demo_overlap",
+                                "summary_for_assistant": (
+                                    "This student already has another demo class at that time. "
+                                    "Let them know and offer a different available time slot."
+                                ),
+                            }
+            except Exception as _rs_demo_exc:
+                logger.warning(
+                    "[Call %s] Demo reschedule overlap check failed (non-blocking): %s",
+                    call_id, _rs_demo_exc,
+                )
+
         result = await calendar_service.reschedule_appointment(
             booking_uid=booking_uid,
             new_start_time=new_slot_time,
@@ -1670,13 +1884,9 @@ class PlatformToolProvider:
 
             elapsed = (time.time() - t0) * 1000
             logger.info("[Call %s] reschedule → SUCCESS in %.0fms", call_id, elapsed)
-            try:
-                from dateutil import parser as _rp
-                new_dt = _rp.parse(new_slot_time)
-                new_time_str = new_dt.strftime("%I:%M %p").lstrip("0")
-                new_date_str = new_dt.strftime("%A, %B %d")
-            except Exception:
-                new_time_str = new_slot_time
+            _reschedule_tz = tenant_ctx.timezone if tenant_ctx else DEFAULT_TIMEZONE
+            new_time_str, new_date_str = _fmt_slot_display(new_slot_time, _reschedule_tz)
+            if not new_date_str:
                 new_date_str = "the new date"
             return {
                 "success": True,
@@ -1716,7 +1926,7 @@ class PlatformToolProvider:
                     sms_service.send_cancellation(
                         caller_name=caller_name_for_sms,
                         phone=caller_phone,
-                        scheduled_at=datetime.now(),
+                        scheduled_at=datetime.now(timezone.utc),
                         tenant_ctx=tenant_ctx,
                         is_test=is_test,
                     )

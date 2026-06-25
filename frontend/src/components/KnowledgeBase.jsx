@@ -17,6 +17,7 @@ import {
 import { apiFetch } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 import ThemedDatePicker from './ui/ThemedDatePicker';
+import ThemedTimePicker from './ui/ThemedTimePicker';
 import PhoneInput, { countryFromTimezone } from './ui/PhoneInput';
 
 const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
@@ -263,26 +264,24 @@ export default function KnowledgeBase() {
                 </button>
                 {isOpen && (
                   <>
-                    <input
-                      type="time"
+                    <ThemedTimePicker
                       value={hours.open}
-                      onChange={(e) => {
+                      onChange={(val) => {
                         const bh = { ...config.business_hours };
-                        bh[day] = { ...bh[day], open: e.target.value };
+                        bh[day] = { ...bh[day], open: val };
                         updateConfig('business_hours', bh);
                       }}
-                      className="px-3 py-1.5 border border-gray-200 dark:border-white/10 rounded-xl text-sm bg-gray-50 dark:bg-white/5 dark:text-white focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 outline-none transition-all"
+                      minuteStep={30}
                     />
-                    <span className="text-gray-400">to</span>
-                    <input
-                      type="time"
+                    <span className="text-gray-400 text-sm">to</span>
+                    <ThemedTimePicker
                       value={hours.close}
-                      onChange={(e) => {
+                      onChange={(val) => {
                         const bh = { ...config.business_hours };
-                        bh[day] = { ...bh[day], close: e.target.value };
+                        bh[day] = { ...bh[day], close: val };
                         updateConfig('business_hours', bh);
                       }}
-                      className="px-3 py-1.5 border border-gray-200 dark:border-white/10 rounded-xl text-sm bg-gray-50 dark:bg-white/5 dark:text-white focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 outline-none transition-all"
+                      minuteStep={30}
                     />
                   </>
                 )}
@@ -327,7 +326,7 @@ export default function KnowledgeBase() {
             type="button"
             onClick={() => {
               const types = [...(config.appointment_types || [])];
-              types.push({ code: '', name: '', duration_minutes: 60, max_concurrent: 1 });
+              types.push({ code: '', name: '', duration_minutes: 60, slot_capacity: 1 });
               updateConfig('appointment_types', types);
             }}
             className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-indigo-700 dark:text-indigo-400 bg-indigo-100 dark:bg-indigo-900/40 rounded-lg hover:bg-indigo-200 dark:hover:bg-indigo-900/60 transition-colors"
@@ -377,15 +376,15 @@ export default function KnowledgeBase() {
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Max Concurrent</label>
+                    <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Slot Capacity</label>
                     <input
                       type="text"
                       inputMode="numeric"
-                      value={at.max_concurrent ?? ''}
+                      value={at.slot_capacity ?? ''}
                       onChange={(e) => {
                         const raw = e.target.value.replace(/[^0-9]/g, '');
                         const types = [...(config.appointment_types || [])];
-                        types[idx] = { ...types[idx], max_concurrent: raw === '' ? '' : parseInt(raw, 10) };
+                        types[idx] = { ...types[idx], slot_capacity: raw === '' ? '' : parseInt(raw, 10) };
                         updateConfig('appointment_types', types);
                       }}
                       className="w-full px-3 py-2 border border-gray-200 dark:border-white/10 rounded-xl text-sm bg-gray-50 dark:bg-white/5 dark:text-white focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 outline-none transition-all"
@@ -507,6 +506,34 @@ export default function KnowledgeBase() {
                 </div>
               ))
             )}
+          </div>
+
+          {/* Demo class limit */}
+          <div className="px-5 py-4 border-t border-blue-100 dark:border-blue-900/40 bg-blue-50/50 dark:bg-blue-900/10">
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+              <div className="flex-1">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-0.5">
+                  Max demo classes per student
+                </label>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  The AI will block booking and escalate to a counsellor once a student reaches this limit. Leave blank for no limit.
+                </p>
+              </div>
+              <input
+                type="number"
+                min="1"
+                max="99"
+                value={config.max_demo_classes_per_student ?? ''}
+                onChange={(e) =>
+                  updateConfig(
+                    'max_demo_classes_per_student',
+                    e.target.value === '' ? null : Math.max(1, parseInt(e.target.value, 10) || 1),
+                  )
+                }
+                placeholder="e.g. 2"
+                className="w-24 px-3 py-2 border border-gray-200 dark:border-white/10 rounded-xl text-sm bg-gray-50 dark:bg-white/5 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 outline-none transition-all text-center [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+              />
+            </div>
           </div>
         </div>
       )}

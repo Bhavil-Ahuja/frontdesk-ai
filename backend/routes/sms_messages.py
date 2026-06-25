@@ -89,6 +89,7 @@ async def list_conversations(
 
             conversations.append({
                 "student_phone": row.caller_phone,
+                "caller_id": str(row.caller_id) if row.caller_id else None,
                 "caller_name": row.caller_name,
                 "message_count": row.message_count,
                 "last_message_at": row.last_message_at.isoformat() if row.last_message_at else None,

@@ -73,9 +73,10 @@ class WaitlistEntry(Base):
 
     # Lifecycle
     status = Column(Enum(WaitlistStatus), nullable=False, default=WaitlistStatus.WAITING)
-    notified_at = Column(DateTime(timezone=True), nullable=True)    # When we texted them
-    booked_at = Column(DateTime(timezone=True), nullable=True)      # When they confirmed
-    expires_at = Column(DateTime(timezone=True), nullable=True)     # Auto-expire after preferred date
+    notified_at = Column(DateTime(timezone=True), nullable=True)             # When we texted them
+    booked_at = Column(DateTime(timezone=True), nullable=True)               # When they confirmed
+    appointment_scheduled_at = Column(DateTime(timezone=True), nullable=True)  # Booked appointment time
+    expires_at = Column(DateTime(timezone=True), nullable=True)              # Auto-expire after preferred date
 
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 

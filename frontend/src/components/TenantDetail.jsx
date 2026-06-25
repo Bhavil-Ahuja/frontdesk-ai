@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import { useModal } from '../contexts/ModalContext';
+import { useAuth } from '../contexts/AuthContext';
 import {
   STATUS_CONFIG,
   STATUS_ACCENT,
@@ -47,6 +48,8 @@ export default function TenantDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { toast, confirm, prompt } = useModal();
+  const { user } = useAuth();
+  const tz = user?.timezone || 'America/Chicago';
   const [tenant, setTenant] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -278,7 +281,7 @@ export default function TenantDetail() {
               label="Member since"
               value={
                 tenant.created_at
-                  ? new Date(tenant.created_at).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
+                  ? new Date(tenant.created_at).toLocaleDateString('en-US', { timeZone: tz, month: 'short', year: 'numeric' })
                   : '—'
               }
               active={null}
@@ -586,11 +589,11 @@ function OverviewTab({ tenant }) {
           <DetailRow label="Agent Name" value={tenant.agent_name || '—'} />
           <DetailRow
             label="Created"
-            value={tenant.created_at ? new Date(tenant.created_at).toLocaleString() : '—'}
+            value={tenant.created_at ? new Date(tenant.created_at).toLocaleString('en-US', { timeZone: tz, month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—'}
           />
           <DetailRow
             label="Updated"
-            value={tenant.updated_at ? new Date(tenant.updated_at).toLocaleString() : '—'}
+            value={tenant.updated_at ? new Date(tenant.updated_at).toLocaleString('en-US', { timeZone: tz, month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—'}
           />
         </div>
 
@@ -848,7 +851,7 @@ function TenantUsageStats({ tenantId }) {
               </strong>
             </span>
             {usage.period_start && (
-              <span>Period started: {new Date(usage.period_start).toLocaleDateString()}</span>
+              <span>Period started: {new Date(usage.period_start).toLocaleDateString('en-US', { timeZone: tz, month: 'short', day: 'numeric', year: 'numeric' })}</span>
             )}
           </div>
           <UsageBar
@@ -932,7 +935,7 @@ function TenantChangeHistory({ tenantId }) {
                   )}
                 </p>
                 <p className="text-gray-400 dark:text-gray-500 mt-0.5">
-                  by {log.changed_by} · {log.created_at ? new Date(log.created_at).toLocaleString() : '—'}
+                  by {log.changed_by} · {log.created_at ? new Date(log.created_at).toLocaleString('en-US', { timeZone: tz, month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—'}
                 </p>
               </div>
             </div>

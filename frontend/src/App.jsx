@@ -138,7 +138,7 @@ function SideNavItem({ to, icon: Icon, label, onClick, collapsed }) {
       }
     >
       <Icon className="w-4 h-4 shrink-0" />
-      {!collapsed && <span className="truncate">{label}</span>}
+      {!collapsed && <span className="leading-tight min-w-0 break-words">{label}</span>}
     </NavLink>
   );
 }
@@ -172,7 +172,7 @@ function SidebarContent({ user, isAdmin, dark, toggleTheme, navigate, location, 
             <div className="w-7 h-7 rounded-lg bg-indigo-500 flex items-center justify-center shrink-0">
               <Sparkles className="w-4 h-4 text-white" />
             </div>
-            <p className="font-semibold text-gray-900 dark:text-white text-sm leading-tight truncate">
+            <p className="font-semibold text-gray-900 dark:text-white text-sm leading-tight break-words min-w-0">
               {user?.business_name || 'FrontDesk AI'}
             </p>
           </button>
@@ -411,7 +411,8 @@ function AppShell() {
           <Route path="/appointments" element={<ProtectedRoute><AppointmentManager /></ProtectedRoute>} />
           <Route path="/providers" element={<ProtectedRoute><ProviderManager /></ProtectedRoute>} />
           <Route path="/waitlist"  element={<ProtectedRoute><WaitlistView /></ProtectedRoute>} />
-          <Route path="/sms"       element={<ProtectedRoute><SMSConversations /></ProtectedRoute>} />
+          <Route path="/sms"           element={<ProtectedRoute><SMSConversations /></ProtectedRoute>} />
+          <Route path="/sms/:callerId" element={<ProtectedRoute><SMSConversations /></ProtectedRoute>} />
           <Route path="/knowledge" element={<ProtectedRoute><KnowledgeBase /></ProtectedRoute>} />
           <Route path="/settings"  element={<ProtectedRoute><AgentConfig /></ProtectedRoute>} />
           <Route path="/support"   element={<ProtectedRoute><SupportTickets /></ProtectedRoute>} />
@@ -431,6 +432,17 @@ function AppShell() {
           <Route path="*" element={<Navigate to={isAdmin ? '/admin/tenants' : '/dashboard'} replace />} />
         </Routes>
       </main>
+
+      {/* Floating Support Button — hidden on /support and /chat pages */}
+      {!['/support', '/chat'].includes(location.pathname) && (
+        <NavLink
+          to="/support"
+          title="Get support"
+          className="fixed bottom-6 right-6 z-50 w-12 h-12 rounded-full bg-indigo-600 hover:bg-indigo-700 text-white shadow-lg hover:shadow-xl flex items-center justify-center transition-all duration-200 hover:scale-110"
+        >
+          <HelpCircle className="w-5 h-5" />
+        </NavLink>
+      )}
     </div>
   );
 }
