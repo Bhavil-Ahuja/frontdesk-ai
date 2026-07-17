@@ -592,6 +592,39 @@ class FrontDeskAgent(Agent):
                 "Is there anything else I can help you with in the meantime?"
             )
 
+        # Build the correct SIP transfer URI.
+        # Exotel (and most enterprise SIP trunks) require a sip: URI in the
+        # REFER-To header — NOT a tel: URI.  tel: causes a 603 Declined
+        # "Non sip: uri" rejection from Exotel's edge proxy.
+        #
+        # The trunk hostname is in the participant's own sip.hostname attribute
+        # (e.g. "receptico2m.pstn.exotel.com").  If it's absent (e.g. a plain
+        # WebRTC test without a real SIP trunk), fall back to tel: which works
+        # for some non-Exotel setups.
+        sip_attrs = sip_participant.attributes or {}
+        sip_hostname = sip_attrs.get("sip.hostname", "")
+        if sip_hostname:
+            transfer_uri = f"sip:{destination}@{sip_hostname}"
+        else:
+            transfer_uri = f"tel:{destination}"
+            logger.warning(
+                "[VoiceAgent] sip.hostname not found in participant attrs — "
+                "falling back to tel: URI (may be rejected by some SIP trunks)"
+            )
+
+        logger.info(
+            "[VoiceAgent] Transferring SIP participant %s -> %s",
+            sip_participant.identity, transfer_uri,
+        )
+
+        async def _disconnect_after_escalation(delay: float) -> None:
+            """Give TTS time to finish speaking, then close the room."""
+            await asyncio.sleep(delay)
+            try:
+                await self._room.disconnect()
+            except Exception:
+                pass
+
         lk_client = None
         try:
             from livekit import api as lk_api
@@ -600,33 +633,30 @@ class FrontDeskAgent(Agent):
                 api_key=settings.LIVEKIT_API_KEY,
                 api_secret=settings.LIVEKIT_API_SECRET,
             )
-            logger.info(
-                "[VoiceAgent] Transferring SIP participant %s to tel:%s",
-                sip_participant.identity, destination,
-            )
             await lk_client.sip.transfer_sip_participant(
                 lk_api.TransferSIPParticipantRequest(
                     room_name=self._room.name,
                     participant_identity=sip_participant.identity,
-                    transfer_to=f"tel:{destination}",
+                    transfer_to=transfer_uri,
                 )
             )
-            logger.info("[VoiceAgent] SIP transfer succeeded -> %s", destination)
-            # Schedule room disconnect — the caller's leg has moved to the
-            # human's phone, so there is nobody left in this room.
-            async def _close_after_transfer():
-                await asyncio.sleep(2.0)
-                try:
-                    await self._room.disconnect()
-                except Exception:
-                    pass
-            asyncio.create_task(_close_after_transfer())
+            logger.info("[VoiceAgent] SIP transfer succeeded -> %s", transfer_uri)
+            # Success: caller's leg has moved — disconnect after a brief pause
+            # (2 s is enough; the room will be empty after the REFER completes).
+            asyncio.create_task(_disconnect_after_escalation(2.0))
             return "Connecting you to our team now. Please hold on."
         except Exception as e:
             logger.error("[VoiceAgent] SIP transfer failed: %s", e)
+            # Failure: speak the apology, then end the call anyway.
+            # The caller asked for a human — there is nothing left for the AI
+            # to do.  The SMS alert already fired, so the team will follow up.
+            # 15 s gives the LLM time to generate + TTS to speak the message.
+            asyncio.create_task(_disconnect_after_escalation(15.0))
             return (
-                "I tried to connect you but hit a technical issue. "
-                "I've alerted our team and they'll call you back very soon."
+                "I wasn't able to connect you directly right now, but I've "
+                "already sent an alert to our team. "
+                "Someone will call you back as soon as possible. "
+                "Thank you for your patience, and goodbye!"
             )
         finally:
             if lk_client:
