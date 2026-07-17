@@ -562,6 +562,62 @@ class FrontDeskAgent(Agent):
         )
 
 
+# ── Farewell detection — deterministic transcript check ──────────────────────
+#
+# When the ENTIRE utterance is a farewell we skip the LLM entirely, speak a
+# warm goodbye via TTS, and disconnect.  This is faster + more reliable than
+# waiting for the LLM to decide to call end_call.
+#
+# Criteria for a "farewell" utterance:
+#   1. No question mark (still asking something → not a farewell)
+#   2. Length ≤ 80 characters (long messages always have more content)
+#   3. fullmatch against _FAREWELL_RE (the whole utterance is a goodbye)
+
+_FAREWELL_RE = re.compile(
+    r"(?:"
+    # Pure goodbye words + cheers
+    r"bye(?:\s+bye)?|goodbye|good[\s\-]?bye|ta[\s\-]?ta|ciao|cheerio|cheers|so\s+long"
+    # Take care / see you (commas already stripped by _is_farewell)
+    r"|take\s+care(?:\s+(?:bye|goodbye))?"
+    r"|see\s+(?:you|ya)(?:\s+(?:later|soon|bye|tomorrow))?"
+    # Thanks / Thank you
+    r"|thanks?(?:\s+(?:so\s+much|a\s+lot|very\s+much|bye|goodbye|take\s+care|see\s+you))?"
+    r"|thank\s+(?:you|u)(?:\s+(?:so\s+much|very\s+much|bye|goodbye|take\s+care))?"
+    # Confirmation word(s) + optional thanks/bye
+    r"|(?:ok(?:ay)?|alright|great|perfect|sure|yep|right)(?:\s+(?:thanks?|thank\s+(?:you|u)|bye|goodbye))*"
+    # Wrap-up signals
+    r"|that(?:'s|s)?\s+(?:all|it|fine|okay|good)(?:\s+(?:thanks?|thank\s+(?:you|u)))?"
+    r"|(?:i(?:'m|m)?\s+)?(?:all\s+)?(?:good|fine|set|done|sorted)(?:\s+(?:thanks?|thank\s+(?:you|u)))?"
+    r"|no(?:\s*)(?:that(?:'s|s)?\s+(?:all|it)|thanks?|thank\s+(?:you|u)|more\s+(?:questions?|queries?))"
+    r"|nothing\s+(?:else|more|further)(?:\s+(?:thanks?|thank\s+(?:you|u)))?"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _is_farewell(text: str) -> bool:
+    """
+    Return True only when the ENTIRE utterance is a farewell with no stray questions.
+
+    Guards:
+    - Empty or too long -> False (real farewells are short)
+    - Contains '?' -> False (still asking something)
+    - fullmatch against _FAREWELL_RE (whole utterance must be a goodbye pattern)
+
+    Commas are treated as natural speech pauses and stripped before matching
+    (e.g. "thanks, bye" -> "thanks bye" before fullmatch).
+    """
+    if not text or "?" in text:
+        return False
+    # Strip trailing punctuation and speech-pause commas
+    cleaned = text.strip().rstrip("!.,?").strip()
+    cleaned = re.sub(r",", " ", cleaned)    # "thanks, bye" -> "thanks  bye"
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()  # collapse whitespace
+    if not cleaned or len(cleaned) > 80:
+        return False
+    return bool(_FAREWELL_RE.fullmatch(cleaned))
+
+
 # ── TTS text filter — strip leaked tool call syntax ───────────────────────────
 
 # Some models (Gemini thinking variants, smaller Ollama) occasionally emit the
@@ -723,7 +779,64 @@ async def entrypoint(ctx: JobContext):
         room_input_options=RoomInputOptions(),
     )
 
-    # Say the greeting immediately when call connects
+    # ── Farewell fast-path: bypass LLM for obvious goodbye utterances ─────────
+    # We listen for the final transcript of each user turn.  If the ENTIRE
+    # utterance is a recognised farewell phrase (short, no question mark,
+    # matches _FAREWELL_RE) we:
+    #   1. Set a flag so the LLM pipeline is not started for that turn
+    #   2. Interrupt any in-progress agent speech
+    #   3. Speak a warm, short goodbye via TTS
+    #   4. Disconnect the room after a short pause for TTS playback
+    #
+    # This guarantees call teardown in ~3 s instead of waiting for the LLM
+    # to (maybe) decide to call end_call.
+
+    _call_ended = asyncio.Event()   # guard against double-disconnect
+
+    biz_name_goodbye = (tenant_ctx.business_name if tenant_ctx else None) or "us"
+
+    async def _hangup_gracefully() -> None:
+        """Speak goodbye and disconnect.  Safe to call multiple times."""
+        if _call_ended.is_set():
+            return
+        _call_ended.set()
+        farewell_line = f"Thank you for calling {biz_name_goodbye}. Have a wonderful day! Goodbye!"
+        try:
+            session.interrupt()
+        except Exception:
+            pass
+        try:
+            # allow_interruptions=False so the caller can't restart the turn
+            await session.say(farewell_line, allow_interruptions=False)
+        except Exception:
+            pass
+        # Give Cartesia time to stream the last chunk to the caller's phone
+        await asyncio.sleep(3.5)
+        try:
+            await ctx.room.disconnect()
+        except Exception as _e:
+            logger.warning("[VoiceAgent] Room disconnect error: %s", _e)
+
+    @session.on("user_input_transcribed")
+    def _on_transcript(event) -> None:
+        """
+        Fired by AgentSession after STT finalises each user turn.
+        `event` has at minimum: .transcript (str) and .is_final (bool).
+        """
+        try:
+            transcript = getattr(event, "transcript", "") or ""
+            is_final   = getattr(event, "is_final", True)
+            if not is_final:
+                return
+            if _is_farewell(transcript):
+                logger.info(
+                    "[VoiceAgent] Farewell detected (%r) — initiating graceful hangup", transcript
+                )
+                asyncio.ensure_future(_hangup_gracefully())
+        except Exception as _exc:
+            logger.debug("[VoiceAgent] _on_transcript error (non-fatal): %s", _exc)
+
+
     # Look up returning caller in the database to greet them by first name
     greeting = "Hello! How can I help you today?"
     if caller_phone:
