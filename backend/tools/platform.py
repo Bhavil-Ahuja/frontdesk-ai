@@ -2084,8 +2084,12 @@ class PlatformToolProvider:
             if a.get("provider_name"):
                 title = f" ({a['provider_title']})" if a.get("provider_title") else ""
                 line += f" with {a['provider_name']}{title}"
+                if a.get("provider_subject"):
+                    line += f" [subject: {a['provider_subject']}]"
             if a.get("duration_minutes"):
                 line += f" ({a['duration_minutes']} min)"
+            if a.get("notes"):
+                line += f" [notes: {a['notes']}]"
             return line
 
         appt_lines = [_appt_line(a) for a in upcoming]

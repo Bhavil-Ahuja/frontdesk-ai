@@ -2219,12 +2219,16 @@ async def _execute_tool(
                 if a.get("provider_name"):
                     title = f" ({a['provider_title']})" if a.get("provider_title") else ""
                     line += f" with {a['provider_name']}{title}"
+                    if a.get("provider_subject"):
+                        line += f" [subject: {a['provider_subject']}]"
                 if a.get("provider_id"):
                     line += f" [provider_id={a['provider_id']}]"
                 if a.get("booking_uid"):
                     line += f" [booking_uid={a['booking_uid']}]"
                 if a.get("duration_minutes"):
                     line += f" ({a['duration_minutes']} min)"
+                if a.get("notes"):
+                    line += f" [notes: {a['notes']}]"
                 if a.get("status") and a["status"] not in ("CONFIRMED",):
                     line += f" [{a['status']}]"
                 return line
