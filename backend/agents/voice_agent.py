@@ -51,6 +51,48 @@ from backend.services.tenant_service import (
 logger = logging.getLogger(__name__)
 
 
+# ── SIP transfer phone normalisation ─────────────────────────────────────────
+
+def _normalise_transfer_dest(raw: str) -> str:
+    """
+    Produce a clean E.164 phone number for use in `tel:` SIP URIs.
+
+    Admins enter numbers in human-friendly formats like:
+      +91 98765 43210   ->  +919876543210
+      +1-800-555-1234   ->  +18005551234
+      0091 9876543210   ->  +919876543210  (leading 00 = international prefix)
+      091-9876543210    ->  +919876543210  (leading trunk 0 for India)
+
+    Rules:
+    1. Strip all non-digit characters except a leading '+'
+    2. Replace leading '00' with '+' (international dialling prefix)
+    3. Keep the result as-is — we trust that the admin stored a valid
+       country-prefixed number, so we never guess a missing country code.
+    4. Returns '' if the cleaned number has fewer than 7 digits (clearly invalid).
+
+    This does NOT try to resolve or validate the number; it just makes it
+    safe for embedding in a SIP URI.
+    """
+    if not raw:
+        return ""
+    # Try libphonenumber first — it handles every edge case correctly
+    try:
+        from backend.services.caller_service import _normalise_phone
+        result = _normalise_phone(raw.strip(), default_region="IN")
+        if result:
+            return result
+    except Exception:
+        pass
+    # Regex fallback: strip formatting, fix leading 00
+    stripped = re.sub(r"[^\d+]", "", raw.strip())
+    if stripped.startswith("00"):
+        stripped = "+" + stripped[2:]
+    digits_only = stripped.lstrip("+")
+    if len(digits_only) < 7:
+        return ""   # too short to be a real phone number
+    return stripped
+
+
 # ── Tenant resolution from SIP call metadata ─────────────────────────────────
 
 async def _resolve_first_non_admin_tenant() -> "TenantContext | None":
@@ -510,41 +552,88 @@ class FrontDeskAgent(Agent):
             caller_phone=self._caller_phone,
         )
 
-        destination = result.get("destination")
-        if destination:
-            logger.info("[VoiceAgent] Initiating SIP transfer to: %s", destination)
-            # Find the SIP participant in the room
-            sip_participant = None
-            for p in self._room.remote_participants.values():
-                if p.identity.startswith("sip_") or (p.attributes and any(k.startswith("sip.") for k in p.attributes)):
-                    sip_participant = p
-                    break
+        raw_dest = result.get("destination", "")
+        destination = _normalise_transfer_dest(raw_dest)
+        if raw_dest and raw_dest != destination:
+            logger.info(
+                "[VoiceAgent] Escalation number normalised: %r -> %r",
+                raw_dest, destination,
+            )
 
-            if sip_participant:
+        if not destination:
+            logger.warning(
+                "[VoiceAgent] No valid escalation number configured for tenant=%s",
+                self._tenant.slug if self._tenant else "unknown",
+            )
+            return (
+                "I'm sorry, I wasn't able to connect you directly right now, "
+                "but I've sent an urgent alert to our team. "
+                "Someone will call you back as soon as possible."
+            )
+
+        logger.info("[VoiceAgent] Initiating SIP transfer to: %s", destination)
+
+        # Find the SIP participant in the room
+        sip_participant = None
+        for p in self._room.remote_participants.values():
+            if p.identity.startswith("sip_") or (
+                p.attributes and any(k.startswith("sip.") for k in p.attributes)
+            ):
+                sip_participant = p
+                break
+
+        if not sip_participant:
+            logger.warning(
+                "[VoiceAgent] No SIP participant found in room %s — cannot transfer",
+                self._room.name,
+            )
+            return (
+                "I've notified our team and they'll call you back shortly. "
+                "Is there anything else I can help you with in the meantime?"
+            )
+
+        lk_client = None
+        try:
+            from livekit import api as lk_api
+            lk_client = lk_api.LiveKitAPI(
+                url=settings.LIVEKIT_URL,
+                api_key=settings.LIVEKIT_API_KEY,
+                api_secret=settings.LIVEKIT_API_SECRET,
+            )
+            logger.info(
+                "[VoiceAgent] Transferring SIP participant %s to tel:%s",
+                sip_participant.identity, destination,
+            )
+            await lk_client.sip.transfer_sip_participant(
+                lk_api.TransferSIPParticipantRequest(
+                    room_name=self._room.name,
+                    participant_identity=sip_participant.identity,
+                    transfer_to=f"tel:{destination}",
+                )
+            )
+            logger.info("[VoiceAgent] SIP transfer succeeded -> %s", destination)
+            # Schedule room disconnect — the caller's leg has moved to the
+            # human's phone, so there is nobody left in this room.
+            async def _close_after_transfer():
+                await asyncio.sleep(2.0)
                 try:
-                    from livekit import api as lk_api
-                    # Connect to LiveKit API
-                    lk_client = lk_api.LiveKitAPI(
-                        url=settings.LIVEKIT_URL,
-                        api_key=settings.LIVEKIT_API_KEY,
-                        api_secret=settings.LIVEKIT_API_SECRET,
-                    )
-                    logger.info("[VoiceAgent] Calling transfer_sip_participant for %s to %s", sip_participant.identity, destination)
-                    await lk_client.sip.transfer_sip_participant(
-                        lk_api.TransferSIPParticipantRequest(
-                            room_name=self._room.name,
-                            participant_identity=sip_participant.identity,
-                            transfer_to=f"tel:{destination}",
-                        )
-                    )
+                    await self._room.disconnect()
+                except Exception:
+                    pass
+            asyncio.create_task(_close_after_transfer())
+            return "Connecting you to our team now. Please hold on."
+        except Exception as e:
+            logger.error("[VoiceAgent] SIP transfer failed: %s", e)
+            return (
+                "I tried to connect you but hit a technical issue. "
+                "I've alerted our team and they'll call you back very soon."
+            )
+        finally:
+            if lk_client:
+                try:
                     await lk_client.aclose()
-                    return "I am transferring you to our office now. Please hold."
-                except Exception as e:
-                    logger.error("[VoiceAgent] SIP transfer failed: %s", e)
-            else:
-                logger.warning("[VoiceAgent] No SIP participant found in room for transfer")
-
-        return "I have notified our team to call you back as soon as possible."
+                except Exception:
+                    pass
 
     @agents.function_tool
     async def send_callback_request(

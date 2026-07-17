@@ -2145,21 +2145,42 @@ async def _execute_tool(
                 caller_number=caller_num,
                 tenant_ctx=tenant_ctx,
             )
-            # Resolve destination phone number
-            transfer_dest = ""
+            # Resolve and normalise destination phone number
+            raw_dest = ""
             if tenant_ctx:
-                transfer_dest = (
+                raw_dest = (
                     (tenant_ctx.escalation_transfer_number or "").strip()
                     or (tenant_ctx.escalation_phone or "").strip()
                     or (tenant_ctx.business_phone or "").strip()
                 )
             else:
-                transfer_dest = (
+                raw_dest = (
                     (settings.ESCALATION_TRANSFER_NUMBER or "").strip()
                     or (settings.ESCALATION_PHONE_NUMBER or "").strip()
                 )
+            # Normalise to E.164 — strip spaces/dashes/parens so the SIP URI is valid
+            from backend.services.caller_service import _normalise_phone, _region_from_timezone
+            _esc_region = _region_from_timezone(tenant_ctx.timezone if tenant_ctx else None)
+            transfer_dest = _normalise_phone(raw_dest, default_region=_esc_region) if raw_dest else ""
+            if not transfer_dest and raw_dest:
+                # _normalise_phone failed (invalid number) — strip formatting manually
+                import re as _re_esc
+                _stripped = _re_esc.sub(r"[^\d+]", "", raw_dest)
+                if _stripped.startswith("00"):
+                    _stripped = "+" + _stripped[2:]
+                transfer_dest = _stripped if len(_stripped.lstrip("+")) >= 7 else ""
+            if raw_dest and raw_dest != transfer_dest:
+                logger.info(
+                    "[Tool Exec] escalate: normalised destination %r -> %r",
+                    raw_dest, transfer_dest,
+                )
+            elif not raw_dest:
+                logger.warning(
+                    "[Tool Exec] escalate: no escalation number configured for tenant=%s",
+                    tenant_ctx.slug if tenant_ctx else "unknown",
+                )
             elapsed = (time.time() - t0) * 1000
-            logger.info("[Tool Exec] escalate → done in %.0fms, destination=%s", elapsed, transfer_dest)
+            logger.info("[Tool Exec] escalate -> done in %.0fms, destination=%s", elapsed, transfer_dest or "(none)")
             return {"success": True, "action": "transfer", "destination": transfer_dest}
 
         elif name == "send_callback_request":

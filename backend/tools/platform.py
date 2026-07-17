@@ -2048,16 +2048,38 @@ class PlatformToolProvider:
         if session:
             session["current_state"] = "escalated"
 
+        raw_dest = ""
         if tenant_ctx:
-            transfer_dest = (
+            raw_dest = (
                 (tenant_ctx.escalation_transfer_number or "").strip()
                 or (tenant_ctx.escalation_phone or "").strip()
                 or (tenant_ctx.business_phone or "").strip()
             )
         else:
-            transfer_dest = (
+            raw_dest = (
                 (settings.ESCALATION_TRANSFER_NUMBER or "").strip()
                 or (settings.ESCALATION_PHONE_NUMBER or "").strip()
+            )
+
+        # Normalise to E.164 so the SIP URI is always valid
+        from backend.services.caller_service import _normalise_phone, _region_from_timezone
+        _esc_region = _region_from_timezone(getattr(tenant_ctx, "timezone", None))
+        transfer_dest = _normalise_phone(raw_dest, default_region=_esc_region) if raw_dest else ""
+        if not transfer_dest and raw_dest:
+            import re as _re_esc
+            _stripped = _re_esc.sub(r"[^\d+]", "", raw_dest)
+            if _stripped.startswith("00"):
+                _stripped = "+" + _stripped[2:]
+            transfer_dest = _stripped if len(_stripped.lstrip("+")) >= 7 else ""
+        if raw_dest and raw_dest != transfer_dest:
+            logger.info(
+                "[Call %s] escalate: normalised destination %r -> %r",
+                call_id, raw_dest, transfer_dest,
+            )
+        elif not raw_dest:
+            logger.warning(
+                "[Call %s] escalate: no escalation number configured for tenant=%s",
+                call_id, getattr(tenant_ctx, "slug", "unknown"),
             )
         return {
             "success": True,

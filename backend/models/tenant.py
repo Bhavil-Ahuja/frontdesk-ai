@@ -51,7 +51,7 @@ class Tenant(Base):
         nullable=False,
         default=BusinessType.COACHING_INSTITUTE,
     )
-    business_phone = Column(String(20), nullable=True)
+    business_phone = Column(String(25), nullable=True)
     business_address = Column(Text, nullable=True)
     business_website = Column(String(255), nullable=True)
     # Google Maps share-link or embed URL for the institute's location.
@@ -126,9 +126,13 @@ class Tenant(Base):
     test_student_name = Column(String(100), nullable=True, default="Alex Johnson")
     test_student_names = Column(JSONB, nullable=False, default=lambda: ["Alex Johnson"])
 
-    # ── Escalation ───────────────────────────────────────────────────────
-    escalation_phone = Column(String(20), nullable=True)
-    escalation_transfer_number = Column(String(20), nullable=True)
+    # ── Escalation ───────────────────────────────────────────────────
+    # Both fields accept any human-friendly format (e.g. "+91 98765 43210",
+    # "+1-800-555-1234"). The agent normalises to E.164 at call-time before
+    # constructing the SIP URI. String(25) safely fits formatted numbers
+    # like "+1 (800) 555-1234" (17 chars) with headroom.
+    escalation_phone = Column(String(25), nullable=True)
+    escalation_transfer_number = Column(String(25), nullable=True)
 
     # ── Appointment configuration ────────────────────────────────────────
     appointment_types = Column(
@@ -180,4 +184,3 @@ class Tenant(Base):
 
     def __repr__(self) -> str:
         return f"<Tenant {self.slug} ({self.business_name})>"
-

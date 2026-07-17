@@ -437,6 +437,19 @@ BEGIN
 END $$""",
     "ALTER TABLE sms_messages ADD COLUMN IF NOT EXISTS sms_sid VARCHAR(50)",
     "UPDATE tenants SET feature_sms_enabled = FALSE WHERE business_type = 'coaching_institute'",
+
+    # ── tenants — widen phone columns to VARCHAR(25) ───────────────────────────
+    # VARCHAR(20) was too tight for formatted numbers like "+1 (800) 555-1234"
+    # (17 chars) or "+91 98765 43210" (16 chars w/ spaces).  The agent
+    # normalises to E.164 at call-time, but the raw admin-entered value is
+    # preserved in the DB so logs and the UI show the original format.
+    # VARCHAR(25) fits any realistically formatted E.164 number with headroom.
+    # ALTER TYPE to a wider type is always safe in PostgreSQL — no data loss.
+    "ALTER TABLE tenants ALTER COLUMN business_phone TYPE VARCHAR(25)",
+    "ALTER TABLE tenants ALTER COLUMN owner_phone TYPE VARCHAR(25)",
+    "ALTER TABLE tenants ALTER COLUMN escalation_phone TYPE VARCHAR(25)",
+    "ALTER TABLE tenants ALTER COLUMN escalation_transfer_number TYPE VARCHAR(25)",
+    "ALTER TABLE tenants ALTER COLUMN sip_phone_number TYPE VARCHAR(25)",
 ]
 
 
