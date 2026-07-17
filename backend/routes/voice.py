@@ -2,14 +2,16 @@
 Voice calling API routes.
 
 Endpoints:
-  POST /api/voice/outbound   — trigger an outbound AI call to a student via Exotel
-  GET  /api/voice/token      — generate a LiveKit access token (for browser testing)
+  POST /api/voice/outbound              -- trigger an outbound AI call to a student via Exotel
+  GET  /api/voice/token                 -- generate a LiveKit access token (for browser testing)
+  GET  /api/voice/exotel/transfer-flow  -- ExoML webhook Exotel fetches when redirecting a call
 """
 
 import logging
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from backend.models.tenant import Tenant
@@ -138,3 +140,39 @@ async def get_livekit_token(
             "url": settings.LIVEKIT_URL,
             "room": room,
         }
+
+
+@router.get("/api/voice/exotel/transfer-flow", response_class=Response)
+async def exotel_transfer_flow(
+    to: str = Query("", description="E.164 destination number e.g. +919876540199"),
+) -> Response:
+    """
+    ExoML webhook called by Exotel when we redirect an active call via
+    the Calls REST API.  Exotel fetches this URL and executes the returned
+    XML applet on the live PSTN call leg.
+
+    Returns a <Dial><Number> ExoML document that bridges the caller to the
+    destination phone number natively on Exotel's PSTN infrastructure.
+
+    This endpoint is intentionally unauthenticated — Exotel cannot send
+    auth headers when fetching ExoML.  The `to` param is set by our own
+    backend (never user-supplied) so there is no SSRF / injection risk.
+    Rate-limit at the infra level if needed.
+    """
+    if not to:
+        logger.warning("[ExoML] transfer-flow called with no `to` param")
+        # Return Hangup so the call doesn't stay open with no instruction
+        xml = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Hangup/>
+</Response>"""
+        return Response(content=xml, media_type="application/xml", status_code=400)
+
+    logger.info("[ExoML] Returning transfer-flow ExoML for destination: %s", to)
+    xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Dial>
+    <Number>{to}</Number>
+  </Dial>
+</Response>"""
+    return Response(content=xml, media_type="application/xml")

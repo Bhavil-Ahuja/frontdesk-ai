@@ -139,19 +139,21 @@ async def _resolve_first_non_admin_tenant() -> "TenantContext | None":
         return _tenant_to_context(tenant)
     return None
 
-async def _resolve_tenant(ctx: JobContext) -> tuple[TenantContext | None, str, str]:
+async def _resolve_tenant(ctx: JobContext) -> tuple[TenantContext | None, str, str, str]:
     """
     Extract caller/called phone numbers from LiveKit SIP participant attributes
     and resolve the tenant.
 
     LiveKit SIP injects these attributes on the SIP participant:
-      sip.callTo   — the dialled number (tenant's Exotel number)
-      sip.callFrom — the caller's number
+      sip.callTo   -- the dialled number (tenant's Exotel number)
+      sip.callFrom -- the caller's number
+      sip.callID   -- Exotel call SID (e.g. "SCL_tebPGCYvKZQz")
 
-    Returns (tenant_ctx, caller_phone, called_phone).
+    Returns (tenant_ctx, caller_phone, called_phone, sip_call_id).
     """
     caller_phone = ""
     called_phone = ""
+    sip_call_id = ""  # Exotel callSID — used for mid-call REST API redirects
 
     # CRITICAL: the SIP participant joins the room ~300ms AFTER the agent job
     # starts. Reading ctx.room.remote_participants immediately returns empty.
@@ -174,8 +176,9 @@ async def _resolve_tenant(ctx: JobContext) -> tuple[TenantContext | None, str, s
         if attrs:
             logger.info("[VoiceAgent] SIP participant attrs: %s", dict(attrs))
         # LiveKit SIP standard attributes:
-        #   sip.trunkPhoneNumber — the DID the caller dialled (tenant's number)
-        #   sip.phoneNumber      — the caller's own number
+        #   sip.trunkPhoneNumber -- the DID the caller dialled (tenant's number)
+        #   sip.phoneNumber      -- the caller's own number
+        #   sip.callID           -- Exotel callSID for mid-call REST API control
         called_phone = (
             attrs.get("sip.trunkPhoneNumber", "")
             or attrs.get("sip.callTo", "") or attrs.get("sip_call_to", "")
@@ -185,6 +188,7 @@ async def _resolve_tenant(ctx: JobContext) -> tuple[TenantContext | None, str, s
             or attrs.get("sip.callFrom", "") or attrs.get("sip_call_from", "")
             or attrs.get("sip.from", "")
         )
+        sip_call_id = attrs.get("sip.callID", "")
         # Fallback: LiveKit SIP participant identity is "sip_<caller-number>"
         if not caller_phone and p.identity and p.identity.startswith("sip_"):
             caller_phone = p.identity[len("sip_"):]
@@ -227,7 +231,7 @@ async def _resolve_tenant(ctx: JobContext) -> tuple[TenantContext | None, str, s
                     if _t:
                         tenant_ctx = _tenant_to_context(_t)
                         logger.info("[VoiceAgent] Resolved from room metadata: tenant=%s", _t.slug)
-                        return tenant_ctx, caller_phone, called_phone
+                        return tenant_ctx, caller_phone, called_phone, sip_call_id
             except Exception as exc:
                 logger.warning("[VoiceAgent] Room metadata tenant lookup failed: %s", exc)
         elif "|" in meta:
@@ -257,7 +261,7 @@ async def _resolve_tenant(ctx: JobContext) -> tuple[TenantContext | None, str, s
         if not tenant_ctx:
             tenant_ctx = await resolve_default_tenant()
 
-    return tenant_ctx, caller_phone, called_phone
+    return tenant_ctx, caller_phone, called_phone, sip_call_id
 
 
 # ── LLM factory — supports Ollama (local) and Gemini ─────────────────────────
@@ -341,10 +345,11 @@ class FrontDeskAgent(Agent):
     existing backend service layer.
     """
 
-    def __init__(self, *, tenant_ctx: TenantContext | None, caller_phone: str, room: Any):
+    def __init__(self, *, tenant_ctx: TenantContext | None, caller_phone: str, room: Any, sip_call_id: str = ""):
         self._tenant = tenant_ctx
         self._caller_phone = caller_phone
         self._room = room
+        self._sip_call_id = sip_call_id  # Exotel SCL_xxx — used for mid-call REST redirect
 
         # Build full system prompt from existing prompt builder
         instructions = build_system_prompt(
@@ -592,15 +597,53 @@ class FrontDeskAgent(Agent):
                 "Is there anything else I can help you with in the meantime?"
             )
 
-        # Build the correct SIP transfer URI.
-        # Exotel (and most enterprise SIP trunks) require a sip: URI in the
-        # REFER-To header — NOT a tel: URI.  tel: causes a 603 Declined
-        # "Non sip: uri" rejection from Exotel's edge proxy.
-        #
-        # The trunk hostname is in the participant's own sip.hostname attribute
-        # (e.g. "receptico2m.pstn.exotel.com").  If it's absent (e.g. a plain
-        # WebRTC test without a real SIP trunk), fall back to tel: which works
-        # for some non-Exotel setups.
+        async def _disconnect_after_escalation(delay: float) -> None:
+            """Give TTS time to finish speaking, then close the room."""
+            await asyncio.sleep(delay)
+            try:
+                await self._room.disconnect()
+            except Exception:
+                pass
+
+        # ── Primary path: Exotel REST API redirect ──────────────────────────────
+        # Use the Exotel Calls REST API with the callSID captured at call start.
+        # This tells Exotel to redirect the live PSTN call to a new ExoML URL
+        # that returns a <Dial> applet — Exotel handles the bridging natively
+        # without any SIP REFER on the LiveKit side.
+        if self._sip_call_id:
+            redirect_url = (
+                f"{settings.SERVER_BASE_URL}/api/voice/exotel/transfer-flow"
+                f"?to={destination}"
+            )
+            logger.info(
+                "[VoiceAgent] Exotel REST redirect: callSID=%s -> %s",
+                self._sip_call_id, redirect_url,
+            )
+            try:
+                from backend.services.exotel_service import redirect_active_call
+                await redirect_active_call(
+                    call_sid=self._sip_call_id,
+                    redirect_url=redirect_url,
+                )
+                logger.info(
+                    "[VoiceAgent] Exotel redirect accepted for callSID=%s",
+                    self._sip_call_id,
+                )
+                # Exotel will now drop the SIP bridge leg naturally;
+                # disconnect our room after a short pause.
+                asyncio.create_task(_disconnect_after_escalation(3.0))
+                return "Connecting you to our team now. Please hold on."
+            except Exception as exc:
+                logger.error(
+                    "[VoiceAgent] Exotel REST redirect failed (%s) — falling back to SIP REFER",
+                    exc,
+                )
+                # Fall through to SIP REFER below
+
+        # ── Fallback path: SIP REFER ──────────────────────────────────────────
+        # Used when sip.callID is absent (browser console tests) or when
+        # the REST API call fails.  Builds the correct sip:@hostname URI
+        # that Exotel's SIP trunk accepts in a REFER-To header.
         sip_attrs = sip_participant.attributes or {}
         sip_hostname = sip_attrs.get("sip.hostname", "")
         if sip_hostname:
@@ -613,17 +656,9 @@ class FrontDeskAgent(Agent):
             )
 
         logger.info(
-            "[VoiceAgent] Transferring SIP participant %s -> %s",
+            "[VoiceAgent] SIP REFER: %s -> %s",
             sip_participant.identity, transfer_uri,
         )
-
-        async def _disconnect_after_escalation(delay: float) -> None:
-            """Give TTS time to finish speaking, then close the room."""
-            await asyncio.sleep(delay)
-            try:
-                await self._room.disconnect()
-            except Exception:
-                pass
 
         lk_client = None
         try:
@@ -640,17 +675,11 @@ class FrontDeskAgent(Agent):
                     transfer_to=transfer_uri,
                 )
             )
-            logger.info("[VoiceAgent] SIP transfer succeeded -> %s", transfer_uri)
-            # Success: caller's leg has moved — disconnect after a brief pause
-            # (2 s is enough; the room will be empty after the REFER completes).
+            logger.info("[VoiceAgent] SIP REFER succeeded -> %s", transfer_uri)
             asyncio.create_task(_disconnect_after_escalation(2.0))
             return "Connecting you to our team now. Please hold on."
         except Exception as e:
-            logger.error("[VoiceAgent] SIP transfer failed: %s", e)
-            # Failure: speak the apology, then end the call anyway.
-            # The caller asked for a human — there is nothing left for the AI
-            # to do.  The SMS alert already fired, so the team will follow up.
-            # 15 s gives the LLM time to generate + TTS to speak the message.
+            logger.error("[VoiceAgent] SIP REFER also failed: %s", e)
             asyncio.create_task(_disconnect_after_escalation(15.0))
             return (
                 "I wasn't able to connect you directly right now, but I've "
@@ -840,7 +869,9 @@ async def entrypoint(ctx: JobContext):
     call_start = time.monotonic()
 
     # Resolve tenant from SIP call metadata
-    tenant_ctx, caller_phone, called_phone = await _resolve_tenant(ctx)
+    tenant_ctx, caller_phone, called_phone, sip_call_id = await _resolve_tenant(ctx)
+    if sip_call_id:
+        logger.info("[VoiceAgent] Exotel callSID captured: %s", sip_call_id)
 
     # Register call-end callback to record duration + billing usage
     async def _on_call_end() -> None:
@@ -890,7 +921,7 @@ async def entrypoint(ctx: JobContext):
         tts_text_transforms=["filter_markdown", _filter_tool_syntax],
     )
 
-    agent = FrontDeskAgent(tenant_ctx=tenant_ctx, caller_phone=caller_phone, room=ctx.room)
+    agent = FrontDeskAgent(tenant_ctx=tenant_ctx, caller_phone=caller_phone, room=ctx.room, sip_call_id=sip_call_id)
 
     await session.start(
         room=ctx.room,

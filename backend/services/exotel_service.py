@@ -106,3 +106,72 @@ async def place_outbound_call(
     logger.info("[Exotel] Call initiated: Sid=%s Status=%s",
                 call_data.get("Sid"), call_data.get("Status"))
     return call_data
+
+
+async def redirect_active_call(
+    call_sid: str,
+    redirect_url: str,
+    *,
+    sid: str = "",
+    token: str = "",
+    subdomain: str = "",
+) -> dict:
+    """
+    Redirect an active Exotel call mid-conversation by pointing it at a new
+    ExoML URL.  Exotel fetches the URL, parses the XML, and executes the
+    applet (e.g. <Dial> to bridge the caller to a PSTN number).
+
+    This is the programmatic equivalent of the App Bazaar "Transfer" applet
+    and does NOT rely on SIP REFER — Exotel handles all PSTN bridging
+    natively, which is why it works even on inbound-only SIP trunks.
+
+    Args:
+        call_sid:     Exotel call SID, e.g. "SCL_tebPGCYvKZQz" (from sip.callID
+                      participant attribute).
+        redirect_url: Public URL that returns ExoML for the new call flow.
+        sid/token:    Optional credential override; loaded from platform_config
+                      or .env if empty.
+        subdomain:    Optional API subdomain override (default: EXOTEL_SUBDOMAIN
+                      or "api.in.exotel.com" for India).
+
+    Returns dict from Exotel's response body (may be empty on 204).
+    Raises on non-2xx response.
+    """
+    if not sid or not token:
+        sid, token = await _get_credentials()
+    if not sid or not token:
+        raise ValueError("Exotel credentials not configured.")
+
+    # India endpoint — use api.in.exotel.com unless overridden
+    if not subdomain:
+        from backend.config import settings as _s
+        subdomain = _s.EXOTEL_SUBDOMAIN or "api.in.exotel.com"
+    # Ensure subdomain does not include https:// prefix
+    subdomain = subdomain.removeprefix("https://").removeprefix("http://")
+
+    url = f"https://{subdomain}/v1/Accounts/{sid}/Calls/{call_sid}"
+    payload = {"Url": redirect_url, "Method": "GET"}
+
+    logger.info(
+        "[Exotel] Redirecting call %s -> %s", call_sid, redirect_url
+    )
+
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(
+            url,
+            data=payload,
+            auth=(sid, token),
+        )
+
+    if resp.status_code not in (200, 201, 204):
+        body = resp.text[:400] if resp.text else "(empty)"
+        logger.error(
+            "[Exotel] Redirect call failed HTTP %d: %s", resp.status_code, body
+        )
+        raise Exception(f"Exotel redirect returned HTTP {resp.status_code}: {body}")
+
+    logger.info("[Exotel] Redirect accepted: HTTP %d", resp.status_code)
+    try:
+        return resp.json()
+    except Exception:
+        return {}  # 204 No Content is a valid success response
