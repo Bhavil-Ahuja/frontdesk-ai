@@ -5,10 +5,10 @@ All routes require admin authentication.
 
 Endpoints:
   GET  /api/admin/platform/config              — read global platform settings
-  PUT  /api/admin/platform/config              — update global platform settings (Bolna AI)
+  PUT  /api/admin/platform/config              — update global platform settings
   GET  /api/admin/tenants/{id}                 — rich tenant integration + status detail
   GET  /api/admin/tenants/{id}/usage           — tenant usage summary
-  POST /api/admin/tenants/{id}/integrations    — update tenant Twilio + agent flags
+  POST /api/admin/tenants/{id}/integrations    — update tenant phone numbers, agent flags
 """
 
 import logging
@@ -22,7 +22,7 @@ from pydantic import BaseModel
 from backend.database import async_session
 from backend.models.platform_config import PlatformConfig
 from backend.models.tenant import Tenant
-from backend.services import auth_service, bolna_service, tenant_service
+from backend.services import auth_service, tenant_service
 from backend.services.usage_service import get_usage_summary
 from sqlalchemy import select
 
@@ -73,21 +73,31 @@ async def _set_platform_config(key: str, value: str) -> None:
 async def get_platform_config(
     admin: Tenant = Depends(auth_service.require_admin),
 ) -> dict:
-    """Return global platform settings (Bolna AI credentials, masked)."""
+    """Return global platform settings (LiveKit / Exotel credentials, masked)."""
     cfg = await _get_platform_config()
-    api_key = cfg.get("bolna_api_key", "")
-    agent_id = cfg.get("bolna_agent_id", "")
+    livekit_api_key = cfg.get("livekit_api_key", "")
+    livekit_api_secret = cfg.get("livekit_api_secret", "")
+    livekit_url = cfg.get("livekit_url", "")
+    exotel_sid = cfg.get("exotel_sid", "")
+    exotel_token = cfg.get("exotel_token", "")
 
     return {
-        "bolna_api_key_masked": _mask_secret(api_key),
-        "bolna_agent_id": agent_id,
-        "bolna_configured": bool(api_key and agent_id),
+        "livekit_url": livekit_url,
+        "livekit_api_key": livekit_api_key,
+        "livekit_api_secret_masked": _mask_secret(livekit_api_secret),
+        "livekit_configured": bool(livekit_url and livekit_api_key and livekit_api_secret),
+        "exotel_sid": exotel_sid,
+        "exotel_token_masked": _mask_secret(exotel_token),
+        "exotel_configured": bool(exotel_sid and exotel_token),
     }
 
 
 class PlatformConfigUpdate(BaseModel):
-    bolna_api_key: Optional[str] = None   # omit or send masked value to preserve
-    bolna_agent_id: Optional[str] = None
+    livekit_url: Optional[str] = None         # wss://your-livekit-server
+    livekit_api_key: Optional[str] = None
+    livekit_api_secret: Optional[str] = None  # omit or send masked value to preserve
+    exotel_sid: Optional[str] = None
+    exotel_token: Optional[str] = None        # omit or send masked value to preserve
 
 
 @router.put("/platform/config")
@@ -98,52 +108,44 @@ async def update_platform_config(
     """Update global platform settings. Skip any masked (•-containing) values."""
     updated = []
 
-    if body.bolna_api_key is not None:
-        if "•" not in body.bolna_api_key:  # skip masked round-trip values
-            await _set_platform_config("bolna_api_key", body.bolna_api_key.strip())
-            updated.append("bolna_api_key")
+    if body.livekit_url is not None:
+        await _set_platform_config("livekit_url", body.livekit_url.strip())
+        updated.append("livekit_url")
 
-    if body.bolna_agent_id is not None:
-        await _set_platform_config("bolna_agent_id", body.bolna_agent_id.strip())
-        updated.append("bolna_agent_id")
+    if body.livekit_api_key is not None:
+        await _set_platform_config("livekit_api_key", body.livekit_api_key.strip())
+        updated.append("livekit_api_key")
+
+    if body.livekit_api_secret is not None:
+        if "•" not in body.livekit_api_secret:
+            await _set_platform_config("livekit_api_secret", body.livekit_api_secret.strip())
+            updated.append("livekit_api_secret")
+
+    if body.exotel_sid is not None:
+        await _set_platform_config("exotel_sid", body.exotel_sid.strip())
+        updated.append("exotel_sid")
+
+    if body.exotel_token is not None:
+        if "•" not in body.exotel_token:
+            await _set_platform_config("exotel_token", body.exotel_token.strip())
+            updated.append("exotel_token")
 
     logger.info("[PlatformAdmin] %s updated platform config: %s", admin.slug, updated)
 
     cfg = await _get_platform_config()
-    api_key = cfg.get("bolna_api_key", "")
-    agent_id = cfg.get("bolna_agent_id", "")
     return {
         "status": "saved",
         "updated_fields": updated,
-        "bolna_api_key_masked": _mask_secret(api_key),
-        "bolna_agent_id": agent_id,
-        "bolna_configured": bool(api_key and agent_id),
+        "livekit_url": cfg.get("livekit_url", ""),
+        "livekit_api_key": cfg.get("livekit_api_key", ""),
+        "livekit_api_secret_masked": _mask_secret(cfg.get("livekit_api_secret", "")),
+        "livekit_configured": bool(
+            cfg.get("livekit_url") and cfg.get("livekit_api_key") and cfg.get("livekit_api_secret")
+        ),
+        "exotel_sid": cfg.get("exotel_sid", ""),
+        "exotel_token_masked": _mask_secret(cfg.get("exotel_token", "")),
+        "exotel_configured": bool(cfg.get("exotel_sid") and cfg.get("exotel_token")),
     }
-
-
-# ── Bolna connection test ─────────────────────────────────────────────────────
-
-
-@router.get("/platform/bolna/test")
-async def test_bolna_connection(
-    admin: Tenant = Depends(auth_service.require_admin),
-) -> dict:
-    """
-    Validate saved Bolna credentials against the live API.
-
-    Calls GET /agent/{agent_id} — read-only, no calls placed, no billing.
-    Returns {"ok": bool, "message": str, "agent_name"?: str}.
-    """
-    cfg = await _get_platform_config()
-    api_key = cfg.get("bolna_api_key", "")
-    agent_id = cfg.get("bolna_agent_id", "")
-
-    if not api_key or not agent_id:
-        return {"ok": False, "message": "Bolna credentials not configured — save API key and Agent ID first."}
-
-    result = await bolna_service.test_connection(api_key=api_key, agent_id=agent_id)
-    logger.info("[PlatformAdmin] Bolna connection test by %s: ok=%s", admin.slug, result.get("ok"))
-    return result
 
 
 # ── Tenant management endpoints ───────────────────────────────────────────────
@@ -185,13 +187,13 @@ async def admin_get_tenant(
         "status": tenant.status.value if tenant.status else "PENDING",
         "demo_mode": bool(tenant.demo_mode),
         # Integration status
-        "twilio_configured": bool(tenant.twilio_phone_number),
-        "twilio_phone_number": tenant.twilio_phone_number or "",
+        "sms_configured": bool(tenant.sip_phone_number),
+        "sip_phone_number": tenant.sip_phone_number or "",
         "google_calendar_connected": bool(tenant.google_calendar_connected),
         "google_calendar_email": tenant.google_calendar_email or "",
         # Agent / feature flags
         "agent_active": bool(tenant.agent_active) if tenant.agent_active is not None else True,
-        "feature_twilio_enabled": bool(tenant.feature_twilio_enabled) if tenant.feature_twilio_enabled is not None else True,
+        "feature_sms_enabled": bool(tenant.feature_sms_enabled) if tenant.feature_sms_enabled is not None else False,
         # Timestamps
         "created_at": tenant.created_at.isoformat() if tenant.created_at else None,
         "updated_at": tenant.updated_at.isoformat() if tenant.updated_at else None,
@@ -218,9 +220,9 @@ async def admin_get_tenant_usage(
 
 
 class TenantIntegrationsUpdate(BaseModel):
-    twilio_phone_number: Optional[str] = None
-    feature_twilio_enabled: Optional[bool] = None
+    feature_sms_enabled: Optional[bool] = None
     agent_active: Optional[bool] = None
+    sip_phone_number: Optional[str] = None  # Exotel phone number (voice + SMS)
 
 
 @router.post("/tenants/{tenant_id}/integrations")
@@ -229,19 +231,45 @@ async def admin_update_tenant_integrations(
     body: TenantIntegrationsUpdate,
     admin: Tenant = Depends(auth_service.require_admin),
 ) -> dict:
-    """Update a tenant's Twilio phone number, feature flags, and agent status."""
+    """Update a tenant's phone numbers, feature flags, and agent status."""
     try:
         uid = uuid.UUID(tenant_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid tenant ID.")
 
     update_fields: dict = {}
-    if body.twilio_phone_number is not None:
-        update_fields["twilio_phone_number"] = body.twilio_phone_number.strip() or None
-    if body.feature_twilio_enabled is not None:
-        update_fields["feature_twilio_enabled"] = body.feature_twilio_enabled
+    if body.feature_sms_enabled is not None:
+        update_fields["feature_sms_enabled"] = body.feature_sms_enabled
     if body.agent_active is not None:
         update_fields["agent_active"] = body.agent_active
+    if body.sip_phone_number is not None:
+        raw = body.sip_phone_number.strip()
+        if raw:
+            # Normalise to E.164 to prevent ambiguous routing
+            from backend.services.caller_service import _normalise_phone
+            normalised: str | None = _normalise_phone(raw) or raw
+        else:
+            normalised = None
+        # Validate uniqueness before saving
+        if normalised:
+            from sqlalchemy import func as sa_func, and_
+            async with async_session() as session:
+                conflict = (await session.execute(
+                    select(Tenant).where(
+                        and_(
+                            sa_func.regexp_replace(Tenant.sip_phone_number, "[^0-9+]", "", "g")
+                            == sa_func.regexp_replace(normalised, "[^0-9+]", "", "g"),
+                            Tenant.id != uid,
+                            Tenant.sip_phone_number.is_not(None),
+                        )
+                    ).limit(1)
+                )).scalar_one_or_none()
+            if conflict:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"SIP phone {normalised} is already assigned to tenant '{conflict.slug}'."
+                )
+        update_fields["sip_phone_number"] = normalised
 
     if not update_fields:
         raise HTTPException(status_code=400, detail="No fields to update.")
@@ -256,7 +284,7 @@ async def admin_update_tenant_integrations(
     return {
         "status": "saved",
         "tenant_slug": tenant.slug,
-        "twilio_phone_number": tenant.twilio_phone_number or "",
-        "feature_twilio_enabled": bool(tenant.feature_twilio_enabled),
+        "feature_sms_enabled": bool(tenant.feature_sms_enabled),
         "agent_active": bool(tenant.agent_active),
+        "sip_phone_number": tenant.sip_phone_number or "",
     }

@@ -23,6 +23,7 @@ import {
   AlertCircle,
   Clock,
   Calendar,
+  PhoneCall,
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import { useModal } from '../contexts/ModalContext';
@@ -272,9 +273,9 @@ export default function TenantDetail() {
             />
             <QuickStat
               icon={MessageSquare}
-              label="Twilio SMS"
-              value={tenant.twilio_configured ? 'Configured' : 'Not set up'}
-              active={!!tenant.twilio_configured}
+              label="Exotel SMS"
+              value={tenant.sms_configured ? 'Configured' : 'Not set up'}
+              active={!!tenant.sms_configured}
             />
             <QuickStat
               icon={Clock}
@@ -570,6 +571,7 @@ function DetailSkeleton() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 function OverviewTab({ tenant }) {
+  const tz = tenant.timezone || 'America/Chicago';
   return (
     <div className="space-y-5">
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -652,9 +654,9 @@ function IntegrationsTab({ tenantId, tenant, onRefresh }) {
   const { toast } = useModal();
   const [saving, setSaving] = useState(false);
   const [fields, setFields] = useState({
-    twilio_phone_number: tenant.twilio_phone_number || '',
+    sip_phone_number: tenant.sip_phone_number || '',
     agent_active: tenant.agent_active !== false,
-    feature_twilio_enabled: tenant.feature_twilio_enabled !== false,
+    feature_sms_enabled: tenant.feature_sms_enabled !== false,
   });
   const [loaded, setLoaded] = useState(false);
 
@@ -666,15 +668,15 @@ function IntegrationsTab({ tenantId, tenant, onRefresh }) {
     try {
       const data = await apiFetch(`/api/admin/tenants/${tenantId}`);
       setFields({
-        twilio_phone_number: data.twilio_phone_number || '',
+        sip_phone_number: data.sip_phone_number || '',
         agent_active: data.agent_active !== false,
-        feature_twilio_enabled: data.feature_twilio_enabled !== false,
+        feature_sms_enabled: data.feature_sms_enabled !== false,
       });
     } catch {
       setFields((f) => ({
         ...f,
         agent_active: tenant.agent_active !== false,
-        feature_twilio_enabled: tenant.feature_twilio_enabled !== false,
+        feature_sms_enabled: tenant.feature_sms_enabled !== false,
       }));
     }
     setLoaded(true);
@@ -686,8 +688,8 @@ function IntegrationsTab({ tenantId, tenant, onRefresh }) {
       await apiFetch(`/api/admin/tenants/${tenantId}/integrations`, {
         method: 'POST',
         body: JSON.stringify({
-          twilio_phone_number: fields.twilio_phone_number.trim() || null,
-          feature_twilio_enabled: fields.feature_twilio_enabled,
+          sip_phone_number: fields.sip_phone_number.trim() || null,
+          feature_sms_enabled: fields.feature_sms_enabled,
           agent_active: fields.agent_active,
         }),
       });
@@ -734,10 +736,10 @@ function IntegrationsTab({ tenantId, tenant, onRefresh }) {
         </p>
         <div className="space-y-3">
           <FeatureToggle
-            label="SMS (Twilio)"
+            label="SMS (Exotel)"
             description="Appointment confirmations, reminders, and waitlist notifications via text"
-            enabled={fields.feature_twilio_enabled}
-            onChange={(v) => setFields((f) => ({ ...f, feature_twilio_enabled: v }))}
+            enabled={fields.feature_sms_enabled}
+            onChange={(v) => setFields((f) => ({ ...f, feature_sms_enabled: v }))}
           />
         </div>
       </div>
@@ -753,40 +755,48 @@ function IntegrationsTab({ tenantId, tenant, onRefresh }) {
             configured={tenant.google_calendar_connected}
           />
           <IntegrationStatus
-            label="Twilio SMS"
-            configured={tenant.twilio_configured}
-            enabled={fields.feature_twilio_enabled}
+            label="Exotel SMS"
+            configured={tenant.sms_configured}
+            enabled={fields.feature_sms_enabled}
+          />
+          <IntegrationStatus
+            label="AI Voice (LiveKit)"
+            configured={!!fields.sip_phone_number}
           />
         </div>
       </div>
 
-      {/* Twilio Assignment */}
-      <div className="p-4 bg-white dark:bg-gray-800 rounded-lg border border-indigo-200 dark:border-indigo-800">
-        <h4 className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider mb-3 flex items-center gap-2">
-          <MessageSquare className="w-3.5 h-3.5" />
-          Twilio Assignment
+      {/* SIP / AI Voice Assignment */}
+      <div className="p-4 bg-white dark:bg-gray-800 rounded-lg border border-purple-200 dark:border-purple-800">
+        <h4 className="text-xs font-semibold text-purple-600 dark:text-purple-400 uppercase tracking-wider mb-3 flex items-center gap-2">
+          <PhoneCall className="w-3.5 h-3.5" />
+          AI Voice Assignment (Exotel / SIP)
         </h4>
         <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
-          Assign a Twilio phone number from the platform's global Twilio account to this tenant.
+          Assign the Exotel phone number purchased for this tenant. This single number handles both
+          voice calls (routed to LiveKit AI agent) and SMS reminders.
+          Must be in E.164 format (e.g. <span className="font-mono">+918065481555</span>).
         </p>
         <ProvisioningField
-          icon={MessageSquare}
-          label="Twilio Phone Number"
-          value={fields.twilio_phone_number}
-          onChange={(v) => setFields((f) => ({ ...f, twilio_phone_number: v }))}
-          placeholder="e.g. +14155551234"
-          hint="Twilio SMS number from the platform account used for this tenant's reminders."
+          icon={PhoneCall}
+          label="SIP Phone Number"
+          value={fields.sip_phone_number}
+          onChange={(v) => setFields((f) => ({ ...f, sip_phone_number: v }))}
+          placeholder="e.g. +918065481555"
+          hint="Must be unique across tenants. Normalised to E.164 on save."
         />
-        <div className="pt-4 flex items-center gap-3">
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className="inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors disabled:opacity-50"
-          >
-            {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-            Save Settings
-          </button>
-        </div>
+      </div>
+
+      {/* Save */}
+      <div className="flex items-center gap-3">
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className="inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors disabled:opacity-50"
+        >
+          {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+          Save Settings
+        </button>
       </div>
     </div>
   );
@@ -807,6 +817,7 @@ function UsageHistoryTab({ tenantId }) {
 }
 
 function TenantUsageStats({ tenantId }) {
+  const tz = 'America/Chicago';
   const [usage, setUsage] = useState(null);
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -875,6 +886,7 @@ function TenantUsageStats({ tenantId }) {
 }
 
 function TenantChangeHistory({ tenantId }) {
+  const tz = 'America/Chicago';
   const [changes, setChanges] = useState([]);
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);

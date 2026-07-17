@@ -96,9 +96,31 @@ def _normalise_phone(raw: str, default_region: str = "US") -> str:
         # If invalid / unparseable, fall through to regex approach
 
     # ── Regex fallback ────────────────────────────────────────────────
+    # Known country-code prefixes for regions we support.
+    # Used when libphonenumber is not installed and the number has no + prefix.
+    _REGION_CC: dict[str, str] = {
+        "IN": "91",   # India — 10-digit mobiles starting 6-9
+        "US": "1",
+        "CA": "1",
+        "GB": "44",
+        "AU": "61",
+        "SG": "65",
+    }
     digits = re.sub(r"[^\d+]", "", raw.strip())
     if digits and not digits.startswith("+") and len(digits) >= 10:
-        digits = "+" + digits
+        cc = _REGION_CC.get(default_region, "")
+        if cc and not digits.startswith(cc):
+            # Only prepend country code if the digits don't already include it.
+            # e.g. IN: 10-digit "9876541003" → "+919876541003"
+            #           but "919876541003" (12-digit, already has 91) → "+919876541003"
+            if default_region == "IN" and len(digits) == 10 and digits[0] in "6789":
+                digits = "+" + cc + digits
+            elif default_region != "IN":
+                digits = "+" + cc + digits
+            else:
+                digits = "+" + digits
+        else:
+            digits = "+" + digits
     return digits
 
 
@@ -174,13 +196,21 @@ async def get_caller_by_phone(
 
         # Fallback: try matching national-number suffix (handles +1 prefix
         # differences and any residual non-digit chars in stored phones).
+        # Use .first() (not .scalar_one_or_none()) — if old seed data with
+        # tenant=None shares a phone suffix with a tenant-scoped record, the
+        # query returns multiple rows and scalar_one_or_none() throws
+        # MultipleResultsFound, silently becoming "no record found".
+        # ORDER BY tenant_id NULLS LAST so tenant-scoped records win.
         tail = _phone_digits_tail(norm)
         if tail:
             fallback_filters = [_phone_col_clean(Caller.phone).endswith(tail)]
             if tenant_id:
                 fallback_filters.append(Caller.tenant_id == tenant_id)
             result = await session.execute(
-                select(Caller).where(and_(*fallback_filters))
+                select(Caller)
+                .where(and_(*fallback_filters))
+                .order_by(Caller.tenant_id.nullslast())
+                .limit(1)
             )
             caller_rec = result.scalar_one_or_none()
             return caller_rec
@@ -357,6 +387,7 @@ async def get_caller_history(
                 "relative": _relative_date_label(a.scheduled_at),  # "TODAY", "TOMORROW", etc.
                 "time": _to_local(a.scheduled_at).strftime("%I:%M %p").lstrip("0"),
                 "duration_minutes": a.duration_minutes,
+                "provider_id": str(a.provider.id) if a.provider else None,
                 "provider_name": a.provider.name if a.provider else None,
                 "provider_title": a.provider.title if a.provider else None,
                 "provider_subject": a.provider.subject if a.provider else None,

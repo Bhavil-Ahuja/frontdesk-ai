@@ -8,7 +8,7 @@ the highest-priority matching caller via SMS. If they reply YES, the slot
 is booked for them; otherwise, the next person on the list is offered the slot.
 
 Multi-tenant: every operation is scoped to a tenant_id. SMS notifications
-use the tenant's own Twilio credentials via TenantContext.
+use the tenant's Exotel credentials via TenantContext via TenantContext.
 """
 
 import logging
@@ -156,10 +156,18 @@ async def add_to_waitlist(
             ),
         }
 
-    # Expire at end of the preferred date (23:59:59 UTC)
+    # Expire at end of the preferred date in the tenant's local timezone
+    from zoneinfo import ZoneInfo
+    tz_name = (
+        getattr(tenant_ctx, "timezone", None) if tenant_ctx else None
+    ) or DEFAULT_TIMEZONE
+    try:
+        local_tz = ZoneInfo(tz_name)
+    except Exception:
+        local_tz = ZoneInfo(DEFAULT_TIMEZONE)
     expires_at = datetime.combine(
-        target_date, datetime.max.time(), tzinfo=timezone.utc
-    )
+        target_date, datetime.max.time(), tzinfo=local_tz
+    ).astimezone(timezone.utc)
 
     # Normalise the phone before storing — prevents dirty data (dashes, spaces)
     norm_phone = _normalise_phone(student_phone)

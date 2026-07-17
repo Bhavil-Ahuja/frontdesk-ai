@@ -176,7 +176,7 @@ async def send_message(
     """
     Send a custom outbound SMS from the admin dashboard.
     Saves with sender_type='admin' so the UI can distinguish it from AI-sent messages.
-    Test phone numbers (+1555...) are guarded — no real Twilio call is made.
+    Test phone numbers (+1555...) are guarded — no real Exotel call is made.
     """
     to = payload.to.strip()
     message = payload.message.strip()
@@ -197,7 +197,7 @@ async def send_message(
         sender_type="admin",
     )
     if not ok:
-        raise HTTPException(status_code=500, detail="Failed to send message — check Twilio credentials")
+        raise HTTPException(status_code=500, detail="Failed to send message — check Exotel credentials")
 
     logger.info("[SMS] Admin manual send from tenant=%s to=%s is_test=%s", current_user.slug, to, is_test)
     return {"success": True, "to": to, "is_test": is_test}

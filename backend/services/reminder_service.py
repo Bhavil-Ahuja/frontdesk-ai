@@ -3,7 +3,7 @@ Reminder & follow-up service — sends SMS notifications for upcoming and
 completed appointments on a scheduled interval.
 
 Multi-tenant: iterates over all ACTIVE tenants, resolves their TenantContext
-for per-tenant Twilio creds and business name, then sends reminders/followups
+for per-tenant Exotel creds and business name, then sends reminders/followups
 scoped to each tenant.
 
 - 2h-before reminder: "Your appointment is coming up today at {time}"
@@ -75,20 +75,21 @@ async def _send_2h_reminders(tenant_id, tenant_ctx, now: datetime) -> int:
 
     async with async_session() as session:
         result = await session.execute(
-            select(Appointment)
+            select(Appointment, Caller)
             .join(Caller, Appointment.caller_id == Caller.id)
             .where(and_(*filters))
         )
-        appointments = result.scalars().all()
+        rows = result.all()
 
         sent = 0
-        for appt in appointments:
+        for appt, caller in rows:
             ok = sms_service.send_reminder(
                 caller_name=appt.student_name,
                 phone=appt.student_phone,
                 appointment_type=appt.appointment_type.replace("_", " ").title(),
                 scheduled_at=appt.scheduled_at,
                 tenant_ctx=tenant_ctx,
+                is_test=caller.is_test or False,
             )
             if ok:
                 appt.reminder_2h_sent_at = now
@@ -127,18 +128,19 @@ async def _send_followups(tenant_id, tenant_ctx, now: datetime) -> int:
 
     async with async_session() as session:
         result = await session.execute(
-            select(Appointment)
+            select(Appointment, Caller)
             .join(Caller, Appointment.caller_id == Caller.id)
             .where(and_(*filters))
         )
-        appointments = result.scalars().all()
+        rows = result.all()
 
         sent = 0
-        for appt in appointments:
+        for appt, caller in rows:
             ok = sms_service.send_followup(
                 caller_name=appt.student_name,
                 phone=appt.student_phone,
                 tenant_ctx=tenant_ctx,
+                is_test=caller.is_test or False,
             )
             if ok:
                 appt.followup_sent_at = now
@@ -157,7 +159,7 @@ async def _send_followups(tenant_id, tenant_ctx, now: datetime) -> int:
 
 
 def _send_review_sms(caller_name: str, phone: str, review_link: str,
-                     tenant_ctx) -> bool:
+                     tenant_ctx, is_test: bool = False) -> bool:
     """Send a Google review solicitation SMS via the generic SMS sender."""
     business_name = tenant_ctx.business_name if tenant_ctx else "our office"
     body = (
@@ -165,9 +167,9 @@ def _send_review_sms(caller_name: str, phone: str, review_link: str,
         f"If you had a great experience, we'd love a quick review: "
         f"{review_link}. Thank you!"
     )
-    ok = sms_service._send_sms(phone, body, tenant_ctx)
+    ok = sms_service._send_sms(phone, body, tenant_ctx, is_test=is_test)
     if ok:
-        sms_service._log_outbound_sms(tenant_ctx, to_number=phone, body=body, caller_phone=phone)
+        sms_service._log_outbound_sms(tenant_ctx, to_number=phone, body=body, caller_phone=phone, is_test=is_test)
     return ok
 
 
@@ -205,19 +207,20 @@ async def _send_review_requests(tenant_id, tenant_ctx, now: datetime) -> int:
 
     async with async_session() as session:
         result = await session.execute(
-            select(Appointment)
+            select(Appointment, Caller)
             .join(Caller, Appointment.caller_id == Caller.id)
             .where(and_(*filters))
         )
-        appointments = result.scalars().all()
+        rows = result.all()
 
         sent = 0
-        for appt in appointments:
+        for appt, caller in rows:
             ok = _send_review_sms(
                 caller_name=appt.student_name,
                 phone=appt.student_phone,
                 review_link=review_link,
                 tenant_ctx=tenant_ctx,
+                is_test=caller.is_test or False,
             )
             if ok:
                 appt.review_requested_at = now

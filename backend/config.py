@@ -12,22 +12,34 @@ class Settings:
     """Central configuration loaded from .env file."""
 
     # ── LLM Backend ───────────────────────────────────────────────────────
-    # LLM_PROVIDER: "ollama" (local) or "gemini" (Google free tier)
+    # LLM_PROVIDER: "ollama" (local), "gemini" (Google free tier),
+    # "sambanova" (SambaNova Cloud), or "groq" (Groq LPU — fastest free option)
     LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "ollama")
 
     # Ollama (local LLM)
     OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
 
-    # Gemini (Google free tier — 15 RPM, 1500/day for gemini-3.5-flash)
+    # SambaNova Cloud (OpenAI-compatible)
+    SAMBANOVA_API_KEY: str = os.getenv("SAMBANOVA_API_KEY", "")
+    SAMBANOVA_MODEL: str = os.getenv("SAMBANOVA_MODEL", "Meta-Llama-3.3-70B-Instruct")
+    SAMBANOVA_BASE_URL: str = os.getenv("SAMBANOVA_BASE_URL", "https://api.sambanova.ai/v1")
+
+    # Groq (LPU inference — ~800 tok/s, generous free tier: 14,400 RPD)
+    GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
+    GROQ_MODEL: str = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
+
+    # Gemini — use gemini-3.1-flash-lite (cheapest) or gemini-3-flash for better quality
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
-    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
     # Max chat-history messages sent to Gemini per request. The full transcript
     # is still saved in the session — only what's *forwarded* to the model is
-    # trimmed. Default is intentionally generous (200) because each tool round
-    # adds 2–3 history entries; a heavy booking call can easily hit 30+
-    # entries by turn 3. Set lower only if you're truly hitting context limits.
-    GEMINI_HISTORY_MAX_MESSAGES: int = int(os.getenv("GEMINI_HISTORY_MAX_MESSAGES", "200"))
+    # trimmed. Keeping this low (20) is critical for cost control: on every LLM
+    # turn the entire history is re-sent, so a 200-message history on a long call
+    # can multiply token costs 5–10x. 20 messages (10 turns) is sufficient for
+    # natural conversation continuity in a scheduling/support context.
+    GEMINI_HISTORY_MAX_MESSAGES: int = int(os.getenv("GEMINI_HISTORY_MAX_MESSAGES", "20"))
     # Enable explicit context caching for the system prompt + tools. When True,
     # we create a CachedContent per tenant and reuse it across calls. Cuts
     # per-call cost ~75% on the cached prefix. May not be supported by all
@@ -36,19 +48,25 @@ class Settings:
     # TTL (seconds) for explicit context caches. Default 1 hour.
     GEMINI_CACHE_TTL_SECONDS: int = int(os.getenv("GEMINI_CACHE_TTL_SECONDS", "3600"))
 
-    # ── Bolna AI (global outbound calling — admin-configured) ─────────────
-    # These are fallback env-var values.  The live values are stored in the
-    # platform_config DB table and editable via the admin portal at runtime.
-    BOLNA_API_KEY: str = os.getenv("BOLNA_API_KEY", "")
-    BOLNA_AGENT_ID: str = os.getenv("BOLNA_AGENT_ID", "")
+    # ── LiveKit (voice call infrastructure) ──────────────────────────────
+    # Used by the LiveKit agent worker process (backend/agents/voice_agent.py).
+    # The live values are stored in platform_config DB and editable via admin.
+    LIVEKIT_URL: str = os.getenv("LIVEKIT_URL", "ws://localhost:7880")
+    LIVEKIT_API_KEY: str = os.getenv("LIVEKIT_API_KEY", "devkey")
+    LIVEKIT_API_SECRET: str = os.getenv("LIVEKIT_API_SECRET", "devsecret")
+
+    # ── Exotel (Indian telephony + SMS) ───────────────────────────────────
+    EXOTEL_SID: str = os.getenv("EXOTEL_SID", "")
+    EXOTEL_API_KEY: str = os.getenv("EXOTEL_API_KEY", "")
+    EXOTEL_TOKEN: str = os.getenv("EXOTEL_TOKEN", "")
+    EXOTEL_SUBDOMAIN: str = os.getenv("EXOTEL_SUBDOMAIN", "api.exotel.com")
+    EXOTEL_NUMBER: str = os.getenv("EXOTEL_NUMBER", "")       # default caller ID / SMS from-number
+    EXOTEL_SENDER_ID: str = os.getenv("EXOTEL_SENDER_ID", "") # DLT-registered 6-char sender header for Indian SMS (e.g. "BRTFTR")
+    EXOTEL_DLT_ENTITY_ID: str = os.getenv("EXOTEL_DLT_ENTITY_ID", "")
+    EXOTEL_DLT_TEMPLATE_ID: str = os.getenv("EXOTEL_DLT_TEMPLATE_ID", "")
 
     # ── ElevenLabs (voice preview) ───────────────────────────────────────
     ELEVENLABS_API_KEY: str = os.getenv("ELEVENLABS_API_KEY", "")
-
-    # ── Twilio ────────────────────────────────────────────────────────────
-    TWILIO_ACCOUNT_SID: str = os.getenv("TWILIO_ACCOUNT_SID", "")
-    TWILIO_AUTH_TOKEN: str = os.getenv("TWILIO_AUTH_TOKEN", "")
-    TWILIO_PHONE_NUMBER: str = os.getenv("TWILIO_PHONE_NUMBER", "")
 
     # ── PostgreSQL ────────────────────────────────────────────────────────
     DATABASE_URL: str = os.getenv(
@@ -81,7 +99,7 @@ class Settings:
     # When False, the feature is unavailable for ALL tenants regardless of
     # their own per-tenant setting. Useful for running the platform in
     # text-only mode when SMS isn't licensed.
-    FEATURE_TWILIO_ENABLED: bool = os.getenv("FEATURE_TWILIO_ENABLED", "true").lower() == "true"
+    FEATURE_SMS_ENABLED: bool = os.getenv("FEATURE_SMS_ENABLED", "true").lower() == "true"
 
     # ── Local chat mode ───────────────────────────────────────────────────
     # When True, the frontend exposes a /chat page that talks to the same
@@ -94,6 +112,33 @@ class Settings:
     def ollama_openai_base(self) -> str:
         """OpenAI-compatible base URL for Ollama."""
         return f"{self.OLLAMA_BASE_URL}/v1"
+
+    # The OpenAI-compatible text path (llm_service) serves both Ollama and
+    # SambaNova. These properties return the right base/key/model for whichever
+    # provider is active, so the "else" (non-gemini) branch works for both.
+    @property
+    def openai_compat_base(self) -> str:
+        if self.LLM_PROVIDER == "sambanova":
+            return self.SAMBANOVA_BASE_URL
+        if self.LLM_PROVIDER == "groq":
+            return self.GROQ_BASE_URL
+        return self.ollama_openai_base
+
+    @property
+    def openai_compat_key(self) -> str:
+        if self.LLM_PROVIDER == "sambanova":
+            return self.SAMBANOVA_API_KEY
+        if self.LLM_PROVIDER == "groq":
+            return self.GROQ_API_KEY
+        return "ollama"  # Ollama ignores the key but the SDK requires one
+
+    @property
+    def openai_compat_model(self) -> str:
+        if self.LLM_PROVIDER == "sambanova":
+            return self.SAMBANOVA_MODEL
+        if self.LLM_PROVIDER == "groq":
+            return self.GROQ_MODEL
+        return self.OLLAMA_MODEL
 
 
 

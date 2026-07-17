@@ -6,8 +6,11 @@ without requiring a server restart.  Sensitive values (API keys) are
 stored as plain text but never returned unmasked through the API.
 
 Current keys:
-  bolna_api_key   — Bolna AI outbound calling API key (global, all tenants share)
-  bolna_agent_id  — Bolna AI agent UUID (global)
+  livekit_url         — LiveKit server WebSocket URL (wss://...)
+  livekit_api_key     — LiveKit API key
+  livekit_api_secret  — LiveKit API secret
+  exotel_sid          — Exotel account SID
+  exotel_token        — Exotel API token
 """
 
 import uuid

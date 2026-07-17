@@ -243,7 +243,7 @@ _MIGRATIONS: list[str] = [
     "ALTER TABLE tenants DROP COLUMN IF EXISTS vapi_webhook_secret",
     "ALTER TABLE tenants DROP COLUMN IF EXISTS feature_vapi_enabled",
 
-    # ── tenants — drop per-tenant Bolna columns (now global via platform_config)
+    # ── tenants — drop legacy per-tenant calling columns (superseded by platform_config)
     "ALTER TABLE tenants DROP COLUMN IF EXISTS bolna_api_key",
     "ALTER TABLE tenants DROP COLUMN IF EXISTS bolna_agent_id",
 
@@ -391,6 +391,52 @@ _MIGRATIONS: list[str] = [
          )""",
     # ── waitlist_entries — store booked appointment time after promote ─────────
     "ALTER TABLE waitlist_entries ADD COLUMN IF NOT EXISTS appointment_scheduled_at TIMESTAMPTZ",
+
+    # ── tenants — per-tenant SIP/AI phone number for call routing ───────────
+    # Provider-neutral: admin assigns the phone number purchased for this tenant
+    # (from Exotel, Plivo, Twilio, etc.). Used for automatic tenant resolution
+    # from inbound SIP calls — no slug needed.
+    # Safe rename: guards against column already being named sip_phone_number.
+    """DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name='tenants' AND column_name='bolna_phone_number'
+    ) THEN
+        ALTER TABLE tenants RENAME COLUMN bolna_phone_number TO sip_phone_number;
+    END IF;
+END $$""",
+    "DROP INDEX IF EXISTS uniq_tenants_bolna_phone",
+    "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS sip_phone_number VARCHAR(20)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uniq_tenants_sip_phone ON tenants(sip_phone_number) WHERE sip_phone_number IS NOT NULL",
+
+    # ── tenants — rename feature_twilio_enabled → feature_sms_enabled ────────
+    """DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name='tenants' AND column_name='feature_twilio_enabled'
+    ) THEN
+        ALTER TABLE tenants RENAME COLUMN feature_twilio_enabled TO feature_sms_enabled;
+    END IF;
+END $$""",
+    "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS feature_sms_enabled BOOLEAN NOT NULL DEFAULT FALSE",
+    # ── tenants — drop legacy per-tenant Twilio credential columns ────────────
+    "ALTER TABLE tenants DROP COLUMN IF EXISTS twilio_account_sid",
+    "ALTER TABLE tenants DROP COLUMN IF EXISTS twilio_auth_token",
+    "ALTER TABLE tenants DROP COLUMN IF EXISTS twilio_phone_number",
+    # ── sms_messages — rename twilio_sid → sms_sid ────────────────────────────
+    """DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name='sms_messages' AND column_name='twilio_sid'
+    ) THEN
+        ALTER TABLE sms_messages RENAME COLUMN twilio_sid TO sms_sid;
+    END IF;
+END $$""",
+    "ALTER TABLE sms_messages ADD COLUMN IF NOT EXISTS sms_sid VARCHAR(50)",
+    "UPDATE tenants SET feature_sms_enabled = FALSE WHERE business_type = 'coaching_institute'",
 ]
 
 

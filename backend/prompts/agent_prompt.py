@@ -9,6 +9,7 @@ backwards compatibility.
 
 from typing import Any
 
+from backend.config import settings
 from backend.defaults import (
     DEFAULT_AGENT_NAME,
     DEFAULT_APPOINTMENT_DURATION_MINUTES,
@@ -40,7 +41,7 @@ def _build_static_prompt(
     business_hours: dict[str, Any] | None = None,
     business_phone: str = "",
     business_address: str = "",
-    has_twilio: bool = False,
+    has_sms: bool = False,
     has_escalation: bool = False,
 ) -> str:
     """
@@ -125,12 +126,18 @@ def _build_static_prompt(
 
     return f"""You are {agent_name}, a warm and professional admissions assistant at {business_name}.
 
+VOICE BREVITY RULES — follow these before anything else:
+- Max 2 questions per turn. Never ask more than two things at once.
+- Skip filler phrases entirely: no "Certainly!", "Of course!", "Thank you for clarifying.", "Got it!", "Absolutely!", "Sure, I can help with that!". Start directly with the answer or question.
+- Do NOT repeat back what the caller just said. A brief acknowledgment word is fine ("Sure.", "Got it.") but move on immediately.
+- EXCEPTION: if the caller provides a phone number that is different from the number they are calling from, confirm it once before using it. Example: "Just to confirm — should I use 9876541003 for your profile?" Then proceed.
+- Do NOT explain what you are about to do. Just do it. Bad: "Let me look that up for you." Good: [call the tool, then give the result]
+- When a tool returns appointment data, state it immediately. Bad: "I found your appointments — do you need any adjustments?" Good: "Your demo class is on Monday July 7 at 10 AM."
+
 PERSONALITY:
-- Warm, encouraging, and professional
-- Speak naturally — not robotic. Use natural phrases like "absolutely", "of course", "certainly"
-- Show genuine interest in the caller's needs
-- Never rush the caller. Let them finish speaking.
-- Keep responses concise for voice — no long paragraphs
+- Warm and direct — friendly but no fluff
+- Never rush the caller. Wait for them to finish speaking before responding.
+- Keep responses conversational and brief — you are on a phone call, not writing an email
 
 ENDING THE CALL:
 - When the caller says they're done ("that's all", "nothing else", "I'm good", "thank you bye", "no that's it"), wrap up warmly:
@@ -138,7 +145,7 @@ ENDING THE CALL:
 - If they confirm they're done, end with a warm goodbye:
   "Wonderful! Thank you for calling {business_name}. Have a great day!"
 - Do NOT keep asking questions or offering services after the caller has clearly indicated they're finished.
-- After your goodbye, the call will end automatically — you do not need to do anything special.
+- After saying goodbye, you must IMMEDIATELY call the end_call tool to hang up and disconnect. You must call end_call to end the call.
 
 WHAT YOU CAN DO:
 1. Answer questions about the office — ALWAYS call get_office_info for hours, location, services, or pricing. NEVER answer these from memory.
@@ -173,8 +180,15 @@ WHAT YOU CAN DO:
 10. Transfer to a human team member when needed
 11. CALLER CRM ACCESS: You have access to the caller database via lookup_caller and update_caller_info tools.
    - Use lookup_caller to retrieve a caller's full record (personal details, visit history, upcoming sessions) by phone or name.
-   - When a caller provides new or corrected info, call update_caller_info to save it immediately.
+   - Before booking or saving any name, ALWAYS repeat it back to the caller to confirm you heard it correctly (e.g. "Just to confirm, is your name Bhavil?"). Once they confirm it is correct, IMMEDIATELY call update_caller_info to save it in the system so it is persisted even if the call drops.
    - NEVER make up or guess caller data. If lookup_caller returns no record, treat them as a new caller.
+   - IMPORTANT: When a caller says "check my record", "I'm already in your system", "my data is there", or "I have an appointment" — IMMEDIATELY call lookup_caller_appointments with the caller's phone number from caller-ID. Do NOT ask for their name first. Call the tool and report what you find.
+
+CHECKING EXISTING APPOINTMENTS (distinct from booking a new one):
+- When the caller asks about their CURRENT or UPCOMING sessions ("when is my appointment?", "what's scheduled for me?", "check my demo"), call lookup_caller_appointments and READ THE RESULT back directly.
+- Do NOT call get_available_slots for a lookup request. Do NOT ask for the appointment type before calling lookup. Just call it and report the time, date, and type found.
+- After calling lookup_caller_appointments: "Your [type] is on [date] at [time]." — one sentence. Done.
+- Only trigger the BOOKING FLOW if the caller explicitly wants to SCHEDULE A NEW session.
 
 SESSION TYPES AND DURATION:
 {appt_text}
@@ -193,10 +207,12 @@ WHY: Collecting details BEFORE checking availability wastes the caller's time if
 
 BOOKING RULES:
 - CRITICAL — REUSE ALREADY-COLLECTED INFO: Before asking the caller for any field (name, phone, date, reason, session type), CHECK whether you already have it from (a) the lookup_caller result in conversation history, or (b) earlier turns in this conversation. If yes, USE IT — do NOT re-ask. Re-asking the same question is a serious failure.
+- Do NOT ask for: grade, class, age, board, school name, or "is this for yourself or your child?". Collect ONLY name, phone, preferred date/time, and appointment type. If the person booking is different from the student (e.g. parent booking for child), their name field will make that clear — do not ask upfront.
+- Once the caller has answered a question, do NOT ask it again in a later turn under any circumstances.
 - The same rule applies to add_to_waitlist, reschedule_appointment, cancel_appointment — reuse everything you already know.
 - Offer 2–3 available slot options, never just one
 - Always confirm all details before finalizing
-- {"After booking, inform the caller they will receive an SMS confirmation. Callers can also text this number to confirm, reschedule, or cancel sessions — the system handles that automatically." if has_twilio else "After booking, confirm the session details clearly to the caller."}
+- {"After booking, inform the caller they will receive an SMS confirmation. Callers can also text this number to confirm, reschedule, or cancel sessions — the system handles that automatically." if has_sms else "After booking, confirm the session details clearly to the caller."}
 - When a caller provides details during the conversation, IMMEDIATELY save it using update_caller_info so it's stored for future visits.
 - For returning callers, use the data from the lookup_caller result. Do NOT re-ask for info you already have.
 
@@ -351,7 +367,7 @@ def _build_coaching_prompt(
     business_hours: dict | None = None,
     business_phone: str = "",
     business_address: str = "",
-    has_twilio: bool = False,
+    has_sms: bool = False,
     has_escalation: bool = False,
     courses: list[dict] | None = None,
     providers: list[dict] | None = None,
@@ -473,7 +489,7 @@ ENDING THE CALL:
 - If they confirm they're done, end with a warm goodbye:
   "Wonderful! Thank you for calling {business_name}. Have a great day!"
 - Do NOT keep asking questions or offering more options after the caller has clearly finished.
-- After your goodbye, the call will end automatically — you do not need to do anything special.
+- After saying goodbye, you must IMMEDIATELY call the end_call tool to hang up and disconnect. You must call end_call to end the call.
 
 WHAT YOU CAN DO:
 1. Answer questions about the institute — ALWAYS call get_office_info for hours, location, courses, fees, or batch details. NEVER answer these from memory.
@@ -499,16 +515,15 @@ WHAT YOU CAN DO:
    - A STUDENT calling for themselves — their name is BOTH the caller_name AND the student_name (same person, ask once, use for both fields)
 11. CONTACT CRM ACCESS: You have access to the contact database via lookup_caller and update_caller_info tools.
    - Use lookup_caller to retrieve a caller's full record by phone.
-   - When a caller provides new information (student name, grade, course interest), call update_caller_info to save it.
+   - Before booking or saving any name, ALWAYS repeat it back to the caller to confirm you heard it correctly (e.g. "Just to confirm, is your name Bhavil Ahuja?"). Once they confirm it is correct, IMMEDIATELY call update_caller_info to save it in the system so it's persisted even if the call drops.
    - NEVER make up or guess caller data. If lookup_caller returns no record, treat them as a new enquiry.
 
 SESSION TYPES AND DURATION:
 {appt_text}
 {demo_subjects_section}CALLER IDENTIFICATION — CRITICAL:
 The caller may be a PARENT or the STUDENT themselves. Determine this early from context:
-- If they say "my son/daughter", "my child", "for my kid" → they are a PARENT. Collect their name as caller_name, then collect the student's name as student_name (different person).
-- If they say "I want to join", "for myself", "I'm the one taking classes" → they are the STUDENT. Their name is BOTH caller_name AND student_name — ask once, use for both fields. Do NOT ask "what is the student's name?" after they've already given their own name.
-- If unclear from context — ask naturally: "Are you looking for yourself, or for your son or daughter?"
+- If they explicitly say "my son/daughter", "my child", "for my kid" → they are a PARENT. Collect their name as caller_name, then collect the student's name as student_name (different person).
+- Otherwise, default to assuming they are the STUDENT calling for themselves. Their name is BOTH caller_name AND student_name. Do NOT ask "Are you looking for yourself, or for your son or daughter?".
 
 BOOKING FLOW (follow this exact order):
 1. When the caller states ANY booking, rescheduling, cancellation, or appointment-check intent →
@@ -624,7 +639,7 @@ HANDLING SHORT / AMBIGUOUS REPLIES ("sure", "yes", "ok", "yeah", "no", "nope"):
 - These ALWAYS refer to the LAST question YOU asked.
 - NEVER respond with "How can I help you today?" to a short confirmation — that resets progress.
 
-{"After booking, inform the caller they will receive an SMS confirmation." if has_twilio else "After booking, confirm the booking details clearly to the caller."}
+{"After booking, inform the caller they will receive an SMS confirmation." if has_sms else "After booking, confirm the booking details clearly to the caller."}
 
 BOOKING CONFIRMATION RULES:
 - Always confirm the booking for the STUDENT by name.
@@ -754,11 +769,11 @@ def build_system_prompt(
     except Exception:
         tz = ZoneInfo(DEFAULT_TIMEZONE)
 
-    # ── Twilio availability (for conditional SMS promise) ────────────────
-    has_twilio = bool(
+    # ── SMS availability (for conditional SMS promise) ───────────────────
+    has_sms = bool(
         tenant_ctx
-        and getattr(tenant_ctx, "twilio_account_sid", None)
-        and getattr(tenant_ctx, "twilio_auth_token", None)
+        and getattr(tenant_ctx, "feature_sms_enabled", True)
+        and (getattr(tenant_ctx, "sip_phone_number", None) or settings.EXOTEL_NUMBER)
     )
 
     # ── Escalation availability ─────────────────────────────────────────
@@ -774,61 +789,44 @@ def build_system_prompt(
         )
     )
 
-    # ── Build coaching institute prompt ───────────────────────────────────
-    courses = []
-    if tenant_ctx:
-        kb = getattr(tenant_ctx, "knowledge_base", None) or {}
-        if isinstance(kb, dict):
-            courses = kb.get("courses", []) or []
-    static_prompt = _build_coaching_prompt(
-        agent_name=agent_name,
-        business_name=business_name,
-        appointment_types=appointment_types,
-        greeting_message=greeting_message,
-        business_hours=business_hours,
-        business_phone=business_phone,
-        business_address=business_address,
-        has_twilio=has_twilio,
-        has_escalation=has_escalation,
-        courses=courses,
-        providers=providers,
-    )
+    # ── Build appropriate prompt based on business type ───────────────────
+    if business_type == "coaching_institute":
+        courses = []
+        if tenant_ctx:
+            kb = getattr(tenant_ctx, "knowledge_base", None) or {}
+            if isinstance(kb, dict):
+                courses = kb.get("courses", []) or []
+        static_prompt = _build_coaching_prompt(
+            agent_name=agent_name,
+            business_name=business_name,
+            appointment_types=appointment_types,
+            greeting_message=greeting_message,
+            business_hours=business_hours,
+            business_phone=business_phone,
+            business_address=business_address,
+            has_sms=has_sms,
+            has_escalation=has_escalation,
+            courses=courses,
+            providers=providers,
+        )
+    else:
+        static_prompt = _build_static_prompt(
+            agent_name=agent_name,
+            business_name=business_name,
+            business_type=business_type,
+            appointment_types=appointment_types,
+            emergency_guidance=emergency_guidance,
+            greeting_message=greeting_message,
+            business_hours=business_hours,
+            business_phone=business_phone,
+            business_address=business_address,
+            has_sms=has_sms,
+            has_escalation=has_escalation,
+        )
 
-    # ── Date context ─────────────────────────────────────────────────────
+    # ── Date context ──────────────────────────────────────────────────────
     today = datetime.now(tz)
-
-    # Day-of-week → next-occurrence mapping
     caller_label = "caller"
-
-    dow_lines = []
-    seen = set()
-    for i in range(0, 14):
-        d = today + timedelta(days=i)
-        dow = d.strftime("%A")
-        if dow not in seen:
-            seen.add(dow)
-            dow_lines.append(f"  - When {caller_label} says '{dow}' → use date {d.strftime('%Y-%m-%d')} ({d.strftime('%B %d')})")
-
-    # Upcoming days — "this X" and "next X" BOTH mean the nearest upcoming
-    # occurrence. Callers use them interchangeably. Only "the X after next"
-    # or an explicit date means the further occurrence.
-    upcoming_days = []
-    first_occurrence_seen: set[str] = set()
-    for i in range(0, 14):
-        d = today + timedelta(days=i)
-        dow_name = d.strftime('%A')
-        if i == 0:
-            label = "today"
-        elif i == 1:
-            label = "tomorrow"
-        elif dow_name not in first_occurrence_seen:
-            # First upcoming occurrence — both "this" and "next" mean this one
-            label = f"this {dow_name} / next {dow_name}"
-            first_occurrence_seen.add(dow_name)
-        else:
-            # Second occurrence — only reachable via explicit phrasing
-            label = f"the {dow_name} after next ({d.strftime('%B %d')})"
-        upcoming_days.append(f"  - {label} = {d.strftime('%A, %B %d, %Y')} (use date: {d.strftime('%Y-%m-%d')})")
 
     # Upcoming holidays / closures (so AI proactively tells callers)
     holiday_lines: list[str] = []
@@ -850,13 +848,9 @@ def build_system_prompt(
     time_str_12 = today.strftime('%I:%M %p').lstrip('0')  # e.g. "2:30 PM"
 
     date_context = (
-        f"\n=== CURRENT DATE & TIME ===\n"
-        f"TODAY is {today.strftime('%A, %B %d, %Y')}.\n"
-        f"CURRENT TIME is {time_str_24} ({time_str_12}) in {tz_name}.\n"
-        f"\n=== DAY-OF-WEEK → DATE MAPPING (use these for tool calls) ===\n"
-        + "\n".join(dow_lines) + "\n"
-        f"\nUPCOMING DATES (alternative phrasing):\n"
-        + "\n".join(upcoming_days) + "\n"
+        f"\n=== DATE & TIME ===\n"
+        f"TODAY is {today.strftime('%A, %B %d, %Y')} ({today.strftime('%Y-%m-%d')}). "
+        f"Current time: {time_str_12} {tz_name}.\n"
         + (
             "\nUPCOMING HOLIDAYS / OFFICE CLOSURES (we are CLOSED on these dates — do NOT offer slots or waitlist):\n"
             + "\n".join(holiday_lines) + "\n"

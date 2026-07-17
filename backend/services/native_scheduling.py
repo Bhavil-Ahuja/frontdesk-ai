@@ -771,19 +771,6 @@ async def create_native_booking(
     Returns a dict with status="CONFLICT" if the unique index fires (someone
     booked the same provider at the same instant — race lost).
     """
-    try:
-        scheduled_at = datetime.fromisoformat(start_time)
-        # Ensure timezone-aware — if the string has an offset (e.g. from
-        # get_native_slots), fromisoformat handles it and we convert to UTC
-        # for storage. If naive, assume UTC for backwards-compat.
-        if scheduled_at.tzinfo is None:
-            scheduled_at = scheduled_at.replace(tzinfo=timezone.utc)
-        else:
-            scheduled_at = scheduled_at.astimezone(timezone.utc)
-    except (ValueError, TypeError) as exc:
-        logger.error("[NativeSched] Bad start_time: %s — %s", start_time, exc)
-        return None
-
     booking_uid = f"native-{uuid.uuid4().hex[:12]}"
 
     # Canonicalize the appointment type code so it always matches the slug
@@ -817,6 +804,25 @@ async def create_native_booking(
             _tenant_obj = _tr.scalar_one_or_none()
             if _tenant_obj and getattr(_tenant_obj, "timezone", None):
                 _tz_name = _tenant_obj.timezone
+
+    try:
+        scheduled_at = datetime.fromisoformat(start_time)
+        # Ensure timezone-aware — if the string has an offset (e.g. from
+        # get_native_slots), fromisoformat handles it and we convert to UTC
+        # for storage. If naive, assume tenant's timezone instead of UTC.
+        if scheduled_at.tzinfo is None:
+            try:
+                from zoneinfo import ZoneInfo
+                local_tz = ZoneInfo(_tz_name)
+            except Exception:
+                from zoneinfo import ZoneInfo
+                local_tz = ZoneInfo(DEFAULT_TIMEZONE)
+            scheduled_at = scheduled_at.replace(tzinfo=local_tz).astimezone(timezone.utc)
+        else:
+            scheduled_at = scheduled_at.astimezone(timezone.utc)
+    except (ValueError, TypeError) as exc:
+        logger.error("[NativeSched] Bad start_time: %s — %s", start_time, exc)
+        return None
 
     # ── Demo class duration override ───────────────────────────────────────────
     # For demo_class bookings the duration is determined by the provider's
@@ -981,17 +987,6 @@ async def reschedule_native_booking(
     Validates that the new time slot is available before committing.
     Returns result dict, {"status": "CONFLICT"} if slot is full, or None on error.
     """
-    try:
-        new_dt = datetime.fromisoformat(new_start_time)
-        # Convert to UTC for storage — handles both tz-aware and naive inputs
-        if new_dt.tzinfo is None:
-            new_dt = new_dt.replace(tzinfo=timezone.utc)
-        else:
-            new_dt = new_dt.astimezone(timezone.utc)
-    except (ValueError, TypeError) as exc:
-        logger.error("[NativeSched] Bad new_start_time: %s — %s", new_start_time, exc)
-        return None
-
     async with async_session() as session:
         result = await session.execute(
             select(Appointment).where(Appointment.cal_booking_uid == booking_uid)
@@ -1021,6 +1016,23 @@ async def reschedule_native_booking(
                     appt.appointment_type or "", tenant
                 )
 
+        _tz_name = tenant.timezone if tenant and tenant.timezone else DEFAULT_TIMEZONE
+        try:
+            new_dt = datetime.fromisoformat(new_start_time)
+            # Convert to UTC for storage — handles both tz-aware and naive inputs
+            if new_dt.tzinfo is None:
+                try:
+                    from zoneinfo import ZoneInfo
+                    local_tz = ZoneInfo(_tz_name)
+                except Exception:
+                    from zoneinfo import ZoneInfo
+                    local_tz = ZoneInfo(DEFAULT_TIMEZONE)
+                new_dt = new_dt.replace(tzinfo=local_tz).astimezone(timezone.utc)
+            else:
+                new_dt = new_dt.astimezone(timezone.utc)
+        except (ValueError, TypeError) as exc:
+            logger.error("[NativeSched] Bad new_start_time: %s — %s", new_start_time, exc)
+            return None
         new_end = new_dt + timedelta(minutes=duration)
         # Fetch confirmed appointments that could overlap with the new time.
         # We fetch rows and check overlap in Python to avoid Postgres-specific

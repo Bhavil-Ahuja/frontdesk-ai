@@ -1,13 +1,18 @@
 """
-Twilio SMS service — sends appointment confirmations, cancellations,
+Exotel SMS service — sends appointment confirmations, cancellations,
 escalation notifications, and office alerts.
 
 Multi-tenant: every public function accepts an optional TenantContext so it
-uses the correct Twilio credentials, business name, phone, and timezone.
-Falls back to global settings for legacy single-tenant mode.
+uses the correct business name, phone, and timezone.
+Credentials are global (one Exotel account for the platform); the from-number
+is the per-tenant sip_phone_number (the Exotel number assigned in admin).
 
-Uses httpx to call the Twilio REST API directly (avoids the heavy twilio SDK
-which requires aiohttp — not yet available for Python 3.14).
+Uses httpx to call the Exotel REST API directly.
+
+⚠️  Indian DLT note: production SMS in India requires DLT-registered sender
+headers and pre-approved templates. Configure this in your Exotel dashboard.
+The "From" param should be your DLT-registered sender ID (e.g. "BRTFTR"),
+not necessarily the phone number — set EXOTEL_SENDER_ID in .env.
 """
 
 import asyncio
@@ -24,36 +29,39 @@ from backend.defaults import DEFAULT_TIMEZONE
 
 logger = logging.getLogger(__name__)
 
-# Twilio REST API endpoint
-TWILIO_API_URL = "https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json"
+# Exotel SMS API endpoint template
+EXOTEL_SMS_URL = "https://{subdomain}/v1/Accounts/{sid}/Sms/send"
 
 
 # ── Internal helpers ─────────────────────────────────────────────────────────
 
 
-def _resolve_twilio(tenant_ctx: Any | None) -> tuple[str, str, str]:
-    """Return (account_sid, auth_token, from_number).
+def _resolve_exotel(tenant_ctx: Any | None) -> tuple[str, str, str, str, str]:
+    """Return (account_sid, api_key, auth_token, subdomain, from_number/sender_id).
 
-    Option A (centralised SaaS): the platform owns ONE Twilio account. All
-    tenants share the global SID + auth token from .env. Only the from-number
-    differs per tenant — each tenant gets its own Twilio number so callers
-    see a local caller-ID.
+    Credentials are global (platform Exotel account) — no per-tenant keys.
+    The from-number is the tenant's sip_phone_number (their assigned Exotel
+    number). If not set, falls back to EXOTEL_NUMBER from .env.
 
-    If a tenant has its own credentials stored (legacy Option B), they are
-    used as an override so the migration path stays smooth.
+    For Indian DLT compliance, set EXOTEL_SENDER_ID in .env to your
+    registered 6-char sender header (e.g. "BRTFTR"). This overrides
+    the phone number as the "From" field.
     """
-    # Global credentials from .env (platform account)
-    global_sid = settings.TWILIO_ACCOUNT_SID
-    global_token = settings.TWILIO_AUTH_TOKEN
+    sid = settings.EXOTEL_SID
+    api_key = settings.EXOTEL_API_KEY or sid
+    token = settings.EXOTEL_TOKEN
+    subdomain = settings.EXOTEL_SUBDOMAIN or "api.exotel.com"
 
-    if tenant_ctx:
-        # Use tenant-specific creds if set (legacy), else fall back to global
-        sid = tenant_ctx.twilio_account_sid or global_sid
-        token = tenant_ctx.twilio_auth_token or global_token
-        from_number = tenant_ctx.twilio_phone_number or settings.TWILIO_PHONE_NUMBER
-        return sid, token, from_number
+    # DLT sender ID takes precedence over phone number for Indian SMS
+    sender_id = settings.EXOTEL_SENDER_ID
+    if sender_id:
+        from_number = sender_id
+    elif tenant_ctx and getattr(tenant_ctx, "sip_phone_number", ""):
+        from_number = tenant_ctx.sip_phone_number
+    else:
+        from_number = settings.EXOTEL_NUMBER
 
-    return global_sid, global_token, settings.TWILIO_PHONE_NUMBER
+    return sid, api_key, token, subdomain, from_number
 
 
 def _business_name(tenant_ctx: Any | None) -> str:
@@ -65,7 +73,7 @@ def _business_name(tenant_ctx: Any | None) -> str:
 def _business_phone_display(tenant_ctx: Any | None) -> str:
     """Human-readable phone for caller-facing templates.
 
-    Returns the institute's real phone number — never the Twilio provisioned
+    Returns the institute's real phone number — never the Exotel provisioned
     number (which is an internal routing number callers shouldn't see).
 
     Fallback chain: business_phone → escalation_phone → "" (omit).
@@ -116,17 +124,17 @@ def _escalation_phone(tenant_ctx: Any | None) -> str:
 
 def _send_sms(to: str, body: str, tenant_ctx: Any | None = None, is_test: bool = False) -> bool:
     """
-    Send an SMS via Twilio REST API. Returns True on success.
+    Send an SMS via Exotel REST API. Returns True on success.
     In LOCAL_CHAT_MODE, demo mode, or for test data, messages are logged but not actually sent.
-    When Twilio is disabled (feature flag), messages are silently skipped.
+    When SMS is disabled (feature flag), messages are silently skipped.
     """
-    # Feature flag: skip when Twilio is globally or per-tenant disabled
-    if not settings.FEATURE_TWILIO_ENABLED:
-        logger.info("[SMS DISABLED — global flag] Skipping SMS to %s", to)
-        return False
-    if tenant_ctx and hasattr(tenant_ctx, "feature_twilio_enabled") and not tenant_ctx.feature_twilio_enabled:
-        logger.info("[SMS DISABLED — tenant flag] Skipping SMS to %s", to)
-        return False
+    # Feature flag: when SMS is globally or per-tenant disabled, simulate sending and allow logging in DB
+    if not settings.FEATURE_SMS_ENABLED:
+        logger.info("[SMS SIMULATED — global flag disabled → %s] %s", to, body)
+        return True
+    if tenant_ctx and hasattr(tenant_ctx, "feature_sms_enabled") and not tenant_ctx.feature_sms_enabled:
+        logger.info("[SMS SIMULATED — tenant flag disabled → %s] %s", to, body)
+        return True
 
     if settings.LOCAL_CHAT_MODE:
         logger.info("[LOCAL_CHAT SMS — skipped → %s] %s", to, body)
@@ -136,47 +144,56 @@ def _send_sms(to: str, body: str, tenant_ctx: Any | None = None, is_test: bool =
         logger.info("[DEMO SMS → %s] %s", to, body)
         return True
 
-    # Never hit Twilio for test agent flows — test phone numbers aren't real
+    # Never hit Exotel for test agent flows — test phone numbers aren't real
     if is_test:
         logger.info("[TEST SMS — skipped → %s] %s", to, body)
         return True
 
-    sid, token, from_number = _resolve_twilio(tenant_ctx)
+    sid, api_key, token, subdomain, from_number = _resolve_exotel(tenant_ctx)
 
     if not sid or not token:
-        logger.warning("Twilio credentials not configured — SMS will be logged only.")
+        logger.warning("Exotel credentials not configured — SMS will be logged only.")
         logger.info("[UNSENT SMS → %s] %s", to, body)
         return False
 
-    url = TWILIO_API_URL.format(sid=sid)
+    url = EXOTEL_SMS_URL.format(subdomain=subdomain, sid=sid)
 
     try:
-        logger.info("Sending SMS to %s (%d chars)...", to, len(body))
+        logger.info("Sending SMS to %s via Exotel (%d chars)...", to, len(body))
+        payload = {
+            "To": to,
+            "From": from_number,
+            "Body": body,
+        }
+        if settings.EXOTEL_DLT_ENTITY_ID:
+            payload["DltEntityId"] = settings.EXOTEL_DLT_ENTITY_ID
+        if settings.EXOTEL_DLT_TEMPLATE_ID:
+            payload["DltTemplateId"] = settings.EXOTEL_DLT_TEMPLATE_ID
+
         resp = httpx.post(
             url,
-            auth=(sid, token),
-            data={
-                "To": to,
-                "From": from_number,
-                "Body": body,
-            },
+            auth=(api_key, token),
+            data=payload,
             timeout=15,
         )
 
         if resp.status_code in (200, 201):
-            msg_sid = resp.json().get("sid", "unknown")
-            logger.info("✓ SMS sent to %s (SID: %s)", to, msg_sid)
-            # Record SMS usage for billing
+            data = resp.json()
+            msg_sid = data.get("SMSMessage", {}).get("Sid", data.get("sid", "unknown"))
+            logger.info("✓ SMS sent to %s (Sid: %s)", to, msg_sid)
             _record_sms_usage(tenant_ctx)
             return True
         else:
-            error = resp.json().get("message", resp.text[:200])
-            logger.error("✗ Twilio API error (HTTP %d) sending to %s: %s",
+            try:
+                error = resp.json().get("RestException", {}).get("Message", resp.text[:200])
+            except Exception:
+                error = resp.text[:200]
+            logger.error("✗ Exotel API error (HTTP %d) sending to %s: %s",
                          resp.status_code, to, error)
             return False
 
     except httpx.TimeoutException:
-        logger.error("✗ Twilio request timed out sending to %s", to)
+        logger.error("✗ Exotel request timed out sending to %s", to)
         return False
     except Exception as exc:
         logger.error("✗ Failed to send SMS to %s: %s", to, exc)
@@ -285,7 +302,7 @@ def _log_outbound_sms(
         logger.debug("[SMS Service] tenant_ctx has no tenant_id — skipping outbound SMS log")
         return
 
-    from_number = getattr(tenant_ctx, "twilio_phone_number", "") or ""
+    from_number = getattr(tenant_ctx, "sip_phone_number", "") or settings.EXOTEL_NUMBER
 
     try:
         loop = asyncio.get_running_loop()
@@ -493,6 +510,7 @@ def send_escalation_notification(
     caller_name: str,
     phone: str,
     tenant_ctx: Any | None = None,
+    is_test: bool = False,
 ) -> bool:
     """Let the caller know a human will call them back."""
     biz = _business_name(tenant_ctx)
@@ -500,9 +518,9 @@ def send_escalation_notification(
         f"Hi {caller_name}, you recently called {biz}. "
         f"Our team will call you back within 30 minutes. Thank you!"
     )
-    ok = _send_sms(phone, body, tenant_ctx)
+    ok = _send_sms(phone, body, tenant_ctx, is_test=is_test)
     if ok:
-        _log_outbound_sms(tenant_ctx, to_number=phone, body=body, caller_phone=phone)
+        _log_outbound_sms(tenant_ctx, to_number=phone, body=body, caller_phone=phone, is_test=is_test)
     return ok
 
 
@@ -537,6 +555,7 @@ def send_reminder(
     appointment_type: str,
     scheduled_at: datetime,
     tenant_ctx: Any | None = None,
+    is_test: bool = False,
 ) -> bool:
     """Send a 2-hour-before appointment reminder SMS."""
     biz = _business_name(tenant_ctx)
@@ -549,9 +568,9 @@ def send_reminder(
         f"Hi {caller_name}! Friendly reminder: your {appointment_type} at "
         f"{biz} is coming up today at {time_str} {tz}.{contact} See you soon!"
     )
-    ok = _send_sms(phone, body, tenant_ctx)
+    ok = _send_sms(phone, body, tenant_ctx, is_test=is_test)
     if ok:
-        _log_outbound_sms(tenant_ctx, to_number=phone, body=body, caller_phone=phone)
+        _log_outbound_sms(tenant_ctx, to_number=phone, body=body, caller_phone=phone, is_test=is_test)
     return ok
 
 
@@ -602,6 +621,7 @@ def send_followup(
     caller_name: str,
     phone: str,
     tenant_ctx: Any | None = None,
+    is_test: bool = False,
 ) -> bool:
     """Send a post-visit satisfaction follow-up SMS."""
     biz = _business_name(tenant_ctx)
@@ -611,7 +631,7 @@ def send_followup(
         f"Hi {caller_name}! Thank you for visiting {biz}. "
         f"We hope everything went well!{contact} Have a great day!"
     )
-    ok = _send_sms(phone, body, tenant_ctx)
+    ok = _send_sms(phone, body, tenant_ctx, is_test=is_test)
     if ok:
-        _log_outbound_sms(tenant_ctx, to_number=phone, body=body, caller_phone=phone)
+        _log_outbound_sms(tenant_ctx, to_number=phone, body=body, caller_phone=phone, is_test=is_test)
     return ok

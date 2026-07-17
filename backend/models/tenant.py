@@ -92,16 +92,15 @@ class Tenant(Base):
         default=lambda: ["goodbye", "thank you bye", "bye bye"],
     )
 
-    # ── Twilio integration ───────────────────────────────────────────────
-    # Under Option A, twilio_account_sid and twilio_auth_token are unused —
-    # all tenants share the platform's global Twilio account. Only the
-    # per-tenant phone number matters (each tenant gets a unique number).
-    twilio_account_sid = Column(String(255), nullable=True)
-    twilio_auth_token = Column(String(255), nullable=True)
-    twilio_phone_number = Column(String(20), nullable=True)
+    # ── AI Voice + SMS (Exotel) ──────────────────────────────────────────
+    # The Exotel number assigned to this tenant (purchased in Exotel dashboard
+    # and registered by the platform admin). Used for both:
+    #   - Voice: automatic tenant routing from inbound SIP calls
+    #   - SMS: "From" number for outbound reminders and confirmations
+    sip_phone_number = Column(String(20), nullable=True)
 
     # ── Feature flags (per-tenant — effective only when global flag is also True)
-    feature_twilio_enabled = Column(Boolean, nullable=False, default=True)
+    feature_sms_enabled = Column(Boolean, nullable=False, default=False)
 
     # ── Usage metering (Option A — platform manages billing) ─────────────
     # Tracks consumption in the current billing period. Reset by a monthly

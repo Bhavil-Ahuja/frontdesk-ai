@@ -44,8 +44,8 @@ export default function SetupGuide() {
   }, []);
 
   const calendarConnected = config?.google_calendar_connected ?? false;
-  const twilioConfigured = config?.twilio_configured ?? user?.twilio_configured ?? false;
-  const twilioEnabled = config?.twilio_enabled ?? true;
+  const smsConfigured = config?.sms_configured ?? user?.sms_configured ?? false;
+  const smsEnabled = config?.sms_enabled ?? true;
   const isCoaching = user?.business_type === 'coaching_institute';
 
   const steps = [
@@ -104,16 +104,16 @@ export default function SetupGuide() {
         { step: 'Or use the built-in scheduler', detail: 'Without Google Calendar, the system uses your configured business hours to manage availability automatically.' },
       ],
     },
-    ...(twilioEnabled ? [{
+    ...(smsEnabled ? [{
       key: 'integrations',
       icon: Zap,
       iconColor: 'text-indigo-500',
       iconBg: 'bg-indigo-50 dark:bg-indigo-900/30',
       title: 'SMS (Managed by Platform)',
-      done: !twilioEnabled || twilioConfigured,
+      done: !smsEnabled || smsConfigured,
       shortDesc: 'SMS infrastructure is handled centrally — no setup needed from you.',
       details: [
-        'Twilio (SMS) is managed centrally by FrontDesk AI',
+        'SMS is managed centrally by FrontDesk AI',
         'Your dedicated phone number is assigned by the platform admin after approval',
         'No API keys, no third-party accounts to create',
       ],
@@ -123,7 +123,7 @@ export default function SetupGuide() {
     }] : []),
   ];
 
-  const allReady = !twilioEnabled || twilioConfigured;
+  const allReady = !smsEnabled || smsConfigured;
 
   if (loading) {
     return (
@@ -284,14 +284,14 @@ export default function SetupGuide() {
                   {/* Integration status rows */}
                   {step.key === 'integrations' && (
                     <div className="space-y-2">
-                      {twilioEnabled && (
+                      {smsEnabled && (
                         <div className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-zinc-800/60 rounded-lg border border-gray-100 dark:border-zinc-700">
                           <MessageSquare className="w-4 h-4 text-pink-400 shrink-0" />
                           <div className="flex-1 min-w-0">
-                            <p className="text-sm font-medium text-gray-900 dark:text-white">Twilio SMS</p>
+                            <p className="text-sm font-medium text-gray-900 dark:text-white">Exotel SMS</p>
                             <p className="text-xs text-gray-500 dark:text-gray-400">Appointment reminders and follow-up texts</p>
                           </div>
-                          {twilioConfigured ? (
+                          {smsConfigured ? (
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400 border border-green-200 dark:border-green-800 rounded-full text-xs font-medium shrink-0">
                               <CheckCircle2 className="w-3 h-3" /> Active
                             </span>

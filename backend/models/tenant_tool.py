@@ -8,7 +8,7 @@ custom tool extensions.
 Handler types:
     http_webhook  — POST args to a URL the tenant controls
     kb_lookup     — search this tenant's knowledge base on a topic
-    sms_send      — send a templated SMS using the tenant's Twilio config
+    sms_send      — send a templated SMS using the tenant's Exotel SMS config
 """
 
 from __future__ import annotations

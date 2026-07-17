@@ -47,11 +47,8 @@ def _make_mock_tenant(
     slug="acme-coaching",
     business_name="Acme Coaching",
     business_type_val="custom",
-    vapi_assistant_id="asst_abc123",
+    sip_phone_number="+15551234567",
     status_val="ACTIVE",
-    twilio_account_sid="AC_test123",
-    twilio_auth_token="token_test",
-    twilio_phone_number="+15551234567",
     timezone_val="America/Chicago",
     demo_mode=True,
     agent_name="Alex",
@@ -78,13 +75,7 @@ def _make_mock_tenant(
     t.agent_name = agent_name
     t.greeting_message = greeting_message
     t.system_prompt_override = None
-    t.vapi_api_key = "vapi_key_test"
-    t.vapi_assistant_id = vapi_assistant_id
-    t.vapi_phone_number_id = "phone_id_test"
-    t.vapi_webhook_secret = "secret_test"
-    t.twilio_account_sid = twilio_account_sid
-    t.twilio_auth_token = twilio_auth_token
-    t.twilio_phone_number = twilio_phone_number
+    t.sip_phone_number = sip_phone_number
     t.escalation_phone = escalation_phone
     t.escalation_transfer_number = escalation_transfer_number
     t.appointment_types = appointment_types or [
@@ -133,8 +124,7 @@ def test_tenant_context_creation():
     _assert(ctx.timezone == "America/Chicago", "timezone matches")
     _assert(ctx.demo_mode is True, "demo_mode matches")
     _assert(ctx.agent_name == "Alex", "agent_name matches")
-    _assert(ctx.vapi_assistant_id == "asst_abc123", "vapi_assistant_id matches")
-    _assert(ctx.twilio_account_sid == "AC_test123", "twilio_account_sid matches")
+    _assert(ctx.sip_phone_number == "+15551234567", "sip_phone_number matches")
 
     # Immutability (frozen dataclass)
     try:
@@ -226,13 +216,13 @@ def test_call_model_has_tenant_id():
     _assert("tenant_id" in columns, "Call model has tenant_id column")
 
 
-def test_appointment_model_has_tenant_id():
-    print("\n── Test 6: Appointment model has tenant_id FK ──")
+def test_appointment_model_has_caller_id():
+    print("\n── Test 6: Appointment model has caller_id FK ──")
 
     from backend.models.appointment import Appointment
 
     columns = {c.name for c in Appointment.__table__.columns}
-    _assert("tenant_id" in columns, "Appointment model has tenant_id column")
+    _assert("caller_id" in columns, "Appointment model has caller_id column")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -244,7 +234,7 @@ def test_sms_service_tenant_params():
 
     from backend.services.sms_service import (
         _business_name, _business_phone_display, _escalation_phone, _is_demo,
-        _resolve_twilio,
+        _resolve_exotel,
     )
 
     ctx = _make_tenant_context()
@@ -252,10 +242,8 @@ def test_sms_service_tenant_params():
     _assert(_business_name(ctx) == "Acme Coaching", "business name from tenant")
     _assert(_business_name(None) != "", "business name falls back to settings.OFFICE_NAME")
 
-    sid, token, from_num = _resolve_twilio(ctx)
-    _assert(sid == "AC_test123", "Twilio SID from tenant")
-    _assert(token == "token_test", "Twilio token from tenant")
-    _assert(from_num == "+15551234567", "Twilio from-number from tenant")
+    sid, api_key, token, sub, from_num = _resolve_exotel(ctx)
+    _assert(from_num == "+15551234567", "Exotel from-number is tenant's sip_phone_number")
 
     _assert(_escalation_phone(ctx) == "+15559990000", "escalation phone from tenant")
     _assert(_is_demo(ctx) is True, "demo mode from tenant")
@@ -276,10 +264,10 @@ def test_sms_confirmation_uses_tenant():
     captured_body = {}
     original_send = sms_service._send_sms
 
-    def _capture_send(to, body, tenant_ctx=None):
+    def _capture_send(to, body, tenant_ctx=None, **kwargs):
         captured_body["to"] = to
         captured_body["body"] = body
-        return original_send(to, body, tenant_ctx)
+        return original_send(to, body, tenant_ctx, **kwargs)
 
     with patch.object(sms_service, "_send_sms", side_effect=_capture_send):
         result = sms_service.send_confirmation(
@@ -351,7 +339,7 @@ def test_system_prompt_default_fallback():
 
     prompt = build_system_prompt(tenant_ctx=None)
 
-    _assert("Alex" in prompt, "default agent name 'Alex'")
+    _assert("Sarah" in prompt, "default agent name 'Sarah'")
     _assert("Our Office" in prompt, "default business name")
 
 
@@ -366,30 +354,11 @@ def test_caller_context_with_tenant():
 
     ctx = _make_tenant_context(business_name="City Coaching Centre")
 
-    caller_context = {
-        "caller": {
-            "name": "Jane Smith",
-            "phone": "+15551111111",
-            "dob": "01/15/1985",
-            "is_new": False,
-            "visit_count": 5,
-            "preferred_type": "consultation",
-            "notes": None,
-        },
-        "upcoming_appointments": [],
-        "past_appointments": [
-            {"type": "Consultation", "date": "April 20, 2026", "status": "CONFIRMED"},
-        ],
-        "last_visit": {"type": "Consultation", "date": "April 20, 2026"},
-        "months_since_last_visit": 1,
-    }
-
-    prompt = build_system_prompt(caller_context=caller_context, tenant_ctx=ctx)
+    prompt = build_system_prompt(caller_name="Jane Smith", caller_phone="+15551111111", tenant_ctx=ctx)
 
     _assert("Jane Smith" in prompt, "caller name in prompt")
-    _assert("CALLER RECOGNISED" in prompt, "caller recognised section present")
-    _assert("City Coaching Centre" in prompt, "tenant business name in returning caller greeting")
-    _assert("Total visits: 5" in prompt, "visit count in prompt")
+    _assert("returning caller recognised" in prompt.lower(), "returning caller greeting instruction present")
+    _assert("City Coaching Centre" in prompt, "tenant business name in system prompt")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -438,21 +407,21 @@ def test_tenant_isolation_concept():
         tenant_id=TENANT_1_ID,
         slug="acme-coaching",
         business_name="Acme Coaching Institute",
-        vapi_assistant_id="asst_1",
+        sip_phone_number="+15550000001",
     )
 
     ctx2 = _make_tenant_context(
         tenant_id=TENANT_2_ID,
         slug="sunrise-coaching",
         business_name="Sunrise Coaching Academy",
-        vapi_assistant_id="asst_2",
+        sip_phone_number="+15550000002",
     )
 
     # Verify isolation
     _assert(ctx1.tenant_id != ctx2.tenant_id, "different tenant IDs")
     _assert(ctx1.slug != ctx2.slug, "different slugs")
     _assert(ctx1.business_name != ctx2.business_name, "different business names")
-    _assert(ctx1.vapi_assistant_id != ctx2.vapi_assistant_id, "different Vapi assistant IDs")
+    _assert(ctx1.sip_phone_number != ctx2.sip_phone_number, "different SIP phone numbers")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -506,8 +475,7 @@ def test_tenant_model_columns():
         "plan", "status", "demo_mode",
         "agent_name", "greeting_message", "system_prompt_override",
         "voice_config", "end_call_phrases",
-        "vapi_api_key", "vapi_assistant_id", "vapi_phone_number_id", "vapi_webhook_secret",
-        "twilio_account_sid", "twilio_auth_token", "twilio_phone_number",
+        "sip_phone_number", "feature_sms_enabled",
         "escalation_phone", "escalation_transfer_number",
         "appointment_types", "business_hours", "knowledge_base", "emergency_guidance",
         "created_at", "updated_at",
@@ -656,9 +624,8 @@ def test_tenant_out_hides_keys():
     fields = set(TenantOut.model_fields.keys())
     _assert("vapi_api_key" not in fields, "vapi_api_key not in response")
     _assert("twilio_auth_token" not in fields, "twilio_auth_token not in response")
-    _assert("twilio_account_sid" not in fields, "twilio_account_sid not in response")
-    _assert("vapi_configured" in fields, "vapi_configured (boolean) in response")
-    _assert("twilio_configured" in fields, "twilio_configured (boolean) in response")
+    _assert("sms_configured" in fields, "sms_configured (boolean) in response")
+    _assert("sms_enabled" in fields, "sms_enabled (boolean) in response")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -742,7 +709,7 @@ def main():
         test_cache,
         test_caller_model_constraint,
         test_call_model_has_tenant_id,
-        test_appointment_model_has_tenant_id,
+        test_appointment_model_has_caller_id,
         test_sms_service_tenant_params,
         test_sms_confirmation_uses_tenant,
         test_calendar_service_tenant_config,

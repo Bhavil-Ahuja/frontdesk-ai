@@ -91,6 +91,14 @@ async def list_calls(
         except ValueError:
             pass
 
+    tenant_tz = getattr(current_user, "timezone", DEFAULT_TIMEZONE) or DEFAULT_TIMEZONE
+    try:
+        from zoneinfo import ZoneInfo
+        local_tz = ZoneInfo(tenant_tz)
+    except Exception:
+        from zoneinfo import ZoneInfo
+        local_tz = ZoneInfo(DEFAULT_TIMEZONE)
+
     # Filters
     if outcome:
         try:
@@ -100,12 +108,16 @@ async def list_calls(
     if date_from:
         try:
             dt = datetime.fromisoformat(date_from)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=local_tz).astimezone(timezone.utc)
             query = query.where(Call.started_at >= dt)
         except ValueError:
             pass
     if date_to:
         try:
             dt = datetime.fromisoformat(date_to)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=local_tz).astimezone(timezone.utc)
             query = query.where(Call.started_at <= dt)
         except ValueError:
             pass

@@ -13,18 +13,20 @@ echo "=========================================="
 echo "  FrontDesk AI — Startup"
 echo "=========================================="
 
-# ── Detect LOCAL_CHAT_MODE from .env ──
+# ── Detect LOCAL_CHAT_MODE and SKIP_TUNNEL from .env ──
 LOCAL_CHAT_MODE=$(grep -E "^LOCAL_CHAT_MODE=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d '"' | tr -d "'" | tr '[:upper:]' '[:lower:]')
 LOCAL_CHAT_MODE=${LOCAL_CHAT_MODE:-false}
+SKIP_TUNNEL=$(grep -E "^SKIP_TUNNEL=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d '"' | tr -d "'" | tr '[:upper:]' '[:lower:]')
+SKIP_TUNNEL=${SKIP_TUNNEL:-false}
 
 TUNNEL_URL=""
 TUNNEL_PID=""
 TUNNEL_LOG=""
 
-if [ "$LOCAL_CHAT_MODE" = "true" ]; then
-    # ── LOCAL_CHAT_MODE: skip tunnel entirely ──
+if [ "$LOCAL_CHAT_MODE" = "true" ] || [ "$SKIP_TUNNEL" = "true" ]; then
+    # ── Skip tunnel entirely ──
     echo ""
-    echo "→ LOCAL_CHAT_MODE=true — skipping tunnel (no Vapi needed)"
+    echo "→ Skipping tunnel (LOCAL_CHAT_MODE=$LOCAL_CHAT_MODE, SKIP_TUNNEL=$SKIP_TUNNEL)"
     TUNNEL_URL="http://localhost:8000"
 
     # Make sure .env reflects localhost
@@ -104,10 +106,9 @@ fi
 # ── 4. Start uvicorn ──
 echo ""
 echo "=========================================="
-if [ "$LOCAL_CHAT_MODE" = "true" ]; then
-    echo "  Mode:     LOCAL CHAT (no tunnel)"
+if [ "$LOCAL_CHAT_MODE" = "true" ] || [ "$SKIP_TUNNEL" = "true" ]; then
+    echo "  Mode:     LOCAL (no tunnel)"
     echo "  Backend:  http://localhost:8000"
-    echo "  Chat:     http://localhost:5173"
     echo "  Docs:     http://localhost:8000/docs"
 else
     echo "  Tunnel:   $TUNNEL_URL"

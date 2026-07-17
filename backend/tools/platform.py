@@ -5,7 +5,7 @@ This module owns:
   • TOOL_SCHEMAS — the 12 OpenAI-format tool definitions (migrated from
     llm_service.ALL_TOOLS).
   • PlatformToolProvider.list_tools()  — returns filtered schemas for a
-    given tenant (respects Twilio, scheduling, escalation flags).
+    given tenant (respects SMS, scheduling, escalation flags).
   • PlatformToolProvider.call_tool()   — full dispatch logic (migrated from
     llm_service._execute_tool's if/elif block).
   • Utility helpers: _build_office_info, _resolve_dow_to_date, etc.
@@ -560,8 +560,8 @@ _PLATFORM_TOOL_NAMES: frozenset[str] = frozenset(
     t["function"]["name"] for t in TOOL_SCHEMAS
 )
 
-# Tools that require Twilio + escalation to be configured
-_TOOLS_REQUIRING_TWILIO = frozenset({"escalate_to_human", "send_callback_request"})
+# Tools that require SMS + escalation to be configured
+_TOOLS_REQUIRING_SMS = frozenset({"escalate_to_human", "send_callback_request"})
 
 # Tools that require native scheduling (business_hours) to be configured
 _TOOLS_REQUIRING_SCHEDULING = frozenset({
@@ -808,7 +808,7 @@ class PlatformToolProvider:
         Return filtered tool schemas for this tenant in OpenAI format.
 
         Filtering rules:
-        • hide Twilio tools when Twilio not configured or escalation disabled
+        • hide SMS tools when SMS not configured or escalation disabled
         • hide scheduling tools when no business hours are configured
         • inject appointment_type enum from tenant config
         """
@@ -822,10 +822,9 @@ class PlatformToolProvider:
         if tenant_ctx is None:
             return TOOL_SCHEMAS
 
-        has_twilio = bool(
-            tenant_ctx.twilio_account_sid
-            and tenant_ctx.twilio_auth_token
-            and tenant_ctx.feature_twilio_enabled
+        has_sms = bool(
+            tenant_ctx.feature_sms_enabled
+            and (tenant_ctx.sip_phone_number or settings.EXOTEL_NUMBER)
         )
         has_scheduling = bool(tenant_ctx.business_hours)
         has_escalation = bool(
@@ -843,7 +842,7 @@ class PlatformToolProvider:
         filtered = []
         for tool in TOOL_SCHEMAS:
             name = tool["function"]["name"]
-            if name in _TOOLS_REQUIRING_TWILIO and (not has_twilio or not has_escalation):
+            if name in _TOOLS_REQUIRING_SMS and (not has_sms or not has_escalation):
                 continue
             if name in _TOOLS_REQUIRING_SCHEDULING and not has_scheduling:
                 continue
@@ -858,8 +857,8 @@ class PlatformToolProvider:
             filtered.append(tool)
 
         logger.info(
-            "[Platform] Tool filter: twilio=%s scheduling=%s escalation=%s → %d/%d tools",
-            has_twilio, has_scheduling, has_escalation, len(filtered), len(TOOL_SCHEMAS),
+            "[Platform] Tool filter: sms=%s scheduling=%s escalation=%s → %d/%d tools",
+            has_sms, has_scheduling, has_escalation, len(filtered), len(TOOL_SCHEMAS),
         )
         return filtered
 
@@ -886,10 +885,10 @@ class PlatformToolProvider:
             return await self._book_appointment(args, tenant_ctx, call_id, session, is_test, t0)
 
         elif name == "reschedule_appointment":
-            return await self._reschedule_appointment(args, tenant_ctx, call_id, session, t0)
+            return await self._reschedule_appointment(args, tenant_ctx, call_id, session, is_test, t0)
 
         elif name == "cancel_appointment":
-            return await self._cancel_appointment(args, tenant_ctx, call_id, session, t0)
+            return await self._cancel_appointment(args, tenant_ctx, call_id, session, is_test, t0)
 
         elif name == "escalate_to_human":
             return await self._escalate_to_human(args, tenant_ctx, call_id, session)
@@ -1755,7 +1754,7 @@ class PlatformToolProvider:
         }
 
     async def _reschedule_appointment(
-        self, args: dict, tenant_ctx: Any, call_id: str, session: dict | None, t0: float
+        self, args: dict, tenant_ctx: Any, call_id: str, session: dict | None, is_test: bool, t0: float
     ) -> dict:
         booking_uid = args.get("booking_uid", "")
         new_slot_time = args.get("new_slot_time", "")
@@ -1850,17 +1849,38 @@ class PlatformToolProvider:
             provider_id=new_provider_id,
         )
         if result:
+            _sms_name = ""
+            _sms_phone = ""
+            _sms_type = "Session"
+            try:
+                from backend.database import async_session as get_async_session
+                from sqlalchemy import select as sa_select
+                from backend.models.appointment import Appointment as ApptModel
+                async with get_async_session() as db_session:
+                    stmt = sa_select(ApptModel).where(ApptModel.cal_booking_uid == booking_uid)
+                    db_result = await db_session.execute(stmt)
+                    appt = db_result.scalar_one_or_none()
+                    if appt:
+                        _sms_name = appt.student_name or ""
+                        _sms_phone = appt.student_phone or ""
+                        _sms_type = (appt.appointment_type or "Session").replace("_", " ").title()
+            except Exception as db_exc:
+                logger.warning("[Call %s] Failed to fetch caller info for reschedule SMS: %s", call_id, db_exc)
+
             try:
                 from dateutil import parser as dt_parser
                 new_dt = dt_parser.parse(new_slot_time)
-                sms_service.send_reschedule(
-                    caller_name=session.get("caller_info", {}).get("name", "") if session else "",
-                    phone=session.get("caller_info", {}).get("phone", "") if session else "",
-                    new_scheduled_at=new_dt,
-                    appointment_type="Session",
-                    tenant_ctx=tenant_ctx,
-                    is_test=is_test,
-                )
+                final_name = _sms_name or (session.get("caller_info", {}).get("name", "") if session else "")
+                final_phone = _sms_phone or (session.get("caller_info", {}).get("phone", "") if session else "")
+                if final_phone:
+                    sms_service.send_reschedule(
+                        caller_name=final_name,
+                        phone=final_phone,
+                        new_scheduled_at=new_dt,
+                        appointment_type=_sms_type,
+                        tenant_ctx=tenant_ctx,
+                        is_test=is_test,
+                    )
             except Exception as sms_exc:
                 logger.warning("[Call %s] Reschedule SMS failed: %s", call_id, sms_exc)
 
@@ -1902,7 +1922,7 @@ class PlatformToolProvider:
         return {"success": False, "error": "Failed to reschedule."}
 
     async def _cancel_appointment(
-        self, args: dict, tenant_ctx: Any, call_id: str, session: dict | None, t0: float
+        self, args: dict, tenant_ctx: Any, call_id: str, session: dict | None, is_test: bool, t0: float
     ) -> dict:
         booking_uid = args.get("booking_uid", "")
         if not booking_uid:
@@ -1913,6 +1933,24 @@ class PlatformToolProvider:
                     "Ask the caller for their booking details or phone number to look it up."
                 ),
             }
+        
+        # Fetch caller info from the appointment for SMS before we cancel it
+        _sms_name = ""
+        _sms_phone = ""
+        try:
+            from backend.database import async_session as get_async_session
+            from sqlalchemy import select as sa_select
+            from backend.models.appointment import Appointment as ApptModel
+            async with get_async_session() as db_session:
+                stmt = sa_select(ApptModel).where(ApptModel.cal_booking_uid == booking_uid)
+                db_result = await db_session.execute(stmt)
+                appt = db_result.scalar_one_or_none()
+                if appt:
+                    _sms_name = appt.student_name or ""
+                    _sms_phone = appt.student_phone or ""
+        except Exception as db_exc:
+            logger.warning("[Call %s] Failed to fetch caller info for cancel SMS: %s", call_id, db_exc)
+
         success = await calendar_service.cancel_appointment(
             booking_uid=booking_uid,
             reason=args.get("reason", ""),
@@ -1920,12 +1958,12 @@ class PlatformToolProvider:
         )
         if success:
             try:
-                caller_phone = session.get("caller_info", {}).get("phone", "") if session else ""
-                caller_name_for_sms = session.get("caller_info", {}).get("name", "") if session else ""
-                if caller_phone:
+                final_phone = _sms_phone or (session.get("caller_info", {}).get("phone", "") if session else "")
+                final_name = _sms_name or (session.get("caller_info", {}).get("name", "") if session else "")
+                if final_phone:
                     sms_service.send_cancellation(
-                        caller_name=caller_name_for_sms,
-                        phone=caller_phone,
+                        caller_name=final_name,
+                        phone=final_phone,
                         scheduled_at=datetime.now(timezone.utc),
                         tenant_ctx=tenant_ctx,
                         is_test=is_test,

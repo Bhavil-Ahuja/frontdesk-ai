@@ -7,7 +7,7 @@ Implements tool-calling for appointment operations and escalation.
 
 Multi-tenant: when a TenantContext is provided, tool definitions are filtered
 based on what integrations the tenant has configured (e.g. hide escalation
-tools when Twilio isn't set up) and all downstream service calls receive the
+tools when SMS isn't set up) and all downstream service calls receive the
 tenant context so they use the correct credentials.
 """
 
@@ -146,11 +146,11 @@ _client: OpenAI | None = None
 def _get_client() -> OpenAI:
     global _client
     if _client is None:
-        logger.info("Initializing OpenAI client → Ollama at %s (model: %s)",
-                     settings.ollama_openai_base, settings.OLLAMA_MODEL)
+        logger.info("Initializing OpenAI-compatible client → %s at %s (model: %s)",
+                     settings.LLM_PROVIDER, settings.openai_compat_base, settings.openai_compat_model)
         _client = OpenAI(
-            base_url=settings.ollama_openai_base,
-            api_key="ollama",  # Ollama ignores the key but the SDK requires one
+            base_url=settings.openai_compat_base,
+            api_key=settings.openai_compat_key,
             timeout=45.0,  # 45s timeout to prevent indefinite hangs
         )
     return _client
@@ -163,11 +163,11 @@ def _get_async_client() -> AsyncOpenAI:
     """Async client for true token-by-token streaming from Ollama."""
     global _async_client
     if _async_client is None:
-        logger.info("Initializing AsyncOpenAI (streaming) → Ollama at %s",
-                     settings.ollama_openai_base)
+        logger.info("Initializing AsyncOpenAI (streaming) → %s at %s",
+                     settings.LLM_PROVIDER, settings.openai_compat_base)
         _async_client = AsyncOpenAI(
-            base_url=settings.ollama_openai_base,
-            api_key="ollama",
+            base_url=settings.openai_compat_base,
+            api_key=settings.openai_compat_key,
             timeout=45.0,  # 45s timeout to prevent indefinite hangs
         )
     return _async_client
@@ -850,8 +850,8 @@ async def _process_message_ollama(
         client = _get_client()
 
         # ── Step 1: LLM call (may request a tool) ────────────────────────
-        logger.info("[Call %s] Sending to Ollama (model: %s, %d messages)...",
-                    call_id, settings.OLLAMA_MODEL, msg_count)
+        logger.info("[Call %s] Sending to %s (model: %s, %d messages)...",
+                    call_id, settings.LLM_PROVIDER, settings.openai_compat_model, msg_count)
         t0 = time.time()
 
         # Suppress tools on greetings / small talk to prevent hallucinated
@@ -863,7 +863,7 @@ async def _process_message_ollama(
             logger.info("[Call %s] Simple chat detected — suppressing tools", call_id)
 
         kwargs: dict[str, Any] = {
-            "model": settings.OLLAMA_MODEL,
+            "model": settings.openai_compat_model,
             "messages": _strip_timestamps(session["messages"]),
             "temperature": 0.7,
             "max_tokens": 1024,
@@ -929,7 +929,7 @@ async def _process_message_ollama(
             t1 = time.time()
 
             followup_kwargs: dict[str, Any] = {
-                "model": settings.OLLAMA_MODEL,
+                "model": settings.openai_compat_model,
                 "messages": _strip_timestamps(session["messages"]),
                 "temperature": 0.7,
                 "max_tokens": 1024,
@@ -985,7 +985,7 @@ async def _process_message_ollama(
             try:
                 client = _get_client()
                 retry_kwargs = {
-                    "model": settings.OLLAMA_MODEL,
+                    "model": settings.openai_compat_model,
                     "messages": _strip_timestamps(session["messages"]),
                     "temperature": 0.7,
                     "max_tokens": 1024,
@@ -1076,7 +1076,7 @@ async def process_message_stream(
 
         for tool_round in range(5):  # MAX_TOOL_ROUNDS
             kwargs: dict[str, Any] = {
-                "model": settings.OLLAMA_MODEL,
+                "model": settings.openai_compat_model,
                 "messages": _strip_timestamps(session["messages"]),
                 "temperature": 0.7,
                 "max_tokens": 1024,
@@ -1279,7 +1279,7 @@ async def process_message_stream(
             try:
                 retry_client = _get_async_client()
                 retry_stream = await retry_client.chat.completions.create(
-                    model=settings.OLLAMA_MODEL,
+                    model=settings.openai_compat_model,
                     messages=_strip_timestamps(session["messages"]),
                     temperature=0.7,
                     max_tokens=1024,
@@ -1324,13 +1324,14 @@ async def process_message_stream(
 # are insufficient because callers (or prompt-injection attacks) can ask the
 # LLM to look up arbitrary numbers.
 
+# READ/MUTATE tools — phone arg must match the verified caller ID.
+# CREATE tools (book_appointment, add_to_waitlist, send_callback_request) are NOT
+# gated here: the phone arg is the student's registration number, which may differ
+# from the dialing number (e.g. calling from a landline, parent booking for child).
 _PHONE_GATED_TOOLS = frozenset({
     "lookup_caller",
     "lookup_caller_appointments",
     "update_caller_info",
-    "book_appointment",
-    "add_to_waitlist",
-    "send_callback_request",
 })
 
 

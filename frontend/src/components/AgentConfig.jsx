@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Power,
   Phone as PhoneIcon,
+  PhoneCall,
   MessageSquare,
   Mic,
   Save,
@@ -24,6 +25,7 @@ import {
   Volume2,
   Loader2,
   FlaskConical,
+  Lock,
 } from 'lucide-react';
 import { apiFetch, API_BASE } from '../lib/api';
 import { getToken } from '../lib/api';
@@ -39,6 +41,7 @@ const VOICE_OPTIONS = [
 
 export default function AgentConfig() {
   const { isAdmin, user } = useAuth();
+  const smsEnabled = user?.sms_enabled !== false;
   const tz = user?.timezone || 'America/Chicago';
   const { confirm, prompt, toast } = useModal();
   const [config, setConfig] = useState(null);
@@ -406,6 +409,29 @@ export default function AgentConfig() {
         </div>
       </Section>
 
+      {/* ── AI Voice / SIP (read-only — assigned by platform admin) ── */}
+      {config.sip_phone_number && (
+        <Section icon={PhoneCall} title="AI Voice Calling">
+          <p className="text-sm text-gray-500 dark:text-gray-400 -mt-2">
+            Your AI agent answers inbound calls on this number. Students dial this number
+            to reach your AI receptionist.
+          </p>
+          <div className="flex items-center gap-3 p-3 rounded-lg bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800">
+            <PhoneCall className="w-4 h-4 text-purple-500 shrink-0" />
+            <div>
+              <p className="text-xs text-gray-500 dark:text-gray-400">Assigned Phone Number</p>
+              <p className="text-sm font-mono font-medium text-gray-900 dark:text-white">{config.sip_phone_number}</p>
+            </div>
+            <span className="ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300">
+              Active
+            </span>
+          </div>
+          <p className="text-xs text-gray-400 dark:text-gray-500">
+            To change this number, contact your platform administrator.
+          </p>
+        </Section>
+      )}
+
       {/* ── Connections ── high-level connected/not-connected status. The
           Platform-managed integrations — no API keys needed from the user. */}
       <GoogleCalendarSection config={config} onUpdate={fetchConfig} />
@@ -415,6 +441,17 @@ export default function AgentConfig() {
 
       {/* Appointment Reminders */}
       <Section icon={Bell} title="Appointment Reminders">
+        {!smsEnabled && (
+          <div className="bg-amber-50/50 dark:bg-amber-900/20 border border-amber-200/60 dark:border-amber-800/40 rounded-xl p-3 flex items-start gap-2 mb-4 animate-fade-in">
+            <span className="text-sm leading-none select-none">⚠️</span>
+            <div>
+              <p className="text-xs font-semibold text-amber-800 dark:text-amber-300">Preview Mode (SMS Coming Soon)</p>
+              <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-0.5 leading-normal">
+                SMS dispatch is currently disabled for your account. You can preview and configure the templates here — these are exactly the settings that will be used once SMS is fully provisioned.
+              </p>
+            </div>
+          </div>
+        )}
         <p className="text-sm text-gray-500 dark:text-gray-400 -mt-2 mb-3">
           Automated SMS reminders sent before appointments. Callers can reply <strong>C</strong> to confirm,
           <strong> R</strong> to reschedule, or <strong>X</strong> to cancel — all handled by the AI agent.
@@ -447,6 +484,17 @@ export default function AgentConfig() {
 
       {/* Google Review Solicitation */}
       <Section icon={Star} title="Google Review Solicitation">
+        {!smsEnabled && (
+          <div className="bg-amber-50/50 dark:bg-amber-900/20 border border-amber-200/60 dark:border-amber-800/40 rounded-xl p-3 flex items-start gap-2 mb-4 animate-fade-in">
+            <span className="text-sm leading-none select-none">⚠️</span>
+            <div>
+              <p className="text-xs font-semibold text-amber-800 dark:text-amber-300">Preview Mode (SMS Coming Soon)</p>
+              <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-0.5 leading-normal">
+                SMS dispatch is currently disabled for your account. You can preview and configure the templates here — these are exactly the settings that will be used once SMS is fully provisioned.
+              </p>
+            </div>
+          </div>
+        )}
         <p className="text-sm text-gray-500 dark:text-gray-400 -mt-2 mb-3">
           Automatically send a friendly SMS asking callers to leave a Google review after their appointment.
           Only sent after the follow-up message, with a configurable delay.
@@ -680,7 +728,7 @@ function UsagePlanSection() {
         <div className="space-y-1.5">
           <div className="flex items-center gap-2 text-sm">
             <Mail className="w-4 h-4 text-gray-400" />
-            <span className="text-gray-600 dark:text-gray-300">SMS (Twilio)</span>
+            <span className="text-gray-600 dark:text-gray-300">SMS (Exotel)</span>
             <CheckCircle className="w-4 h-4 text-green-500 ml-auto" />
             <span className="text-xs text-green-600 dark:text-green-400">Managed by platform</span>
           </div>

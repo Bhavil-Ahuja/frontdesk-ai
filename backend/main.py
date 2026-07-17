@@ -42,8 +42,8 @@ from backend.routes.sms_messages import router as sms_messages_router
 from backend.routes.callers import router as callers_router
 from backend.routes.support_tickets import router as support_tickets_router
 from backend.routes.tenant_tools import router as tenant_tools_router
-from backend.routes.bolna import router as bolna_router
 from backend.routes.platform_admin import router as platform_admin_router
+from backend.routes.voice import router as voice_router
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -80,11 +80,11 @@ def _log_config_status():
 
     # Add common optional checks
     checks.extend([
-        ("Twilio Account SID", settings.TWILIO_ACCOUNT_SID, False),
-        ("Twilio Auth Token", settings.TWILIO_AUTH_TOKEN, False),
-        ("Twilio Phone Number", settings.TWILIO_PHONE_NUMBER, False),
-        ("Bolna API Key", settings.BOLNA_API_KEY, False),
-        ("Bolna Agent ID", settings.BOLNA_AGENT_ID, False),
+        ("Exotel SID", settings.EXOTEL_SID, False),
+        ("Exotel Token", settings.EXOTEL_TOKEN, False),
+        ("Exotel Number", settings.EXOTEL_NUMBER, False),
+        ("LiveKit URL", settings.LIVEKIT_URL, False),
+        ("LiveKit API Key", settings.LIVEKIT_API_KEY, False),
         ("Escalation Phone", settings.ESCALATION_PHONE_NUMBER, False),
     ])
 
@@ -177,7 +177,7 @@ async def lifespan(app: FastAPI):
     if settings.DEMO_MODE:
         logger.info("  ⚡ DEMO MODE active — SMS and calendar calls are simulated")
     else:
-        logger.info("  🔴 LIVE MODE — real API calls to Google Calendar, Twilio, Bolna")
+        logger.info("  🔴 LIVE MODE — real API calls to Google Calendar, Exotel, LiveKit")
     logger.info("")
     logger.info("  Dashboard:  %s", settings.SERVER_BASE_URL)
     logger.info("  API Docs:   %s/docs", settings.SERVER_BASE_URL)
@@ -192,12 +192,12 @@ async def lifespan(app: FastAPI):
                         "Set a strong secret in .env before going to production.")
 
     if not settings.DEMO_MODE:
-        if not settings.TWILIO_ACCOUNT_SID or not settings.TWILIO_AUTH_TOKEN:
-            logger.warning("⚠️  Twilio credentials missing — outbound SMS will silently fail.")
-        if not settings.TWILIO_PHONE_NUMBER:
-            logger.warning("⚠️  TWILIO_PHONE_NUMBER is empty — inbound SMS won't match a tenant.")
+        if not settings.EXOTEL_SID or not settings.EXOTEL_TOKEN:
+            logger.warning("⚠️  Exotel credentials missing — outbound SMS will silently fail.")
+        if not settings.EXOTEL_NUMBER and not settings.EXOTEL_SENDER_ID:
+            logger.warning("⚠️  EXOTEL_NUMBER/EXOTEL_SENDER_ID not set — SMS from-number will be empty.")
         if settings.SERVER_BASE_URL.startswith("http://localhost"):
-            logger.warning("⚠️  SERVER_BASE_URL is localhost — Twilio webhooks won't reach "
+            logger.warning("⚠️  SERVER_BASE_URL is localhost — Exotel SMS webhooks won't reach "
                             "this server. Use a tunnel (ngrok) or set a public URL.")
     if settings.LLM_PROVIDER == "gemini" and not settings.GEMINI_API_KEY:
         logger.warning("⚠️  LLM_PROVIDER=gemini but GEMINI_API_KEY is empty — LLM calls will fail.")
@@ -298,8 +298,8 @@ app.include_router(sms_messages_router)
 app.include_router(callers_router)
 app.include_router(support_tickets_router)
 app.include_router(tenant_tools_router)
-app.include_router(bolna_router)
 app.include_router(platform_admin_router)
+app.include_router(voice_router)
 
 
 @app.get("/health")

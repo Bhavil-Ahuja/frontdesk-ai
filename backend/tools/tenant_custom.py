@@ -209,7 +209,7 @@ class TenantCustomToolProvider:
         return _build_office_info(topic, tenant_ctx)
 
     async def _call_sms(self, row: Any, args: dict, session_ctx: dict) -> dict:
-        """Send a templated SMS via the tenant's Twilio config."""
+        """Send a templated SMS via the tenant's Exotel SMS config."""
         from backend.services import sms_service
 
         tenant_ctx = session_ctx.get("tenant_ctx")

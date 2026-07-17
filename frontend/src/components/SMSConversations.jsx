@@ -338,6 +338,18 @@ export default function SMSConversations() {
         </div>
       )}
 
+      {!user?.sms_enabled && (
+        <div className="bg-amber-50/50 dark:bg-amber-900/20 border border-amber-200/60 dark:border-amber-800/40 rounded-xl p-4 flex items-start gap-3 mb-6">
+          <span className="text-lg leading-none mt-0.5 select-none">⚠️</span>
+          <div>
+            <h4 className="text-sm font-semibold text-amber-800 dark:text-amber-300">Coming Soon (Simulated Preview Mode)</h4>
+            <p className="text-xs text-amber-700 dark:text-amber-400 mt-0.5 leading-relaxed">
+              SMS capability is currently in preview mode. The messages you see here are simulated and will not actually be sent to customers until active SMS integration is enabled for your account. Once active, all SMS notifications will be dispatched automatically.
+            </p>
+          </div>
+        </div>
+      )}
+
       {error && (
         <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-xl p-4 flex items-start gap-3 mb-6">
           <AlertCircle className="w-5 h-5 text-red-500 mt-0.5 shrink-0" />

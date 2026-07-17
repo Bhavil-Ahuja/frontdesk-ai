@@ -117,7 +117,8 @@ class UserResponse(BaseModel):
     timezone: str
     plan: Optional[str]
     # Integration setup status
-    twilio_configured: bool
+    sms_configured: bool
+    sms_enabled: bool
 
 
 def _user_to_dict(t: Tenant) -> dict:
@@ -132,9 +133,9 @@ def _user_to_dict(t: Tenant) -> dict:
         "business_type": t.business_type.value if t.business_type else None,
         "timezone": t.timezone or DEFAULT_TIMEZONE,
         "plan": t.plan.value if t.plan else None,
-        "twilio_configured": bool(t.twilio_account_sid and t.twilio_auth_token),
+        "sms_configured": bool(settings.EXOTEL_SID and (t.sip_phone_number or settings.EXOTEL_NUMBER)),
         # Feature flags — effective state (global AND per-tenant)
-        "twilio_enabled": settings.FEATURE_TWILIO_ENABLED and (t.feature_twilio_enabled if t.feature_twilio_enabled is not None else True),
+        "sms_enabled": settings.FEATURE_SMS_ENABLED and (t.feature_sms_enabled if t.feature_sms_enabled is not None else False),
     }
 
 

@@ -92,11 +92,6 @@ class TenantContext:
     # Default: 11labs Rachel (matches the seed/default in the Tenant model).
     voice_config: dict[str, Any]
 
-    # Twilio
-    twilio_account_sid: str
-    twilio_auth_token: str
-    twilio_phone_number: str
-
     # Google Calendar OAuth
     google_calendar_refresh_token: str
     google_calendar_email: str
@@ -129,8 +124,11 @@ class TenantContext:
     test_student_name: str
     test_student_names: list[str]
 
+    # AI Voice — per-tenant SIP phone number (also used as SMS from-number)
+    sip_phone_number: str = ""
+
     # Feature flags — effective state (global AND per-tenant)
-    feature_twilio_enabled: bool = True
+    feature_sms_enabled: bool = False
 
     @property
     def tz_abbreviation(self) -> str:
@@ -159,9 +157,6 @@ def _tenant_to_context(t: Tenant) -> TenantContext:
         greeting_message=t.greeting_message or DEFAULT_GREETING,
         system_prompt_override=t.system_prompt_override,
         voice_config=t.voice_config or {"provider": "11labs", "voiceId": "21m00Tcm4TlvDq8ikWAM"},
-        twilio_account_sid=t.twilio_account_sid or settings.TWILIO_ACCOUNT_SID,
-        twilio_auth_token=t.twilio_auth_token or settings.TWILIO_AUTH_TOKEN,
-        twilio_phone_number=t.twilio_phone_number or settings.TWILIO_PHONE_NUMBER,
         google_calendar_refresh_token=t.google_calendar_refresh_token or "",
         google_calendar_email=t.google_calendar_email or "",
         google_calendar_connected=t.google_calendar_connected if t.google_calendar_connected is not None else False,
@@ -181,8 +176,10 @@ def _tenant_to_context(t: Tenant) -> TenantContext:
         test_caller_phones=t.test_caller_phones or [],
         test_student_name=t.test_student_name or DEFAULT_TEST_STUDENT_NAME,
         test_student_names=t.test_student_names or [DEFAULT_TEST_STUDENT_NAME],
+        # AI Voice SIP phone
+        sip_phone_number=t.sip_phone_number or "",
         # Feature flags — effective = global AND per-tenant
-        feature_twilio_enabled=settings.FEATURE_TWILIO_ENABLED and (t.feature_twilio_enabled if t.feature_twilio_enabled is not None else True),
+        feature_sms_enabled=settings.FEATURE_SMS_ENABLED and (t.feature_sms_enabled if t.feature_sms_enabled is not None else False),
     )
 
 
@@ -280,6 +277,98 @@ async def resolve_by_id(tenant_id: uuid.UUID) -> TenantContext | None:
     return ctx
 
 
+async def resolve_tenant_by_sip_phone(phone: str) -> TenantContext | None:
+    """
+    Resolve a tenant by their assigned SIP/AI phone number.
+
+    The carrier (Exotel, Plivo, etc.) injects the AI's own number as `to_number`
+    on outbound calls and as the dialled number on inbound calls. We normalise
+    both sides with a last-10-digit suffix match to handle formatting differences
+    between what the admin stored ("+918065481555") and what the carrier sends
+    ("8065481555").
+
+    Intentionally NOT cached: inbound calls are infrequent and we avoid routing
+    to a stale tenant if the admin reassigns the number.
+    """
+    if not phone:
+        return None
+
+    from backend.services.caller_service import _phone_digits_tail
+    tail = _phone_digits_tail(phone)
+    if not tail:
+        return None
+
+    async with async_session() as session:
+        from sqlalchemy import func as sa_func
+        result = await session.execute(
+            select(Tenant).where(
+                Tenant.sip_phone_number.is_not(None),
+                sa_func.right(
+                    sa_func.regexp_replace(Tenant.sip_phone_number, "[^0-9]", "", "g"),
+                    len(tail),
+                ) == tail,
+            ).limit(1)
+        )
+        tenant = result.scalar_one_or_none()
+
+    if not tenant:
+        logger.warning("[TenantSvc] No tenant found for SIP phone tail=%s", tail)
+        return None
+
+    logger.info("[TenantSvc] Resolved tenant %s via SIP phone (tail=%s)", tenant.slug, tail)
+    return _tenant_to_context(tenant)
+
+
+async def resolve_tenant_by_caller_phone(caller_phone: str) -> "TenantContext | None":
+    """
+    Resolve a tenant by looking up the caller's phone in the Caller table.
+
+    Used for real SIP calls where sip.callFrom is known upfront (Exotel injects
+    the caller's number). If the student is already registered under exactly one
+    active tenant, route to that tenant — no need for SIP called-number matching.
+
+    If the caller is in multiple tenants (edge case), returns the most recently
+    updated one (most likely to be the active relationship).
+    """
+    if not caller_phone:
+        return None
+
+    from backend.services.caller_service import _normalise_phone, _phone_digits_tail
+    from backend.models.caller import Caller
+
+    # Normalise — treat 10-digit numbers starting 6-9 as Indian mobile
+    norm = _normalise_phone(caller_phone, default_region="IN")
+    tail = _phone_digits_tail(norm or caller_phone)
+    if not tail:
+        return None
+
+    async with async_session() as session:
+        from sqlalchemy import func as sa_func
+        # Join Caller → Tenant; filter to active non-admin tenants only
+        result = await session.execute(
+            select(Tenant)
+            .join(Caller, Caller.tenant_id == Tenant.id)
+            .where(
+                Caller.tenant_id.isnot(None),
+                sa_func.right(
+                    sa_func.regexp_replace(Caller.phone, "[^0-9]", "", "g"),
+                    len(tail),
+                ) == tail,
+                Tenant.status == TenantStatus.ACTIVE,
+                Tenant.is_admin == False,  # noqa: E712
+            )
+            .order_by(Tenant.updated_at.desc())
+            .limit(1)
+        )
+        tenant = result.scalar_one_or_none()
+
+    if not tenant:
+        return None
+
+    logger.info("[TenantSvc] Resolved tenant %s via caller phone tail=%s", tenant.slug, tail)
+    return _tenant_to_context(tenant)
+
+
 # ── Fallback: resolve from .env (single-tenant backwards compatibility) ──────
 
 async def resolve_default_tenant() -> TenantContext | None:
@@ -322,9 +411,6 @@ async def resolve_default_tenant() -> TenantContext | None:
         greeting_message=DEFAULT_GREETING,
         system_prompt_override=None,
         voice_config={"provider": "11labs", "voiceId": "21m00Tcm4TlvDq8ikWAM"},
-        twilio_account_sid=settings.TWILIO_ACCOUNT_SID,
-        twilio_auth_token=settings.TWILIO_AUTH_TOKEN,
-        twilio_phone_number=settings.TWILIO_PHONE_NUMBER,
         google_calendar_refresh_token="",
         google_calendar_email="",
         google_calendar_connected=False,
@@ -347,7 +433,7 @@ async def resolve_default_tenant() -> TenantContext | None:
         test_caller_phones=[],
         test_student_name=DEFAULT_TEST_STUDENT_NAME,
         test_student_names=[DEFAULT_TEST_STUDENT_NAME],
-        feature_twilio_enabled=settings.FEATURE_TWILIO_ENABLED,
+        feature_sms_enabled=settings.FEATURE_SMS_ENABLED,
     )
     _cache_set(cache_key, ctx)
     return ctx
@@ -498,13 +584,13 @@ async def update_tenant(tenant_id: uuid.UUID, data: dict[str, Any]) -> Tenant | 
             "business_name", "business_type", "business_phone", "business_address",
             "business_website", "google_maps_url", "timezone", "agent_name", "greeting_message",
             "system_prompt_override", "voice_config", "end_call_phrases",
-            "twilio_account_sid", "twilio_auth_token",
-            "twilio_phone_number", "escalation_phone", "escalation_transfer_number",
+            "escalation_phone", "escalation_transfer_number",
             "appointment_types", "business_hours", "holidays", "knowledge_base",
             "emergency_guidance", "demo_mode", "plan",
             "reminder_settings", "review_settings",
-            "feature_twilio_enabled",
+            "feature_sms_enabled",
             "agent_active",
+            "sip_phone_number",
         }
         # Normalize holidays — strip duplicates by date, drop blanks, sort ASC
         if "holidays" in data and isinstance(data["holidays"], list):

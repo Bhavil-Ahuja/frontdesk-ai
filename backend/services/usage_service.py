@@ -2,7 +2,7 @@
 Usage metering service — tracks call minutes and SMS per tenant per billing
 period and enforces plan-tier limits.
 
-Option A model: the platform owns all Vapi / Twilio credentials. Each tenant
+Option A model: the platform owns all Vapi / Exotel credentials. Each tenant
 pays a subscription that includes a quota of call minutes and SMS messages.
 This service is the enforcement layer.
 """

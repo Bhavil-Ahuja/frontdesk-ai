@@ -3,8 +3,8 @@ Inbound SMS handling service — processes incoming text messages from callers
 and routes them to the appropriate handler.
 
 Flow:
-  1. Twilio delivers inbound SMS as POST form data (From, To, Body, MessageSid)
-  2. We resolve the tenant by matching the To number against tenants' twilio_phone_number
+  1. Exotel delivers inbound SMS as POST form data (From, To, Body, MessageSid)
+  2. We resolve the tenant by matching the To number against tenants' sip_phone_number
   3. Log the inbound message
   4. Route:
      a. Quick-reply keywords (C/CONFIRM/YES, R/RESCHEDULE, X/CANCEL, STOP) -> fast path
@@ -12,7 +12,7 @@ Flow:
      c. Everything else -> LLM agent for agentic two-way SMS conversation
   5. Log and send the outbound reply
 
-Multi-tenant: resolved by matching the Twilio To number to a tenant row.
+Multi-tenant: resolved by matching the Exotel To number to a tenant row.
 """
 
 import logging
@@ -72,13 +72,13 @@ def _normalize_phone(phone: str) -> str:
 
 async def resolve_tenant_by_phone(to_number: str) -> tuple[Tenant | None, TenantContext | None]:
     """Resolve a tenant by matching the inbound SMS 'To' number against
-    the tenant's configured twilio_phone_number.
+    the tenant's sip_phone_number.
 
     Normalizes both numbers before comparison to handle formatting differences
     (e.g. '+1 555 123 4567' vs '+15551234567').
 
     Args:
-        to_number: The Twilio phone number the caller texted (the institute's number).
+        to_number: The Exotel phone number the caller texted (the institute's number).
 
     Returns:
         (Tenant, TenantContext) if an active tenant is found, (None, None) otherwise.
@@ -98,7 +98,7 @@ async def resolve_tenant_by_phone(to_number: str) -> tuple[Tenant | None, Tenant
 
     # Match by normalized phone — DB values may have inconsistent formatting
     for tenant in tenants:
-        tenant_phone = _normalize_phone(tenant.twilio_phone_number or "")
+        tenant_phone = _normalize_phone(tenant.sip_phone_number or "")
         if tenant_phone and tenant_phone == normalized:
             ctx = _tenant_to_context(tenant)
             logger.info(
@@ -121,7 +121,7 @@ async def _log_sms(
     to_number: str,
     body: str,
     caller_phone: str,
-    twilio_sid: str = "",
+    sms_sid: str = "",
 ) -> None:
     """Persist an SMS message record for audit and conversation threading.
 
@@ -135,7 +135,7 @@ async def _log_sms(
         to_number: The recipient's phone number.
         body: The message text.
         caller_phone: The caller's phone (used to look up / create caller).
-        twilio_sid: Twilio's MessageSid for delivery tracking.
+        sms_sid: Carrier message SID for delivery tracking.
     """
     try:
         # Upsert caller so caller_id is always set (is_test derived from stored flag)
@@ -155,7 +155,7 @@ async def _log_sms(
                 from_number=from_number,
                 to_number=to_number,
                 body=body,
-                twilio_sid=twilio_sid,
+                sms_sid=sms_sid,
             )
             session.add(msg)
             await session.commit()
@@ -380,15 +380,15 @@ async def handle_inbound_sms(
     from_number: str,
     to_number: str,
     body: str,
-    twilio_sid: str = "",
+    sms_sid: str = "",
 ) -> str:
     """Process an inbound SMS from a caller and return the response text.
 
-    This is the main entry point called by the Twilio webhook route. The caller
+    This is the main entry point called by the SMS webhook route. The caller
     wraps the returned string in a TwiML <Message> response.
 
     Routing priority:
-      1. STOP keyword -> no reply (Twilio handles opt-out automatically)
+      1. STOP keyword -> no reply (Exotel handles opt-out automatically)
       2. Tenant resolution -> reject if no tenant found
       3. Log the inbound message
       4. Quick-reply keywords (C/CONFIRM/YES, R/RESCHEDULE, X/CANCEL)
@@ -397,10 +397,10 @@ async def handle_inbound_sms(
       5. All other messages -> LLM agent
 
     Args:
-        from_number: The caller's phone number (Twilio 'From').
-        to_number: The institute's Twilio phone number (Twilio 'To').
-        body: The message text (Twilio 'Body').
-        twilio_sid: Twilio's MessageSid for tracking.
+        from_number: The caller's phone number (Exotel 'From').
+        to_number: The institute's Exotel phone number (Exotel 'To').
+        body: The message text (Exotel 'Body').
+        sms_sid: Carrier message SID for delivery tracking.
 
     Returns:
         The reply text to send back to the caller. Empty string means no reply
@@ -411,10 +411,10 @@ async def handle_inbound_sms(
 
     logger.info(
         "[SMS Inbound] Received: From=%s To=%s Body=%r SID=%s",
-        from_number, to_number, text[:100], twilio_sid,
+        from_number, to_number, text[:100], sms_sid,
     )
 
-    # ── 1. STOP — opt-out (Twilio handles this; we just log and exit) ────
+    # ── 1. STOP — opt-out (Exotel handles this; we just log and exit) ────
     if keyword == "STOP":
         logger.info("[SMS Inbound] STOP received from %s — opt-out logged, no reply", from_number)
         # Still attempt tenant resolution for logging, but don't fail if not found
@@ -427,7 +427,7 @@ async def handle_inbound_sms(
                 to_number=to_number,
                 body=text,
                 caller_phone=from_number,
-                twilio_sid=twilio_sid,
+                sms_sid=sms_sid,
             )
         return ""
 
@@ -450,7 +450,7 @@ async def handle_inbound_sms(
         to_number=to_number,
         body=text,
         caller_phone=from_number,
-        twilio_sid=twilio_sid,
+        sms_sid=sms_sid,
     )
 
     # ── 4. Quick-reply keyword routing ───────────────────────────────────
@@ -518,7 +518,8 @@ async def handle_inbound_sms(
         return ""
 
     # ── 6. Send reply and log outbound ───────────────────────────────────
-    sms_service._send_sms(to=from_number, body=reply, tenant_ctx=tenant_ctx)
+    _is_test_caller = from_number.startswith("+1555")
+    sms_service._send_sms(to=from_number, body=reply, tenant_ctx=tenant_ctx, is_test=_is_test_caller)
 
     await _log_sms(
         tenant_id=tenant_id,

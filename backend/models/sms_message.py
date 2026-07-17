@@ -1,7 +1,7 @@
 """
 SMS message model — tracks all inbound and outbound SMS for two-way conversations.
 
-Inbound: caller texts the institute's Twilio number → AI agent responds
+Inbound: caller texts the institute's Exotel number → AI agent responds
 Outbound: reminders, confirmations, waitlist notifications, review requests
 
 Tenant scope and the caller's phone are derived via caller_id → callers
@@ -37,8 +37,8 @@ class SMSMessage(Base):
     to_number = Column(String(20), nullable=False)
     body = Column(Text, nullable=False)
 
-    # Twilio message SID for delivery tracking
-    twilio_sid = Column(String(50), nullable=True)
+    # Carrier message SID for delivery tracking (formerly twilio_sid)
+    sms_sid = Column(String(50), nullable=True)
 
     # Who sent this outbound message: 'agent' (AI), 'admin' (manual from UI), 'system' (automated)
     sender_type = Column(String(20), nullable=False, server_default='agent')

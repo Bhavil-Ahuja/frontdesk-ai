@@ -451,15 +451,14 @@ async def get_config(current_user: Tenant = Depends(auth_service.get_current_use
         # Integration credentials — never return raw secrets, only:
         # (a) booleans so the UI can show "Connected", and
         # (b) non-sensitive identifiers (phone number, username, event slug)
-        "twilio_configured": bool(t.twilio_account_sid and t.twilio_auth_token),
-        "twilio_account_sid": t.twilio_account_sid or "",
-        "twilio_phone_number": t.twilio_phone_number or "",
-        "twilio_auth_token_masked": _mask_secret(t.twilio_auth_token),
+        "sms_configured": bool(settings.EXOTEL_SID and (t.sip_phone_number or settings.EXOTEL_NUMBER)),
         # Google Calendar
         "google_calendar_connected": bool(t.google_calendar_connected),
         "google_calendar_email": t.google_calendar_email or "",
+        # AI Voice + SMS (Exotel) — read-only, set by platform admin
+        "sip_phone_number": t.sip_phone_number or "",
         # Feature flags — effective state (global AND per-tenant)
-        "twilio_enabled": settings.FEATURE_TWILIO_ENABLED and (t.feature_twilio_enabled if t.feature_twilio_enabled is not None else True),
+        "sms_enabled": settings.FEATURE_SMS_ENABLED and (t.feature_sms_enabled if t.feature_sms_enabled is not None else False),
         # Test Agent — unified callers (phone + name pairs), names resolved from callers table
         "test_callers": resolved_test_callers,
         # Legacy fields (kept for backwards compat)
@@ -527,18 +526,11 @@ async def update_config(
         "business_hours", "holidays", "greeting_message", "business_name",
         "business_phone", "business_address",
         "demo_mode", "appointment_types", "emergency_guidance",
-        # Twilio credentials — per-tenant
-        "twilio_account_sid", "twilio_auth_token", "twilio_phone_number",
         "reminder_settings", "review_settings",
         # Coaching-specific (processed separately below — placed here to be accepted)
         "courses",
     ):
         if k in data:
-            # Skip masked round-trip values (containing •) to avoid overwriting real secrets.
-            if k in {"twilio_auth_token"}:
-                v = data[k]
-                if isinstance(v, str) and "•" in v:
-                    continue  # Don't overwrite with masked value
             update_fields[k] = data[k]
 
     # Server-side slug generation + deduplication for appointment types.

@@ -106,7 +106,7 @@ export default function Landing() {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <Feature icon={Phone}         title="24/7 Phone Coverage"      description="Your AI agent answers every call instantly, even outside business hours." />
           <Feature icon={CalendarCheck} title="Smart Calendar Booking"   description="Appointments booked directly into Google Calendar with conflict-free slot selection." />
-          <Feature icon={MessageSquare} title="SMS Reminders"            description="Automated 24-hour appointment reminders and post-visit follow-ups via Twilio." />
+          <Feature icon={MessageSquare} title="SMS Reminders"            description="Automated 24-hour appointment reminders and post-visit follow-ups via Exotel." />
           <Feature icon={Bot}           title="Custom Agent Persona"     description="Configure your agent's name, voice, greeting, and business info to match your brand." />
           <Feature icon={ShieldCheck}   title="Smart Escalation"         description="Urgent calls are automatically transferred to your on-call staff." />
           <Feature icon={Sparkles}      title="Built for Any Business"   description="Coaching institutes, clinics, salons — pick your vertical and we tune the agent." />
@@ -120,7 +120,7 @@ export default function Landing() {
           {[
             { n: '1', title: 'Register your business',  desc: 'Tell us about your business, choose your vertical, and pick a URL slug.' },
             { n: '2', title: 'Wait for admin approval', desc: 'Your account is reviewed — usually within 24 hours.' },
-            { n: '3', title: 'Connect integrations',    desc: 'Link Google Calendar for bookings and Twilio for SMS reminders.' },
+            { n: '3', title: 'Connect integrations',    desc: 'Link Google Calendar for bookings and Exotel for SMS reminders.' },
             { n: '4', title: 'Customize your agent',    desc: 'Set the greeting, business hours, business info, and emergency rules.' },
             { n: '5', title: 'Go live',                  desc: 'Your AI agent starts answering calls. Track every interaction in the dashboard.' },
           ].map(s => (

@@ -43,3 +43,12 @@ PyJWT>=2.10.0
 pytest>=8.0.0
 pytest-asyncio>=0.24.0
 pytest-timeout>=2.3.0
+
+# LiveKit voice agent worker (install OUTSIDE corporate proxy — .whl files are blocked)
+# Run: pip install "livekit-agents[deepgram,elevenlabs,silero,openai,google]>=1.0"
+# livekit-agents>=1.0
+# livekit-plugins-deepgram>=1.0
+# livekit-plugins-elevenlabs>=1.0
+# livekit-plugins-silero>=1.0
+# livekit-plugins-openai>=1.0
+# livekit-plugins-google>=1.0   # only if LLM_PROVIDER=gemini

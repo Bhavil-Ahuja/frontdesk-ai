@@ -103,14 +103,28 @@ async def list_appointments(
             query = query.where(Appointment.status == AppointmentStatus(status.upper()))
         except ValueError:
             pass
+    tenant_tz = getattr(current_user, "timezone", DEFAULT_TIMEZONE) or DEFAULT_TIMEZONE
+    try:
+        from zoneinfo import ZoneInfo
+        local_tz = ZoneInfo(tenant_tz)
+    except Exception:
+        from zoneinfo import ZoneInfo
+        local_tz = ZoneInfo(DEFAULT_TIMEZONE)
+
     if date_from:
         try:
-            query = query.where(Appointment.scheduled_at >= datetime.fromisoformat(date_from))
+            dt = datetime.fromisoformat(date_from)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=local_tz).astimezone(timezone.utc)
+            query = query.where(Appointment.scheduled_at >= dt)
         except ValueError:
             pass
     if date_to:
         try:
-            query = query.where(Appointment.scheduled_at <= datetime.fromisoformat(date_to))
+            dt = datetime.fromisoformat(date_to)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=local_tz).astimezone(timezone.utc)
+            query = query.where(Appointment.scheduled_at <= dt)
         except ValueError:
             pass
     if appointment_type:
@@ -209,7 +223,7 @@ async def cancel_appointment(
     db.add(history_entry)
     await db.flush()
 
-    # Send cancellation SMS with tenant context for correct Twilio credentials
+    # Send cancellation SMS with tenant context for correct Exotel credentials
     tenant_ctx = None
     _tenant_id = apt.tenant_id  # derived @property → caller.tenant_id
     if _tenant_id:
@@ -393,7 +407,15 @@ async def update_appointment(
         old_scheduled_at = apt.scheduled_at
         new_scheduled_at = body.scheduled_at
         if new_scheduled_at.tzinfo is None:
-            new_scheduled_at = new_scheduled_at.replace(tzinfo=timezone.utc)
+            try:
+                from zoneinfo import ZoneInfo
+                local_tz = ZoneInfo(getattr(current_user, "timezone", None) or DEFAULT_TIMEZONE)
+            except Exception:
+                from zoneinfo import ZoneInfo
+                local_tz = ZoneInfo(DEFAULT_TIMEZONE)
+            new_scheduled_at = new_scheduled_at.replace(tzinfo=local_tz).astimezone(timezone.utc)
+        else:
+            new_scheduled_at = new_scheduled_at.astimezone(timezone.utc)
 
         apt.scheduled_at = new_scheduled_at
         apt.reminder_2h_sent_at = None  # Reset so the reminder fires again at the new time

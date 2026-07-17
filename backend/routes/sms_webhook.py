@@ -1,11 +1,20 @@
 """
-Twilio inbound SMS webhook route.
+Exotel inbound SMS webhook route.
 
-POST /webhook/sms  -> receive inbound SMS from Twilio and respond with TwiML
+POST /webhook/sms  — receive inbound SMS from Exotel
+
+Exotel webhook payload (form-encoded POST):
+  SmsSid    — Exotel message SID
+  From      — sender's phone number
+  To        — your ExoPhone (the tenant's Exotel number)
+  Body      — message text
+
+Unlike Twilio, Exotel does NOT support TwiML auto-reply.
+Replies must be sent as a separate outbound SMS API call —
+sms_inbound_service handles that via sms_service.send_custom_sms().
 """
 
 import logging
-from xml.sax.saxutils import escape as xml_escape
 
 from fastapi import APIRouter, Request, Response
 
@@ -15,53 +24,42 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["SMS Webhook"])
 
-_EMPTY_TWIML = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
-
 
 @router.post("/webhook/sms")
 async def sms_webhook(request: Request):
     """
-    Twilio inbound SMS webhook. Receives form-encoded data from Twilio,
-    processes the message through sms_inbound_service, and returns a TwiML
-    response.
+    Exotel inbound SMS webhook.
+    Receives form-encoded data, processes through sms_inbound_service,
+    and returns HTTP 200 (Exotel only needs a 200 ACK — no body required).
+    Any reply is sent as a separate outbound SMS by sms_inbound_service.
     """
     try:
         form_data = await request.form()
+
+        # Exotel field names — fall back to Twilio names for backwards compat
         from_number = form_data.get("From", "")
-        to_number = form_data.get("To", "")
-        body = form_data.get("Body", "")
-        twilio_sid = form_data.get("MessageSid", "")
+        to_number   = form_data.get("To", "")
+        body        = form_data.get("Body", "")
+        sms_sid     = form_data.get("SmsSid", "") or form_data.get("MessageSid", "")
 
         logger.info("[SMS Webhook] Inbound SMS from=%s to=%s sid=%s body_len=%d",
-                     from_number, to_number, twilio_sid, len(body))
+                    from_number, to_number, sms_sid, len(body))
 
-        # Deduplication — Twilio may retry if our first response was slow.
-        # MessageSid is unique per message; skip if we already processed it.
         if not body.strip():
-            logger.info("[SMS Webhook] Empty body — returning empty TwiML")
-            return Response(content=_EMPTY_TWIML, media_type="application/xml")
+            logger.info("[SMS Webhook] Empty body — ignoring")
+            return Response(status_code=200)
 
-        reply_text = await sms_inbound_service.handle_inbound_sms(
+        # Process and reply (reply is sent as a separate outbound SMS inside)
+        await sms_inbound_service.handle_inbound_sms(
             from_number=from_number,
             to_number=to_number,
             body=body,
-            twilio_sid=twilio_sid,
+            sms_sid=sms_sid,
         )
 
-        if reply_text:
-            # Escape XML-special chars so LLM output like "< 5 minutes"
-            # doesn't break the TwiML document.
-            safe_text = xml_escape(reply_text)
-            twiml = (
-                '<?xml version="1.0" encoding="UTF-8"?>'
-                f"<Response><Message>{safe_text}</Message></Response>"
-            )
-        else:
-            twiml = _EMPTY_TWIML
-
-        return Response(content=twiml, media_type="application/xml")
+        # Exotel just needs a 200 ACK — no body
+        return Response(status_code=200)
 
     except Exception as exc:
         logger.error("[SMS Webhook] Error processing inbound SMS: %s", exc, exc_info=True)
-        # Return empty TwiML so Twilio does not retry
-        return Response(content=_EMPTY_TWIML, media_type="application/xml")
+        return Response(status_code=200)  # Always 200 so Exotel doesn't retry

@@ -3,7 +3,7 @@ OpenAI-compatible LLM proxy endpoint for Vapi.
 
 Multi-tenant: extracts the assistant_id from Vapi's request, resolves it to a
 TenantContext, and threads that context through all service calls so each
-tenant uses their own Twilio creds, timezone, KB, and prompts.
+tenant uses their own Exotel creds, timezone, KB, and prompts.
 
 Architecture:
   1. Vapi sends conversation → we resolve tenant + inject tenant-specific system prompt
@@ -103,19 +103,19 @@ async def chat_completions(request: Request):
 
     # ── Extract caller phone ───────────────────────────────────────────
     # Vapi format: body.call.customer.number
-    # Bolna format: injected as {{contact_number}} in the system message,
+    # Fallback: injected as {contact_number} in the system message,
     #   so messages[0]["content"] contains e.g. "caller_phone: +919876543210"
     caller_phone = (
         body.get("call", {}).get("customer", {}).get("number", "")
         or body.get("metadata", {}).get("caller_number", "")
         or ""
     )
-    # For Bolna: phone + name are injected into the first system message
-    # via {{contact_number}} and {{caller_name}} template substitution.
-    # Bolna system prompt template should be:
-    #   caller_phone: {{contact_number}}
-    #   caller_name: {{caller_name}}
-    _bolna_caller_name = ""
+    # Some callers (e.g. Vapi) inject phone + name into the first system message
+    # via template substitution:
+    #   caller_phone: {contact_number}
+    #   caller_name: {caller_name}
+    # Extract these so we can skip a DB round-trip for the greeting.
+    _injected_caller_name = ""
     if not caller_phone and messages:
         sys_content = ""
         for m in messages[:2]:
@@ -127,32 +127,32 @@ async def chat_completions(request: Request):
             m = _re_phone.search(r"caller_phone[:\s]+(\+?\d[\d\s\-]{7,})", sys_content)
             if m:
                 caller_phone = m.group(1).strip()
-                logger.info("[LLM Proxy] Extracted caller phone from Bolna system message: %s", caller_phone)
-            # Also extract caller_name injected by Bolna's caller-lookup substitution
+                logger.info("[LLM Proxy] Extracted caller phone from system message: %s", caller_phone)
             m_name = _re_phone.search(r"caller_name[:\s]+([^\n]+)", sys_content)
             if m_name:
                 raw = m_name.group(1).strip()
-                # Bolna uses "there" as placeholder for unknown callers (from our caller-lookup)
+                # "there" is a placeholder for unknown callers — treat as empty
                 if raw and raw.lower() != "there":
-                    _bolna_caller_name = raw
-                    logger.info("[LLM Proxy] Extracted caller name from Bolna system message: %s", _bolna_caller_name)
+                    _injected_caller_name = raw
+                    logger.info("[LLM Proxy] Extracted caller name from system message: %s", _injected_caller_name)
 
     logger.info("[LLM Proxy] Received request: %d messages, model=%s, caller=%s, tenant=%s",
                 len(messages), model, caller_phone or "unknown",
                 tenant_ctx.slug if tenant_ctx else "none")
 
     # ── Caller-ID validation ──────────────────────────────────────────────
-    # Skip caller-ID if it matches the institute's own Twilio number
-    # (happens when testing via Vapi web dialer — no real caller).
+    # Skip caller-ID if it matches the institute's own SIP/Exotel number
+    # (happens when testing via web dialer — no real caller behind that number).
     _is_own_number = False
-    if caller_phone and tenant_ctx and tenant_ctx.twilio_phone_number:
+    own_phone = (tenant_ctx.sip_phone_number if tenant_ctx else "") or settings.EXOTEL_NUMBER
+    if caller_phone and own_phone:
         from backend.services.caller_service import _phone_digits_tail
         _is_own_number = (
-            _phone_digits_tail(caller_phone) == _phone_digits_tail(tenant_ctx.twilio_phone_number)
+            _phone_digits_tail(caller_phone) == _phone_digits_tail(own_phone)
         )
         if _is_own_number:
             logger.info(
-                "[LLM Proxy] Caller %s matches institute Twilio number — skipping caller recognition",
+                "[LLM Proxy] Caller %s matches institute SIP number — skipping caller recognition",
                 caller_phone,
             )
             # Clear caller_phone so the system prompt doesn't tell the agent
@@ -160,11 +160,11 @@ async def chat_completions(request: Request):
             caller_phone = ""
 
     # Lightweight name lookup — only fetches the caller's name for the greeting.
-    # Bolna already provides the name via caller-lookup substitution — skip DB call.
+    # If name was injected via system message template, skip the DB call.
     # Full profile (appointments, history) is fetched lazily via lookup_caller tool.
-    caller_name = _bolna_caller_name  # pre-filled if Bolna path, "" otherwise
+    caller_name = _injected_caller_name  # pre-filled if injected via template
     if caller_phone and not _is_own_number and not caller_name:
-        # Vapi path (or Bolna without caller_name in template) — do lightweight DB lookup
+        # No injected name — do lightweight DB lookup
         try:
             tenant_id = tenant_ctx.tenant_id if tenant_ctx else None
             caller_rec = await caller_service.get_caller_by_phone(caller_phone, tenant_id=tenant_id)
@@ -1442,8 +1442,17 @@ async def _execute_tool(
     # and "9876543210" → "+919876543210" for an Indian tenant.
     if "phone" in args and args["phone"]:
         from backend.services.caller_service import _normalise_phone, _region_from_timezone
+        # Use tenant timezone as a hint, but if that gives a non-IN region and
+        # the raw number looks like a 10-digit Indian mobile (starts with 6-9),
+        # override to IN — a UK tenant can still receive calls from Indian students.
         region = _region_from_timezone(tenant_ctx.timezone if tenant_ctx else None)
-        raw_phone = args["phone"]
+        raw_phone = args["phone"].strip()
+        # Override to IN only for non-North-American tenants: a UK-timezone tenant
+        # can receive calls from Indian students who give 10-digit numbers verbally.
+        # We do NOT override for US/CA tenants — their 10-digit numbers start with
+        # the same digits (6-9) as Indian numbers and would be mis-normalised.
+        if region not in ("US", "CA", "IN") and len(raw_phone.lstrip("+")) == 10 and raw_phone.lstrip("+")[0] in "6789":
+            region = "IN"
         args["phone"] = _normalise_phone(raw_phone, default_region=region)
         if args["phone"] != raw_phone:
             logger.info("[Tool Exec] Normalised phone: %s → %s (region=%s)",
@@ -1473,6 +1482,9 @@ async def _execute_tool(
                         "or our staff can help them in person."
                     ),
                 }
+
+    # Derive is_test from caller_phone — test phones use +1555 prefix
+    is_test = caller_phone.startswith("+1555")
 
     try:
         if name == "get_available_slots":
@@ -1534,6 +1546,156 @@ async def _execute_tool(
                 "available_slots": formatted_slots,
                 "date": date,
                 "count": len(slots),
+            }
+
+        elif name == "get_week_slots":
+            import uuid as uuid_mod
+            from datetime import timedelta
+            from zoneinfo import ZoneInfo
+            from backend.services import native_scheduling
+            from backend.services.calendar_service import _resolve_appointment_config
+            from backend.tools.platform import _fmt_slot_display
+            from backend.defaults import DEFAULT_TIMEZONE
+
+            appt_type = args.get("appointment_type", "consultation")
+            subject_filter = args.get("subject", "") or None
+            provider_id_str = args.get("provider_id", "") or None
+
+            office_tz_name = tenant_ctx.timezone if tenant_ctx else DEFAULT_TIMEZONE
+            try:
+                _tz = ZoneInfo(office_tz_name)
+            except Exception:
+                _tz = ZoneInfo(DEFAULT_TIMEZONE)
+
+            today = datetime.now(_tz).date()
+            days_to_sunday = 6 - today.weekday()
+            date_range = [today + timedelta(days=i) for i in range(days_to_sunday + 1)]
+
+            duration, max_conc = _resolve_appointment_config(appt_type, tenant_ctx)
+
+            provider_uuid = None
+            if provider_id_str:
+                try:
+                    provider_uuid = uuid_mod.UUID(provider_id_str)
+                except (ValueError, TypeError):
+                    pass
+
+            holidays = (
+                tenant_ctx.holidays
+                if tenant_ctx and getattr(tenant_ctx, "holidays", None)
+                else None
+            )
+
+            try:
+                _tz_abbr = datetime.now(_tz).strftime("%Z")
+            except Exception:
+                _tz_abbr = ""
+
+            days_result: list[dict] = []
+            subject_not_offered: str | None = None
+
+            for d in date_range:
+                date_str = d.strftime("%Y-%m-%d")
+                friendly = d.strftime("%A, %B %d")
+
+                result = await native_scheduling.get_provider_aware_slots(
+                    date_str=date_str,
+                    duration_minutes=duration,
+                    tenant_id=tenant_ctx.tenant_id if tenant_ctx else None,
+                    business_hours=tenant_ctx.business_hours if tenant_ctx else None,
+                    tz_name=office_tz_name,
+                    slot_capacity=max_conc,
+                    provider_id=provider_uuid,
+                    holidays=holidays,
+                    appointment_type=appt_type,
+                    subject=subject_filter,
+                )
+
+                if result.get("subject_filter") and not result.get("slots"):
+                    subject_not_offered = result["subject_filter"]
+                    break
+
+                holiday_info = result.get("holiday")
+                if holiday_info:
+                    days_result.append({
+                        "date": date_str,
+                        "day": friendly,
+                        "closed": True,
+                        "holiday": holiday_info.get("name", "holiday"),
+                        "slots": [],
+                        "count": 0,
+                    })
+                    continue
+
+                raw_slots = result.get("slots", [])
+                formatted: list[dict] = []
+                for slot_data in raw_slots[:5]:
+                    slot_time_str = slot_data.get("time", "")
+                    available_provs = slot_data.get("available_providers", [])
+                    display_time, display_date = _fmt_slot_display(slot_time_str, office_tz_name)
+                    time_label = display_time
+                    if _tz_abbr and display_time != slot_time_str:
+                        time_label += f" {_tz_abbr}"
+                    formatted.append({
+                        "time_label": time_label,
+                        "display_time": display_time,
+                        "display_date": display_date,
+                        "exact_slot_time": slot_time_str,
+                        "available_providers": available_provs,
+                        "duration_minutes": slot_data.get("duration_minutes"),
+                    })
+
+                days_result.append({
+                    "date": date_str,
+                    "day": friendly,
+                    "closed": False,
+                    "slots": formatted,
+                    "count": len(raw_slots),
+                })
+
+            if subject_not_offered:
+                week_summary = (
+                    f"No faculty at this institute currently teach {subject_not_offered!r}. "
+                    f"Do NOT say 'no slots available' or 'fully booked' or 'closed'. "
+                    f"Tell the caller: \u2018We don\u2019t currently offer {subject_not_offered} coaching.\u2019 "
+                    f"Ask if they\u2019d like to book a demo for one of our other subjects, "
+                    f"or offer to have a counselor follow up."
+                )
+            else:
+                open_days = [d for d in days_result if not d["closed"] and d["slots"]]
+                if not open_days:
+                    week_summary = (
+                        f"No available slots were found for any remaining day this week. "
+                        f"Tell the caller the rest of this week appears to be fully booked. "
+                        f"Offer to check next week or add them to the waitlist."
+                    )
+                else:
+                    tz_note = f" (all times in {office_tz_name})" if office_tz_name else ""
+                    lines = []
+                    for day_info in open_days:
+                        top_times = ", ".join(s["time_label"] for s in day_info["slots"][:3])
+                        lines.append(f"  {day_info['day']}: {top_times}")
+                    week_summary = (
+                        f"Available slots remaining this week{tz_note}:\n"
+                        + "\n".join(lines)
+                        + "\n\nAsk the caller which day and time works best. "
+                        + "Once they choose, call book_appointment with the EXACT exact_slot_time "
+                        + "and provider_id. Do NOT construct or modify the time string yourself."
+                    )
+
+            elapsed = (time.time() - t0) * 1000
+            logger.info("[Tool Exec] get_week_slots → %d/%d days have slots in %.0fms",
+                        len([d for d in days_result if not d.get("closed") and d.get("slots")]),
+                        len(days_result), elapsed)
+            return {
+                "summary_for_assistant": week_summary,
+                "days": days_result,
+                "days_checked": [d["date"] for d in days_result],
+                "total_days_with_slots": len(
+                    [d for d in days_result if not d.get("closed") and d.get("slots")]
+                ),
+                "subject_not_offered": bool(subject_not_offered),
+                "timezone": office_tz_name,
             }
 
         elif name == "book_appointment":
@@ -1702,6 +1864,130 @@ async def _execute_tool(
             except Exception as match_exc:
                 logger.warning("[Tool Exec] Slot matching failed: %s — using original", match_exc)
 
+            # ── Demo class checks (coaching institutes only) ──────────────────────
+            if "demo" in appt_type.lower() and tenant_ctx:
+                _demo_tenant_id = getattr(tenant_ctx, "tenant_id", None)
+                _demo_kb = getattr(tenant_ctx, "knowledge_base", None) or {}
+                _demo_max = _demo_kb.get("max_demo_classes_per_student")
+                _demo_raw_phone = args.get("phone", "")
+
+                try:
+                    from backend.services import caller_service as _cs_demo
+                    _demo_phone = _cs_demo._normalise_phone(_demo_raw_phone)
+                except Exception:
+                    _demo_phone = _demo_raw_phone
+
+                if _demo_tenant_id and _demo_phone:
+                    try:
+                        from backend.database import async_session as _get_demo_session
+                        from sqlalchemy import select as _sa_sel, func as _sa_fn, and_ as _sa_and
+                        from backend.models.appointment import (
+                            Appointment as _DemoAppt, AppointmentStatus as _DemoStatus,
+                        )
+                        from backend.models.caller import Caller as _DemoCaller
+                        from dateutil import parser as _dtp_demo
+                        from datetime import timedelta as _td_demo
+                        from backend.defaults import DEFAULT_TIMEZONE
+
+                        # Resolve slot to UTC for window comparison
+                        _demo_slot_dt = _dtp_demo.parse(slot_time)
+                        if _demo_slot_dt.tzinfo is None:
+                            from zoneinfo import ZoneInfo as _DemoZI
+                            _demo_slot_dt = _demo_slot_dt.replace(
+                                tzinfo=_DemoZI(tenant_ctx.timezone or DEFAULT_TIMEZONE)
+                            )
+                        _demo_slot_utc = _demo_slot_dt.astimezone(timezone.utc)
+
+                        # Slot duration (for overlap window)
+                        _demo_dur = 60
+                        for _demo_at in (getattr(tenant_ctx, "appointment_types", None) or []):
+                            if _demo_at.get("code") == appt_type:
+                                _demo_dur = int(_demo_at.get("duration_minutes", 60))
+                                break
+                        _demo_slot_end_utc = _demo_slot_utc + _td_demo(minutes=_demo_dur)
+
+                        # Shared base: this phone × this tenant × any demo type
+                        _demo_base = [
+                            _DemoAppt.student_phone == _demo_phone,
+                            _DemoCaller.tenant_id == _demo_tenant_id,
+                            _DemoAppt.appointment_type.ilike("%demo%"),
+                        ]
+
+                        async with _get_demo_session() as _demo_db:
+                            # 1. Overlap check
+                            _overlap_q = (
+                                _sa_sel(_sa_fn.count())
+                                .select_from(_DemoAppt)
+                                .join(_DemoCaller, _DemoAppt.caller_id == _DemoCaller.id)
+                                .where(
+                                    _sa_and(
+                                        *_demo_base,
+                                        _DemoAppt.status == _DemoStatus.CONFIRMED,
+                                        _DemoAppt.scheduled_at < _demo_slot_end_utc,
+                                        _DemoAppt.scheduled_at > _demo_slot_utc - _td_demo(minutes=_demo_dur),
+                                    )
+                                )
+                            )
+                            _demo_overlap = (await _demo_db.execute(_overlap_q)).scalar() or 0
+                            if _demo_overlap > 0:
+                                logger.warning(
+                                    "[Tool Exec] Demo overlap blocked — phone=%s already has demo at %s",
+                                    _demo_phone, slot_time,
+                                )
+                                return {
+                                    "ok": False,
+                                    "error": "demo_overlap",
+                                    "summary_for_assistant": (
+                                        "This student already has a demo class scheduled at that time. "
+                                        "Inform them they cannot attend two demo sessions simultaneously "
+                                        "and offer a different available time slot."
+                                    ),
+                                }
+
+                            # 2. Max demo count check
+                            if _demo_max is not None:
+                                try:
+                                    _demo_max_int = int(_demo_max)
+                                except (ValueError, TypeError):
+                                    _demo_max_int = None
+
+                                if _demo_max_int and _demo_max_int > 0:
+                                    _count_q = (
+                                        _sa_sel(_sa_fn.count())
+                                        .select_from(_DemoAppt)
+                                        .join(_DemoCaller, _DemoAppt.caller_id == _DemoCaller.id)
+                                        .where(
+                                            _sa_and(
+                                                *_demo_base,
+                                                _DemoAppt.status.in_(
+                                                    [_DemoStatus.CONFIRMED, _DemoStatus.COMPLETED]
+                                                ),
+                                            )
+                                        )
+                                    )
+                                    _demo_count = (await _demo_db.execute(_count_q)).scalar() or 0
+                                    if _demo_count >= _demo_max_int:
+                                        logger.warning(
+                                            "[Tool Exec] Demo limit reached — phone=%s has %d/%d demos",
+                                            _demo_phone, _demo_count, _demo_max_int,
+                                        )
+                                        return {
+                                            "ok": False,
+                                            "error": "demo_limit_reached",
+                                            "summary_for_assistant": (
+                                                f"This student has already attended {_demo_count} demo "
+                                                f"class(es), which is the maximum of {_demo_max_int} allowed. "
+                                                "Politely let them know that no additional demo sessions "
+                                                "are available for them. Offer to connect them with a "
+                                                "counsellor who can discuss enrollment directly — use "
+                                                "escalate_to_human to transfer them."
+                                            ),
+                                        }
+                    except Exception as _demo_chk_exc:
+                        logger.warning(
+                            "[Tool Exec] Demo class check failed (non-blocking): %s", _demo_chk_exc
+                        )
+
             booking_notes = args.get("notes", "").strip() or None
             result = await calendar_service.book_appointment(
                 caller_info=caller_info,
@@ -1716,13 +2002,14 @@ async def _execute_tool(
                 # Send SMS confirmation
                 sms_sent = False
                 try:
-                    scheduled_dt = datetime.fromisoformat(args.get("slot_time", ""))
+                    scheduled_dt = datetime.fromisoformat(slot_time)
                     sms_service.send_confirmation(
                         caller_name=args.get("caller_name", ""),
                         phone=args.get("phone", ""),
                         appointment_type=args.get("appointment_type", "").replace("_", " ").title(),
                         scheduled_at=scheduled_dt,
                         tenant_ctx=tenant_ctx,
+                        is_test=is_test,
                     )
                     sms_sent = True
                 except Exception as sms_exc:
@@ -1814,6 +2101,7 @@ async def _execute_tool(
                             new_scheduled_at=new_dt,
                             appointment_type=_sms_type,
                             tenant_ctx=tenant_ctx,
+                            is_test=is_test,
                         )
                 except Exception as sms_exc:
                     logger.warning("[Tool Exec] Reschedule SMS failed: %s", sms_exc)
@@ -1850,20 +2138,36 @@ async def _execute_tool(
             return {"success": success}
 
         elif name == "escalate_to_human":
+            # Set caller number from caller_phone if available
+            caller_num = caller_phone or args.get("phone", "unknown")
             sms_service.send_office_alert(
                 reason=args.get("reason", "Caller requested human assistance"),
-                caller_number="unknown",
+                caller_number=caller_num,
                 tenant_ctx=tenant_ctx,
             )
+            # Resolve destination phone number
+            transfer_dest = ""
+            if tenant_ctx:
+                transfer_dest = (
+                    (tenant_ctx.escalation_transfer_number or "").strip()
+                    or (tenant_ctx.escalation_phone or "").strip()
+                    or (tenant_ctx.business_phone or "").strip()
+                )
+            else:
+                transfer_dest = (
+                    (settings.ESCALATION_TRANSFER_NUMBER or "").strip()
+                    or (settings.ESCALATION_PHONE_NUMBER or "").strip()
+                )
             elapsed = (time.time() - t0) * 1000
-            logger.info("[Tool Exec] escalate → done in %.0fms", elapsed)
-            return {"success": True, "action": "transfer"}
+            logger.info("[Tool Exec] escalate → done in %.0fms, destination=%s", elapsed, transfer_dest)
+            return {"success": True, "action": "transfer", "destination": transfer_dest}
 
         elif name == "send_callback_request":
             sms_service.send_escalation_notification(
                 caller_name=args.get("caller_name", ""),
                 phone=args.get("phone", ""),
                 tenant_ctx=tenant_ctx,
+                is_test=is_test,
             )
             sms_service.send_office_alert(
                 reason=f"Callback: {args.get('reason', 'N/A')}",
@@ -1902,43 +2206,59 @@ async def _execute_tool(
                 }
 
             upcoming = history.get("upcoming_appointments", [])
+            past = history.get("past_appointments", [])
             caller_name = history["caller"]["name"]
             elapsed = (time.time() - t0) * 1000
-            logger.info("[Tool Exec] lookup_caller_appointments → %d upcoming for %s in %.0fms",
-                        len(upcoming), caller_name, elapsed)
-
-            if not upcoming:
-                return {
-                    "ok": True,
-                    "summary_for_assistant": (
-                        f"{caller_name} has no upcoming sessions. "
-                        "Ask if they'd like to schedule a new one."
-                    ),
-                    "caller_name": caller_name,
-                    "upcoming": [],
-                }
+            logger.info("[Tool Exec] lookup_caller_appointments → %d upcoming, %d past for %s in %.0fms",
+                        len(upcoming), len(past), caller_name, elapsed)
 
             def _appt_line(a):
-                line = f"{a['type']} on {a['date']} at {a['time']}"
+                line = f"{a['type']} on {a['date']}"
+                if a.get("time"):
+                    line += f" at {a['time']}"
                 if a.get("provider_name"):
                     title = f" ({a['provider_title']})" if a.get("provider_title") else ""
                     line += f" with {a['provider_name']}{title}"
+                if a.get("provider_id"):
+                    line += f" [provider_id={a['provider_id']}]"
+                if a.get("booking_uid"):
+                    line += f" [booking_uid={a['booking_uid']}]"
                 if a.get("duration_minutes"):
                     line += f" ({a['duration_minutes']} min)"
+                if a.get("status") and a["status"] not in ("CONFIRMED",):
+                    line += f" [{a['status']}]"
                 return line
 
-            appt_lines = [_appt_line(a) for a in upcoming]
+            upcoming_lines = [_appt_line(a) for a in upcoming]
+            past_lines = [_appt_line(a) for a in past]
+
+            # Build summary covering both upcoming and past
+            summary_parts = []
+            if upcoming:
+                summary_parts.append(
+                    f"{caller_name} has {len(upcoming)} upcoming session(s): "
+                    + "; ".join(upcoming_lines) + ". "
+                    "Tell the caller about their upcoming session(s) naturally — include the faculty name and details. "
+                    "For rescheduling: use booking_uid with reschedule_appointment. "
+                    "For checking new slots: pass provider_id from the appointment above to get_available_slots — do NOT ask the caller for a provider ID."
+                )
+            else:
+                summary_parts.append(f"{caller_name} has no upcoming sessions.")
+
+            if past:
+                summary_parts.append(
+                    f"Past sessions ({len(past)}): " + "; ".join(past_lines) + ". "
+                    "Use this to answer questions about attendance history or previously attended demos."
+                )
+            else:
+                summary_parts.append("No past sessions on record.")
 
             return {
                 "ok": True,
-                "summary_for_assistant": (
-                    f"{caller_name} has {len(upcoming)} upcoming session(s): "
-                    + "; ".join(appt_lines) + ". "
-                    "Tell the caller about their session(s) naturally — include the faculty name and session details. "
-                    "If they want to reschedule, use the booking_uid with reschedule_appointment."
-                ),
+                "summary_for_assistant": " | ".join(summary_parts),
                 "caller_name": caller_name,
                 "upcoming": upcoming,
+                "past": past,
             }
 
         elif name == "add_to_waitlist":

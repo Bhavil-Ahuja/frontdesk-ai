@@ -11,7 +11,7 @@ import { AlertCircle, LogOut } from 'lucide-react';
  *   <ProtectedRoute requireAdmin>...</ProtectedRoute> — requires admin
  *   <ProtectedRoute requireActive>...</ProtectedRoute> — requires ACTIVE status
  */
-export default function ProtectedRoute({ children, requireAdmin = false, requireActive = true }) {
+export default function ProtectedRoute({ children, requireAdmin = false, requireActive = true, requireFeature = null }) {
   const { user, loading, isAuthenticated, isAdmin, isPending, accountError, logout } = useAuth();
   const location = useLocation();
 
@@ -55,6 +55,8 @@ export default function ProtectedRoute({ children, requireAdmin = false, require
   if (!isAuthenticated) {
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
+
+
 
   // Pending users → /pending (admins skip this since they're auto-active)
   if (requireActive && isPending && !isAdmin) {

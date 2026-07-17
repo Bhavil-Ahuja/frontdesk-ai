@@ -473,6 +473,8 @@ export default function CallerCRM() {
 // ── Caller Profile (detail view) ──────────────────────────────────────────
 
 function CallerProfile({ callerId, tz, onBack }) {
+  const { user } = useAuth();
+  const smsEnabled = user?.sms_enabled !== false;
   const { toast, confirm, prompt } = useModal();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -888,7 +890,7 @@ function CallerProfile({ callerId, tz, onBack }) {
         />
       )}
       {activeTab === 'calls' && <CallsTab calls={calls} tz={tz} />}
-      {activeTab === 'sms' && <SMSTab messages={smsMessages} tz={tz} callerPhone={p.phone} onMessageSent={fetchProfile} />}
+      {activeTab === 'sms' && <SMSTab messages={smsMessages} tz={tz} callerPhone={p.phone} onMessageSent={fetchProfile} smsEnabled={smsEnabled} />}
 
       {/* Confirmation modal (mirrors AppointmentManager.jsx) */}
       {confirmAction && (
@@ -1408,7 +1410,7 @@ function CallsTab({ calls, tz }) {
   );
 }
 
-function SMSTab({ messages, tz, callerPhone, onMessageSent }) {
+function SMSTab({ messages, tz, callerPhone, onMessageSent, smsEnabled }) {
   const [composeText, setComposeText] = useState('');
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState(null);
@@ -1434,6 +1436,17 @@ function SMSTab({ messages, tz, callerPhone, onMessageSent }) {
 
   return (
     <div className="space-y-3">
+      {!smsEnabled && (
+        <div className="bg-amber-50/50 dark:bg-amber-900/20 border border-amber-200/60 dark:border-amber-800/40 rounded-xl p-3 flex items-start gap-2 animate-fade-in">
+          <span className="text-sm leading-none select-none">⚠️</span>
+          <div>
+            <p className="text-xs font-semibold text-amber-800 dark:text-amber-300">Simulated Chat (SMS Disabled)</p>
+            <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-0.5 leading-normal">
+              SMS dispatch is disabled for this tenant. Messages entered here are simulated/logged for testing and will not be delivered to the customer.
+            </p>
+          </div>
+        </div>
+      )}
       {messages.length === 0 ? (
         <EmptyState icon={MessageSquare} message="No SMS messages." />
       ) : (

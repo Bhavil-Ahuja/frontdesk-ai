@@ -62,9 +62,6 @@ class TenantUpdateRequest(BaseModel):
     agent_name: Optional[str] = None
     greeting_message: Optional[str] = None
     system_prompt_override: Optional[str] = None
-    twilio_account_sid: Optional[str] = None
-    twilio_auth_token: Optional[str] = None
-    twilio_phone_number: Optional[str] = None
     escalation_phone: Optional[str] = None
     escalation_transfer_number: Optional[str] = None
     appointment_types: Optional[list[dict[str, Any]]] = None
@@ -79,7 +76,7 @@ class TenantUpdateRequest(BaseModel):
     # Agent on/off — owner or admin can toggle
     agent_active: Optional[bool] = None
     # Feature flags (per-tenant toggles — admin only)
-    feature_twilio_enabled: Optional[bool] = None
+    feature_sms_enabled: Optional[bool] = None
 
 
 class TenantOut(BaseModel):
@@ -100,16 +97,12 @@ class TenantOut(BaseModel):
     demo_mode: bool
     agent_name: Optional[str]
     greeting_message: Optional[str]
-    # Integration status (show whether configured, don't expose keys)
-    twilio_configured: bool
-    # Per-tenant Twilio phone number (assigned by admin under Option A)
-    twilio_phone_number: Optional[str]
+    sms_configured: bool
+    sip_phone_number: Optional[str]
     google_calendar_connected: bool
     google_calendar_email: Optional[str]
-    # Feature flags — raw per-tenant toggles (admin-editable)
-    feature_twilio_enabled: Optional[bool]
-    # Feature flags — effective state (global AND per-tenant)
-    twilio_enabled: bool
+    feature_sms_enabled: Optional[bool]
+    sms_enabled: bool
     created_at: Optional[datetime]
     updated_at: Optional[datetime]
 
@@ -136,20 +129,12 @@ def _tenant_to_out(t: Tenant) -> TenantOut:
         demo_mode=t.demo_mode if t.demo_mode is not None else True,
         agent_name=t.agent_name,
         greeting_message=t.greeting_message,
-        # Twilio is "configured" if the platform has credentials AND a phone
-        # number is assigned to this tenant.
-        twilio_configured=bool(
-            (t.twilio_account_sid or settings.TWILIO_ACCOUNT_SID) and
-            (t.twilio_auth_token or settings.TWILIO_AUTH_TOKEN) and
-            (t.twilio_phone_number or settings.TWILIO_PHONE_NUMBER)
-        ),
-        twilio_phone_number=t.twilio_phone_number or "",
+        sms_configured=bool(settings.EXOTEL_SID and (t.sip_phone_number or settings.EXOTEL_NUMBER)),
+        sip_phone_number=t.sip_phone_number or "",
         google_calendar_connected=bool(t.google_calendar_connected),
         google_calendar_email=t.google_calendar_email or "",
-        # Feature flags — raw per-tenant toggles
-        feature_twilio_enabled=t.feature_twilio_enabled,
-        # Feature flags — effective = global AND per-tenant
-        twilio_enabled=settings.FEATURE_TWILIO_ENABLED and (t.feature_twilio_enabled if t.feature_twilio_enabled is not None else True),
+        feature_sms_enabled=t.feature_sms_enabled,
+        sms_enabled=settings.FEATURE_SMS_ENABLED and (t.feature_sms_enabled if t.feature_sms_enabled is not None else False),
         created_at=t.created_at,
         updated_at=t.updated_at,
     )

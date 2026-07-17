@@ -62,7 +62,7 @@ const TENANT_NAV_GROUPS = [
       { to: '/appointments', icon: CalendarDays, label: 'Appointments' },
       { to: '/providers',    icon: Users,        label: 'Faculty' },
       { to: '/waitlist',     icon: ClipboardList,label: 'Waitlist' },
-      { to: '/sms',          icon: MessagesSquare,label: 'SMS Messages', requireFeature: 'twilio' },
+      { to: '/sms',          icon: MessagesSquare,label: 'SMS Messages', requireFeature: 'sms' },
     ],
   },
   {
@@ -147,14 +147,7 @@ function SideNavItem({ to, icon: Icon, label, onClick, collapsed }) {
 function SidebarContent({ user, isAdmin, dark, toggleTheme, navigate, location, handleLogout, onNavClick, collapsed, onToggleCollapse }) {
   const initials = (user?.name || user?.email || '?').charAt(0).toUpperCase();
 
-  const filteredGroups = TENANT_NAV_GROUPS.map(group => ({
-    ...group,
-    items: group.items.filter(({ requireFeature }) => {
-      if (!requireFeature) return true;
-      if (requireFeature === 'twilio') return user?.twilio_enabled !== false;
-      return true;
-    }),
-  })).filter(g => g.items.length > 0);
+  const filteredGroups = TENANT_NAV_GROUPS;
 
   const labelClass = collapsed
     ? 'hidden'
@@ -216,8 +209,8 @@ function SidebarContent({ user, isAdmin, dark, toggleTheme, navigate, location, 
         )}
       </nav>
 
-      {/* Bottom controls */}
-      <div className={`pb-3 pt-2 space-y-0.5 border-t border-gray-100 dark:border-white/5 ${collapsed ? 'px-1' : 'px-2'}`}>
+      {/* Bottom controls — sticky so sign-out is always reachable */}
+      <div className={`pb-3 pt-2 space-y-0.5 border-t border-gray-100 dark:border-white/5 sticky bottom-0 bg-white dark:bg-gray-900 ${collapsed ? 'px-1' : 'px-2'}`}>
         {/* User card */}
         <button
           onClick={() => { navigate('/profile'); onNavClick?.(); }}
@@ -349,13 +342,23 @@ function AppShell() {
             {user?.business_name || 'FrontDesk AI'}
           </span>
         </div>
-        <button
-          onClick={() => navigate('/profile')}
-          className="p-2 -mr-2 rounded-lg text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/5 transition-colors"
-          aria-label="Profile"
-        >
-          <UserCircle className="w-5 h-5" />
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => navigate('/profile')}
+            className="p-2 rounded-lg text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/5 transition-colors"
+            aria-label="Profile"
+          >
+            <UserCircle className="w-5 h-5" />
+          </button>
+          <button
+            onClick={handleLogout}
+            className="p-2 -mr-2 rounded-lg text-gray-500 dark:text-gray-400 hover:text-red-500 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors"
+            aria-label="Sign out"
+            title="Sign out"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
       {/* Mobile overlay */}
@@ -411,8 +414,8 @@ function AppShell() {
           <Route path="/appointments" element={<ProtectedRoute><AppointmentManager /></ProtectedRoute>} />
           <Route path="/providers" element={<ProtectedRoute><ProviderManager /></ProtectedRoute>} />
           <Route path="/waitlist"  element={<ProtectedRoute><WaitlistView /></ProtectedRoute>} />
-          <Route path="/sms"           element={<ProtectedRoute><SMSConversations /></ProtectedRoute>} />
-          <Route path="/sms/:callerId" element={<ProtectedRoute><SMSConversations /></ProtectedRoute>} />
+          <Route path="/sms"           element={<ProtectedRoute requireFeature="sms"><SMSConversations /></ProtectedRoute>} />
+          <Route path="/sms/:callerId" element={<ProtectedRoute requireFeature="sms"><SMSConversations /></ProtectedRoute>} />
           <Route path="/knowledge" element={<ProtectedRoute><KnowledgeBase /></ProtectedRoute>} />
           <Route path="/settings"  element={<ProtectedRoute><AgentConfig /></ProtectedRoute>} />
           <Route path="/support"   element={<ProtectedRoute><SupportTickets /></ProtectedRoute>} />
