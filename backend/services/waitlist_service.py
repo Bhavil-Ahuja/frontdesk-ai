@@ -327,6 +327,8 @@ async def check_waitlist_status(
                 "preferred_time_end": e.preferred_time_end,
                 "status": e.status.value if e.status else "UNKNOWN",
                 "created_at": e.created_at.isoformat() if e.created_at else None,
+                "provider_name": e.provider.name if e.provider else None,
+                "provider_subject": e.provider.subject if e.provider else None,
             }
 
             if e.status == WaitlistStatus.WAITING:
@@ -358,6 +360,10 @@ async def check_waitlist_status(
         lines = []
         for d in entry_dicts:
             line = f"{d['appointment_type']} on {d['preferred_date']}"
+            if d.get("provider_name"):
+                line += f" with {d['provider_name']}"
+                if d.get("provider_subject"):
+                    line += f" ({d['provider_subject']})"
             if d["status"] == "WAITING":
                 line += f" — position #{d.get('position', '?')} in queue"
             elif d["status"] == "NOTIFIED":

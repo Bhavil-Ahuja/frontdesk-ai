@@ -1209,12 +1209,15 @@ class PlatformToolProvider:
             "[Call %s] get_available_slots → %d slots in %.0fms (provider=%s)",
             call_id, len(formatted_slots), elapsed, provider_id_str or "any",
         )
+        if subject_filter and summary:
+            summary = f"[Showing slots for subject: {subject_filter}] " + summary
         return {
             "summary_for_assistant": summary,
             "available_slots": formatted_slots,
             "date": date,
             "timezone": office_tz_name,
             "count": len(formatted_slots),
+            "subject_filter": subject_filter or None,
             "provider_filter": provider_id_str or None,
         }
 
@@ -1368,6 +1371,8 @@ class PlatformToolProvider:
             len(days_result),
             elapsed,
         )
+        if subject_filter and summary and not subject_not_offered:
+            summary = f"[Showing slots for subject: {subject_filter}] " + summary
         return {
             "summary_for_assistant": summary,
             "days": days_result,
@@ -1427,6 +1432,7 @@ class PlatformToolProvider:
         provider_id_str = args.get("provider_id", "")
         provider_id = None
         provider_name = None
+        provider_subject: str | None = None
         if provider_id_str:
             try:
                 from backend.services import provider_service
@@ -1435,7 +1441,9 @@ class PlatformToolProvider:
                 provider = await provider_service.get_provider(provider_id)
                 if provider:
                     provider_name = provider.get("name", "")
-                    logger.info("[Call %s] Provider selected: %s (%s)", call_id, provider_name, provider_id)
+                    provider_subject = provider.get("subject") or None
+                    logger.info("[Call %s] Provider selected: %s (%s) subject=%s",
+                                call_id, provider_name, provider_id, provider_subject)
             except Exception as prov_exc:
                 logger.warning("[Call %s] Provider lookup failed: %s", call_id, prov_exc)
 
@@ -1732,11 +1740,16 @@ class PlatformToolProvider:
                 "success": True,
                 "booking": result,
                 "provider_name": provider_name,
+                "provider_subject": provider_subject,
                 "summary_for_assistant": (
-                    f"Booking confirmed for {time_str} on {date_str}{provider_msg}. "
+                    f"Booking confirmed for {time_str} on {date_str}{provider_msg}"
+                    + (f" [{provider_subject} demo]" if provider_subject else "") + ". "
                     f"Tell the caller their session is booked. {sms_note} "
                     f"Do NOT make up any details not provided. "
-                    f"Just confirm the time, date{', and faculty member' if provider_name else ''}, "
+                    f"Just confirm the time, date"
+                    + (f", faculty member ({provider_name})"
+                       + (f" and subject ({provider_subject})" if provider_subject else "")
+                       if provider_name else "") + ", "
                     f"wish them well, and ask if there's anything else."
                 ),
             }
@@ -1852,6 +1865,8 @@ class PlatformToolProvider:
             _sms_name = ""
             _sms_phone = ""
             _sms_type = "Session"
+            _rs_prov_name = ""
+            _rs_prov_subject = ""
             try:
                 from backend.database import async_session as get_async_session
                 from sqlalchemy import select as sa_select
@@ -1864,6 +1879,17 @@ class PlatformToolProvider:
                         _sms_name = appt.student_name or ""
                         _sms_phone = appt.student_phone or ""
                         _sms_type = (appt.appointment_type or "Session").replace("_", " ").title()
+                        _prov_id_to_lookup = new_provider_id or str(appt.provider_id or "")
+                        if _prov_id_to_lookup:
+                            try:
+                                from backend.services import provider_service as _prov_svc
+                                import uuid as _rs_uuid
+                                _prov = await _prov_svc.get_provider(_rs_uuid.UUID(_prov_id_to_lookup))
+                                if _prov:
+                                    _rs_prov_name = _prov.get("name", "")
+                                    _rs_prov_subject = _prov.get("subject") or ""
+                            except Exception:
+                                pass
             except Exception as db_exc:
                 logger.warning("[Call %s] Failed to fetch caller info for reschedule SMS: %s", call_id, db_exc)
 
@@ -1908,11 +1934,18 @@ class PlatformToolProvider:
             new_time_str, new_date_str = _fmt_slot_display(new_slot_time, _reschedule_tz)
             if not new_date_str:
                 new_date_str = "the new date"
+            _rs_prov_msg = ""
+            if _rs_prov_name:
+                _rs_prov_msg = f" with {_rs_prov_name}"
+                if _rs_prov_subject:
+                    _rs_prov_msg += f" ({_rs_prov_subject})"
             return {
                 "success": True,
                 "reschedule": result,
+                "provider_name": _rs_prov_name or None,
+                "provider_subject": _rs_prov_subject or None,
                 "summary_for_assistant": (
-                    f"Session rescheduled to {new_time_str} on {new_date_str}. "
+                    f"Session rescheduled to {new_time_str} on {new_date_str}{_rs_prov_msg}. "
                     "Confirm the new time to the caller naturally and ask if there's anything else."
                 ),
             }
@@ -2043,7 +2076,16 @@ class PlatformToolProvider:
             caller_number=args.get("phone", ""),
             tenant_ctx=tenant_ctx,
         )
-        return {"success": True, "message": "Callback request sent."}
+        return {
+            "success": True,
+            "message": "Callback request sent.",
+            "summary_for_assistant": (
+                f"A callback request has been logged for {args.get('caller_name') or 'the caller'} "
+                f"at {args.get('phone', 'their number')}. "
+                f"Tell the caller that our team will call them back shortly and ask if there is "
+                f"anything else you can help with before you go."
+            ),
+        }
 
     async def _lookup_caller_appointments(
         self, args: dict, tenant_ctx: Any, call_id: str, t0: float
@@ -2256,6 +2298,10 @@ class PlatformToolProvider:
                 if a.get("provider_name"):
                     title = f" ({a['provider_title']})" if a.get("provider_title") else ""
                     line += f" with {a['provider_name']}{title}"
+                    if a.get("provider_subject"):
+                        line += f" [subject: {a['provider_subject']}]"
+                if a.get("notes"):
+                    line += f" [notes: {a['notes']}]"
                 return line
             appt_lines = [_appt_summary(a) for a in upcoming]
             summary_parts.append(f"Upcoming sessions: {'; '.join(appt_lines)}.")
@@ -2403,7 +2449,11 @@ class PlatformToolProvider:
             def _fmt_provider(p: dict) -> str:
                 name = p["name"]
                 title = p.get("title")
-                return f"{name} ({title})" if title else name
+                subject = p.get("subject")
+                label = f"{name} ({title})" if title else name
+                if subject:
+                    label += f" — {subject}"
+                return label
 
             provider_list = ", ".join(_fmt_provider(p) for p in providers)
             summary = (
