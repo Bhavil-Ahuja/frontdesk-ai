@@ -2145,13 +2145,13 @@ async def _execute_tool(
                 caller_number=caller_num,
                 tenant_ctx=tenant_ctx,
             )
-            # Resolve and normalise destination phone number
+            # Resolve and normalise destination phone number (prioritize business_phone)
             raw_dest = ""
             if tenant_ctx:
                 raw_dest = (
-                    (tenant_ctx.escalation_transfer_number or "").strip()
+                    (tenant_ctx.business_phone or "").strip()
+                    or (tenant_ctx.escalation_transfer_number or "").strip()
                     or (tenant_ctx.escalation_phone or "").strip()
-                    or (tenant_ctx.business_phone or "").strip()
                 )
             else:
                 raw_dest = (

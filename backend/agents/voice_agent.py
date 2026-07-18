@@ -360,10 +360,10 @@ class FrontDeskAgent(Agent):
         logger.info("[VoiceAgent] Agent initialised for tenant=%s caller=%s",
                     tenant_ctx.slug if tenant_ctx else "default", caller_phone)
 
-    async def _tool(self, name: str, **args) -> str:
+    async def _tool(self, _tool_name: str, **args) -> str:
         """Dispatch to the shared _execute_tool and return summary string."""
         result = await _execute_tool(
-            name=name,
+            name=_tool_name,
             args=args,
             tenant_ctx=self._tenant,
             caller_phone=self._caller_phone,
@@ -605,82 +605,49 @@ class FrontDeskAgent(Agent):
             except Exception:
                 pass
 
-        # ── Primary path: Exotel REST API redirect ──────────────────────────────
-        # Use the Exotel Calls REST API with the callSID captured at call start.
-        # This tells Exotel to redirect the live PSTN call to a new ExoML URL
-        # that returns a <Dial> applet — Exotel handles the bridging natively
-        # without any SIP REFER on the LiveKit side.
-        if self._sip_call_id:
-            redirect_url = (
-                f"{settings.SERVER_BASE_URL}/api/voice/exotel/transfer-flow"
-                f"?to={destination}"
-            )
-            logger.info(
-                "[VoiceAgent] Exotel REST redirect: callSID=%s -> %s",
-                self._sip_call_id, redirect_url,
-            )
-            try:
-                from backend.services.exotel_service import redirect_active_call
-                await redirect_active_call(
-                    call_sid=self._sip_call_id,
-                    redirect_url=redirect_url,
-                )
-                logger.info(
-                    "[VoiceAgent] Exotel redirect accepted for callSID=%s",
-                    self._sip_call_id,
-                )
-                # Exotel will now drop the SIP bridge leg naturally;
-                # disconnect our room after a short pause.
-                asyncio.create_task(_disconnect_after_escalation(3.0))
-                return "Connecting you to our team now. Please hold on."
-            except Exception as exc:
-                logger.error(
-                    "[VoiceAgent] Exotel REST redirect failed (%s) — falling back to SIP REFER",
-                    exc,
-                )
-                # Fall through to SIP REFER below
-
-        # ── Fallback path: SIP REFER ──────────────────────────────────────────
-        # Used when sip.callID is absent (browser console tests) or when
-        # the REST API call fails.  Builds the correct sip:@hostname URI
-        # that Exotel's SIP trunk accepts in a REFER-To header.
+        # Use the SIP REFER destination format:
+        # Exotel expects f"sip:{destination}@{sip_hostname}" if sip.hostname is available,
+        # otherwise tel:{destination}.
         sip_attrs = sip_participant.attributes or {}
         sip_hostname = sip_attrs.get("sip.hostname", "")
         if sip_hostname:
             transfer_uri = f"sip:{destination}@{sip_hostname}"
         else:
             transfer_uri = f"tel:{destination}"
-            logger.warning(
-                "[VoiceAgent] sip.hostname not found in participant attrs — "
-                "falling back to tel: URI (may be rejected by some SIP trunks)"
-            )
+
+
 
         logger.info(
-            "[VoiceAgent] SIP REFER: %s -> %s",
+            "[VoiceAgent] Initiating SIP REFER: %s -> %s",
             sip_participant.identity, transfer_uri,
         )
 
         lk_client = None
         try:
             from livekit import api as lk_api
+            from livekit.protocol import sip as proto_sip
+
             lk_client = lk_api.LiveKitAPI(
                 url=settings.LIVEKIT_URL,
                 api_key=settings.LIVEKIT_API_KEY,
                 api_secret=settings.LIVEKIT_API_SECRET,
             )
             await lk_client.sip.transfer_sip_participant(
-                lk_api.TransferSIPParticipantRequest(
+                proto_sip.TransferSIPParticipantRequest(
                     room_name=self._room.name,
                     participant_identity=sip_participant.identity,
                     transfer_to=transfer_uri,
+                    play_dialtone=False,
                 )
             )
             logger.info("[VoiceAgent] SIP REFER succeeded -> %s", transfer_uri)
+            # Exotel will take over the call leg and bridge it to the new number.
+            # We disconnect our LiveKit room after a brief pause so our agent process exits.
             asyncio.create_task(_disconnect_after_escalation(2.0))
             return "Connecting you to our team now. Please hold on."
         except Exception as e:
-            logger.error("[VoiceAgent] SIP REFER also failed: %s", e)
-            asyncio.create_task(_disconnect_after_escalation(15.0))
+            logger.error("[VoiceAgent] SIP REFER failed: %s", e)
+            asyncio.create_task(_disconnect_after_escalation(10.0))
             return (
                 "I wasn't able to connect you directly right now, but I've "
                 "already sent an alert to our team. "
@@ -885,24 +852,38 @@ async def entrypoint(ctx: JobContext):
 
     ctx.add_shutdown_callback(_on_call_end)
 
-    # Cartesia TTS — free tier at cartesia.ai, set CARTESIA_API_KEY in .env
-    # Default: "a0e99841-438c-4a64-b679-ae501e7d6091" = Barbra (warm female, en-US)
-    # Browse voices at play.cartesia.ai — copy the UUID from the voice card.
-    # Per-tenant: set voice_config["voiceId"] to a Cartesia UUID in agent settings.
-    DEFAULT_CARTESIA_VOICE = "a0e99841-438c-4a64-b679-ae501e7d6091"  # Barbra
-    cartesia_voice = DEFAULT_CARTESIA_VOICE
-    if tenant_ctx and isinstance(tenant_ctx.voice_config, dict):
-        configured = tenant_ctx.voice_config.get("voiceId", "")
-        # Use only if it looks like a UUID (36 chars, 4 dashes)
-        if configured and len(configured) == 36 and configured.count("-") == 4:
-            cartesia_voice = configured
+    tts_provider = os.getenv("TTS_PROVIDER", "cartesia").lower()
 
-    tts_engine = cartesia.TTS(
-        voice=cartesia_voice,
-        model="sonic-2",
-        api_key=os.getenv("CARTESIA_API_KEY", ""),
-    )
-    logger.info("[VoiceAgent] TTS: Cartesia voice=%s", cartesia_voice)
+    if tts_provider == "google":
+        from livekit.plugins import google as lk_google
+        # Google Cloud TTS has a generous free tier of:
+        # - 4 Million characters/month free for Standard voices
+        # - 1 Million characters/month free for Neural2/Wavenet voices
+        google_voice = "en-IN-Wavenet-D"  # Indian English female; change to "en-US-Neural2-F" etc.
+        if tenant_ctx and isinstance(tenant_ctx.voice_config, dict):
+            configured_voice = tenant_ctx.voice_config.get("voiceId", "")
+            if configured_voice and "Neural" in configured_voice or "Wavenet" in configured_voice:
+                google_voice = configured_voice
+
+        tts_engine = lk_google.TTS(
+            voice_name=google_voice,
+        )
+        logger.info("[VoiceAgent] TTS: Google Cloud TTS voice=%s", google_voice)
+    else:
+        # Cartesia TTS — free tier at cartesia.ai, set CARTESIA_API_KEY in .env
+        DEFAULT_CARTESIA_VOICE = "a0e99841-438c-4a64-b679-ae501e7d6091"  # Barbra
+        cartesia_voice = DEFAULT_CARTESIA_VOICE
+        if tenant_ctx and isinstance(tenant_ctx.voice_config, dict):
+            configured = tenant_ctx.voice_config.get("voiceId", "")
+            if configured and len(configured) == 36 and configured.count("-") == 4:
+                cartesia_voice = configured
+
+        tts_engine = cartesia.TTS(
+            voice=cartesia_voice,
+            model="sonic-2",
+            api_key=os.getenv("CARTESIA_API_KEY", ""),
+        )
+        logger.info("[VoiceAgent] TTS: Cartesia voice=%s", cartesia_voice)
 
     # Build STT — Deepgram with Indian English
     stt_engine = deepgram.STT(

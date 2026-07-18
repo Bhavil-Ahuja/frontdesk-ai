@@ -67,6 +67,7 @@ class Settings:
 
     # ── ElevenLabs (voice preview) ───────────────────────────────────────
     ELEVENLABS_API_KEY: str = os.getenv("ELEVENLABS_API_KEY", "")
+    TTS_PROVIDER: str = os.getenv("TTS_PROVIDER", "cartesia")
 
     # ── PostgreSQL ────────────────────────────────────────────────────────
     DATABASE_URL: str = os.getenv(
