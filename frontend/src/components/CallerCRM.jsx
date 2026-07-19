@@ -29,6 +29,9 @@ import {
   Send,
   Trash2,
   Check,
+  PhoneCall,
+  Loader2,
+  X,
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
@@ -485,6 +488,37 @@ function CallerProfile({ callerId, tz, onBack }) {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [deletingCaller, setDeletingCaller] = useState(false);
+  const [dialingPhone, setDialingPhone] = useState(null);
+  const [connecting, setConnecting] = useState(false);
+  const [staffPhone, setStaffPhone] = useState(user?.business_phone || user?.owner_phone || '');
+  const [successMessage, setSuccessMessage] = useState('');
+  const [errorMessage, setErrorMessage] = useState('');
+
+  async function handleInitiateCallback(e) {
+    e.preventDefault();
+    if (!staffPhone.trim() || !dialingPhone) return;
+    setConnecting(true);
+    setErrorMessage('');
+    setSuccessMessage('');
+    try {
+      await apiFetch('/api/calls/connect-bridged', {
+        method: 'POST',
+        body: {
+          staff_phone: staffPhone.trim(),
+          customer_phone: dialingPhone,
+        },
+      });
+      setSuccessMessage('Exotel is now calling your phone. Please pick up to connect to the customer.');
+      setTimeout(() => {
+        setDialingPhone(null);
+      }, 4000);
+    } catch (err) {
+      console.error('Failed to connect bridged call:', err);
+      setErrorMessage(err.message || 'Failed to connect bridged call.');
+    } finally {
+      setConnecting(false);
+    }
+  }
 
   // Status update state (mirrors AppointmentManager.jsx)
   const [updatingStatus, setUpdatingStatus] = useState(false);
@@ -788,6 +822,16 @@ function CallerProfile({ callerId, tz, onBack }) {
           <div className="flex items-center gap-2 shrink-0">
             <button
               onClick={() => {
+                setDialingPhone(p.phone);
+                setSuccessMessage('');
+                setErrorMessage('');
+              }}
+              className="inline-flex items-center gap-1.5 px-3 py-2 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg text-sm font-medium transition-colors"
+            >
+              <Phone className="w-3.5 h-3.5" /> Call Customer
+            </button>
+            <button
+              onClick={() => {
                 setEditing(!editing);
                 setEditForm({
                   notes: p.notes || '',
@@ -942,6 +986,95 @@ function CallerProfile({ callerId, tz, onBack }) {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Exotel Click-to-Call modal */}
+      {dialingPhone && createPortal(
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+          {/* Overlay */}
+          <div
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => setDialingPhone(null)}
+          />
+
+          {/* Dialog Container */}
+          <div className="relative bg-white dark:bg-gray-900 border border-gray-250 dark:border-white/10 w-full max-w-md rounded-2xl p-6 shadow-2xl space-y-4 z-[70] animate-scale-up" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold text-gray-900 dark:text-white flex items-center gap-2">
+                <PhoneCall className="w-5 h-5 text-indigo-500" />
+                Connect Bridged Call
+              </h3>
+              <button
+                onClick={() => setDialingPhone(null)}
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-white p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-white/5 transition-all"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed">
+              Exotel will dial your phone number first. Once you answer, Exotel will place a call to this customer and bridge you together. The customer will only see your official AI number as the Caller ID.
+            </p>
+
+            <form onSubmit={handleInitiateCallback} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1.5">
+                  Your Phone Number
+                </label>
+                <input
+                  type="text"
+                  value={staffPhone}
+                  onChange={(e) => setStaffPhone(e.target.value)}
+                  placeholder="e.g. +91 98765 43210"
+                  className="w-full px-3 py-2.5 border border-gray-250 dark:border-white/10 rounded-xl text-sm bg-gray-50 dark:bg-white/5 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-white/30 focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 outline-none transition-all"
+                  required
+                />
+              </div>
+
+              {errorMessage && (
+                <div className="flex items-start gap-2 text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/10 rounded-xl p-3 border border-red-200 dark:border-red-800 text-xs">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{errorMessage}</span>
+                </div>
+              )}
+
+              {successMessage && (
+                <div className="flex items-start gap-2 text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-500/10 rounded-xl p-3 border border-green-200 dark:border-green-800 text-xs">
+                  <CheckCircle className="w-4 h-4 shrink-0" />
+                  <span>{successMessage}</span>
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setDialingPhone(null)}
+                  className="px-4 py-2 border border-gray-250 dark:border-white/10 text-gray-700 dark:text-gray-300 rounded-xl text-xs font-semibold hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={connecting || !staffPhone.trim()}
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-500 hover:bg-indigo-600 text-white rounded-xl text-xs font-semibold transition-colors disabled:opacity-50"
+                >
+                  {connecting ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Connecting...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Phone className="w-3.5 h-3.5" />
+                      <span>Connect Call</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   );

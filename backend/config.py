@@ -108,6 +108,9 @@ class Settings:
     # dev. Responses are streamed back as SSE.
     LOCAL_CHAT_MODE: bool = os.getenv("LOCAL_CHAT_MODE", "false").lower() == "true"
 
+    # ── Resend ───────────────────────────────────────────────────────────
+    RESEND_API_KEY: str = os.getenv("RESEND_API_KEY", "")
+
     # ── Derived ───────────────────────────────────────────────────────────
     @property
     def ollama_openai_base(self) -> str:

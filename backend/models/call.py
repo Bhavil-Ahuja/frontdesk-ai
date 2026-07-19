@@ -8,7 +8,7 @@ import enum
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, Enum, ForeignKey, Integer, String, Text
+from sqlalchemy import Column, DateTime, Enum, ForeignKey, Integer, String, Text, Boolean
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 
@@ -38,6 +38,7 @@ class Call(Base):
     # JSONB array of {role, content, timestamp} objects
     transcript = Column(JSONB, nullable=True, default=list)
     summary = Column(Text, nullable=True)
+    attended = Column(Boolean, default=False, nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     # Relationships

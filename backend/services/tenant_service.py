@@ -75,6 +75,8 @@ class TenantContext:
     """
     tenant_id: uuid.UUID
     slug: str
+    owner_email: str
+    owner_name: str
 
     # Business
     business_name: str
@@ -147,6 +149,8 @@ def _tenant_to_context(t: Tenant) -> TenantContext:
     return TenantContext(
         tenant_id=t.id,
         slug=t.slug,
+        owner_email=t.owner_email or "",
+        owner_name=t.owner_name or "",
         business_name=t.business_name,
         business_type=t.business_type.value if t.business_type else "coaching_institute",
         business_phone=t.business_phone or "",

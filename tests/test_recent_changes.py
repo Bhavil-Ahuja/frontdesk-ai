@@ -769,6 +769,135 @@ def test_prompt_includes_waitlist_time_guidance():
             "prompt explains how to convert vague windows (morning/afternoon)")
 
 
+# ── Escalate to human email triggers ──────────────────────────────────────────
+def test_escalated_call_sends_email():
+    print("\n── escalate_to_human triggers email notification ──")
+    from backend.routes import llm_proxy
+    
+    with patch("backend.services.email_service.send_escalation_email", new_callable=AsyncMock) as email_mock:
+        # Mock escalate_to_human execution
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # We invoke the tool execution wrapper inside llm_proxy
+        res = loop.run_until_complete(
+            llm_proxy._execute_tool(
+                name="escalate_to_human",
+                args={"reason": "Student wanted human counsellor"},
+                tenant_ctx=_make_ctx(owner_email="owner@coaching.com", business_name="Mock Academy"),
+                caller_phone="+919999999999",
+            )
+        )
+        
+        _assert(res["success"] is True, "_execute_tool(escalate_to_human) succeeds")
+        # Give asyncio background tasks a moment to run
+        loop.run_until_complete(asyncio.sleep(0.05))
+        _assert(email_mock.called, "send_escalation_email was invoked in the background")
+        called_kwargs = email_mock.call_args[1]
+        _assert(called_kwargs["to_email"] == "owner@coaching.com", "Recipient email matches owner_email")
+        _assert(called_kwargs["caller_phone"] == "+919999999999", "Caller phone is forwarded")
+        _assert("Student wanted human counsellor" in called_kwargs["reason"], "Reason is forwarded")
+
+
+def test_connect_bridged_call():
+    print("\n── connect_bridged_call triggers Exotel connect API ──")
+    from backend.routes import calls
+    
+    tenant_mock = _make_mock_tenant()
+    tenant_mock.business_phone = "+919876543210"
+    
+    req = calls.ConnectBridgedRequest(
+        staff_phone="+919876543210",
+        customer_phone="+919999999999",
+    )
+    
+    db_mock = AsyncMock()
+    # Mock execute returning no caller found (None)
+    res_mock = MagicMock()
+    res_mock.scalar_one_or_none.return_value = None
+    db_mock.execute.return_value = res_mock
+
+    with patch("httpx.AsyncClient.post") as post_mock, \
+         patch("backend.services.sms_service._resolve_exotel") as resolve_mock:
+        
+        resolve_mock.return_value = ("AC_test", "key_test", "token_test", "api.exotel.com", "+919876540100")
+        
+        resp_mock = MagicMock()
+        resp_mock.status_code = 200
+        resp_mock.json.return_value = {"Call": {"Sid": "test-sid"}}
+        post_mock.return_value = resp_mock
+
+        res_bridged = asyncio.run(
+            calls.connect_bridged_call(
+                req=req,
+                db=db_mock,
+                current_user=tenant_mock,
+            )
+        )
+        _assert(res_bridged["success"] is True, "connect_bridged_call returns success")
+        _assert(post_mock.called, "httpx POST to Exotel connect API was made")
+        called_args, called_kwargs = post_mock.call_args
+        _assert(called_kwargs["data"]["From"] == "919876543210", "Connect From matches staff_phone (normalized)")
+        _assert(called_kwargs["data"]["To"] == "919999999999", "Connect To matches customer phone (normalized)")
+        _assert(called_kwargs["data"]["CallerId"] == "+919876540100", "Connect CallerId matches tenant's Exophone")
+        _assert(db_mock.add.called, "Call object was inserted into the database")
+        _assert(db_mock.commit.called, "Database session was committed")
+
+
+def test_toggle_call_attended():
+    print("\n── toggle_attended PUT route toggles call status ──")
+    from backend.routes import calls
+    from backend.models.call import Call
+    
+    tenant_mock = _make_mock_tenant()
+    
+    # We mock database operations
+    call_mock = Call(
+        id=uuid.uuid4(),
+        tenant_id=tenant_mock.id,
+        vapi_call_id="call-12345",
+        attended=False,
+    )
+    
+    db_mock = AsyncMock()
+    # Mock execute to return a result wrapping our call_mock
+    result_mock = MagicMock()
+    result_mock.scalar_one_or_none.return_value = call_mock
+    db_mock.execute.return_value = result_mock
+    
+    res = asyncio.run(
+        calls.toggle_attended(
+            call_id=str(call_mock.id),
+            attended=True,
+            db=db_mock,
+            current_user=tenant_mock,
+        )
+    )
+    _assert(res["success"] is True, "toggle_attended succeeds")
+    _assert(res["attended"] is True, "attended was toggled to True")
+    _assert(call_mock.attended is True, "Call object attribute updated")
+    _assert(db_mock.commit.called, "Database session was committed")
+
+
+def test_sanitise_db_url_credentials():
+    print("\n── _sanitise_db_url auto-encodes credentials ──")
+    from backend.database import _sanitise_db_url
+    
+    raw = "postgresql://user_name:p@ss:w/rd@ep-morning-wind.aws.neon.tech/frontdesk-ai?sslmode=require&channel_binding=require"
+    sanitised = _sanitise_db_url(raw)
+    
+    # Assertions
+    _assert("postgresql+asyncpg://" in sanitised, "scheme is replaced with +asyncpg")
+    _assert("user_name:p%40ss%3Aw%2Frd" in sanitised, "credentials are quote_plus encoded")
+    _assert("sslmode" not in sanitised, "sslmode query param removed")
+    _assert("channel_binding" not in sanitised, "channel_binding query param removed")
+    _assert("ssl=require" in sanitised, "sslmode mapped to ssl")
+
+    # Space stripping test
+    with_spaces = " postgresql+ asyncpg://user:pass@host/db "
+    _assert(_sanitise_db_url(with_spaces) == "postgresql+asyncpg://user:pass@host/db", "spaces are stripped")
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 
 def main():
@@ -802,6 +931,10 @@ def main():
         test_prompt_includes_holiday_guidance,
         test_tenant_service_holiday_helpers,
         test_prompt_includes_waitlist_time_guidance,
+        test_escalated_call_sends_email,
+        test_connect_bridged_call,
+        test_toggle_call_attended,
+        test_sanitise_db_url_credentials,
     ]
 
     for test_fn in tests:

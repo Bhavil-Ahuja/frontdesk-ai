@@ -20,6 +20,7 @@ import {
   HelpCircle,
   Menu,
   X,
+  PhoneCall,
 } from 'lucide-react';
 
 import Dashboard from './components/Dashboard';
@@ -42,6 +43,7 @@ import SMSConversations from './components/SMSConversations';
 import CallerCRM from './components/CallerCRM';
 import Profile from './components/Profile';
 import SupportTickets from './components/SupportTickets';
+import CallbacksList from './components/CallbacksList';
 import { useAuth } from './contexts/AuthContext';
 import { useTheme } from './contexts/ThemeContext';
 
@@ -62,6 +64,7 @@ const TENANT_NAV_GROUPS = [
       { to: '/appointments', icon: CalendarDays, label: 'Appointments' },
       { to: '/providers',    icon: Users,        label: 'Faculty' },
       { to: '/waitlist',     icon: ClipboardList,label: 'Waitlist' },
+      { to: '/callbacks',    icon: PhoneCall,    label: 'Callbacks' },
       { to: '/sms',          icon: MessagesSquare,label: 'SMS Messages', requireFeature: 'sms' },
     ],
   },
@@ -419,6 +422,7 @@ function AppShell() {
           <Route path="/knowledge" element={<ProtectedRoute><KnowledgeBase /></ProtectedRoute>} />
           <Route path="/settings"  element={<ProtectedRoute><AgentConfig /></ProtectedRoute>} />
           <Route path="/support"   element={<ProtectedRoute><SupportTickets /></ProtectedRoute>} />
+          <Route path="/callbacks" element={<ProtectedRoute><CallbacksList /></ProtectedRoute>} />
           <Route path="/profile"   element={<ProtectedRoute><Profile /></ProtectedRoute>} />
           <Route
             path="/admin/tenants"

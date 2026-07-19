@@ -10,7 +10,7 @@ import csv
 import io
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -41,6 +41,7 @@ class CallSummary(BaseModel):
     duration_seconds: Optional[int]
     outcome: Optional[str]
     summary: Optional[str]
+    attended: Optional[bool] = False
 
     class Config:
         from_attributes = True
@@ -145,6 +146,7 @@ async def list_calls(
                 duration_seconds=c.duration_seconds,
                 outcome=c.outcome.value if c.outcome else None,
                 summary=c.summary,
+                attended=c.attended,
             )
             for c in calls
         ],
@@ -220,4 +222,124 @@ async def get_call(
         outcome=call.outcome.value if call.outcome else None,
         summary=call.summary,
         transcript=call.transcript,
+        attended=call.attended,
     )
+
+
+@router.put("/{call_id}/attended")
+async def toggle_attended(
+    call_id: str,
+    attended: bool = Query(True),
+    db: AsyncSession = Depends(get_db),
+    current_user: Tenant = Depends(auth_service.get_current_user),
+):
+    """Mark a call as attended or unattended."""
+    try:
+        uid = uuid.UUID(call_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid call ID format.")
+
+    result = await db.execute(select(Call).where(Call.id == uid))
+    call = result.scalar_one_or_none()
+    if call is None:
+        raise HTTPException(status_code=404, detail="Call not found.")
+    if not current_user.is_admin and call.tenant_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied.")
+
+    call.attended = attended
+    await db.commit()
+    return {"success": True, "call_id": call_id, "attended": call.attended}
+
+
+class ConnectBridgedRequest(BaseModel):
+    staff_phone: str
+    customer_phone: str
+
+
+@router.post("/connect-bridged")
+async def connect_bridged_call(
+    req: ConnectBridgedRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: Tenant = Depends(auth_service.get_current_user),
+):
+    """Initiate an Exotel bridged call connecting the staff member to the student."""
+    from backend.services.sms_service import _resolve_exotel
+    from backend.models.caller import Caller
+    from backend.models.call import Call, CallOutcome
+    import httpx
+    import re
+    import uuid
+
+    # Resolve Exotel parameters
+    sid, api_key, token, subdomain, exophone = _resolve_exotel(current_user)
+
+    if not sid or not token:
+        raise HTTPException(
+            status_code=400,
+            detail="Exotel credentials are not configured for this server."
+        )
+
+    # Clean and normalize phone numbers (digits and plus only)
+    staff_num = re.sub(r"[^\d+]", "", req.staff_phone)
+    customer_num = re.sub(r"[^\d+]", "", req.customer_phone)
+
+    if not customer_num:
+        raise HTTPException(status_code=400, detail="Customer phone number is missing.")
+
+    # Suffix match last 10 digits to link this call to the student Caller record
+    phone_tail = customer_num[-10:] if len(customer_num) >= 10 else customer_num
+    caller_stmt = select(Caller).where(
+        Caller.tenant_id == current_user.id,
+        Caller.phone.like(f"%{phone_tail}")
+    )
+    caller_res = await db.execute(caller_stmt)
+    caller = caller_res.scalar_one_or_none()
+
+    # Call connection endpoint
+    url = f"https://{subdomain}/v1/Accounts/{sid}/Calls/connect.json"
+    payload = {
+        "From": staff_num,
+        "To": customer_num,
+        "CallerId": exophone,
+        "CallType": "trans",
+    }
+
+    logger.info("[ConnectBridged] Triggering Exotel bridged call From=%s To=%s CallerId=%s", staff_num, customer_num, exophone)
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                url,
+                auth=(api_key, token),
+                data=payload,
+                timeout=15.0,
+            )
+        if resp.status_code not in (200, 201):
+            logger.warning("[ConnectBridged] Exotel returned status=%d error=%s", resp.status_code, resp.text)
+            raise HTTPException(status_code=resp.status_code, detail=f"Exotel API failed: {resp.text}")
+
+        resp_json = resp.json()
+        call_sid = resp_json.get("Call", {}).get("Sid")
+
+        # Create Call record in DB to track the outbound bridged call
+        new_call = Call(
+            id=uuid.uuid4(),
+            tenant_id=current_user.id,
+            vapi_call_id=call_sid,
+            caller_number=customer_num,
+            caller_id=caller.id if caller else None,
+            started_at=datetime.now(timezone.utc),
+            duration_seconds=0,
+            outcome=CallOutcome.INQUIRY,
+            summary=f"Outbound bridged call connected staff ({staff_num}) to customer ({customer_num}) via Exotel.",
+            transcript=[],
+            attended=True,
+        )
+        db.add(new_call)
+        await db.commit()
+
+        return {"success": True, "detail": "Call initiated successfully.", "exotel_response": resp_json}
+    except httpx.HTTPError as err:
+        logger.error("[ConnectBridged] Exotel HTTP error: %s", err)
+        raise HTTPException(status_code=500, detail=f"Failed to communicate with Exotel: {str(err)}")
+

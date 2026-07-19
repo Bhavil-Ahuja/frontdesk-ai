@@ -20,7 +20,39 @@ _ASYNCPG_UNSUPPORTED_PARAMS = {"channel_binding", "sslmode"}
 
 
 def _sanitise_db_url(raw_url: str) -> str:
-    """Remove query-string params that asyncpg cannot handle."""
+    """Remove query-string params that asyncpg cannot handle, normalize scheme, and URL-encode credentials."""
+    raw_url = raw_url.strip().replace(" ", "")
+    if raw_url.startswith("postgresql://"):
+        raw_url = raw_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    
+    # Auto-encode special characters in username/password credentials
+    try:
+        if "@" in raw_url:
+            url_parts = raw_url.split("?", 1)
+            base_url = url_parts[0]
+            query_str = url_parts[1] if len(url_parts) > 1 else ""
+
+            # Find the last '@' separating credentials from host
+            last_at_idx = base_url.rfind("@")
+            creds_part = base_url[:last_at_idx]
+            rest_part = base_url[last_at_idx:]
+
+            scheme_sep = "://"
+            scheme_idx = creds_part.find(scheme_sep)
+            if scheme_idx != -1:
+                scheme = creds_part[:scheme_idx + len(scheme_sep)]
+                user_pass = creds_part[scheme_idx + len(scheme_sep):]
+                if ":" in user_pass:
+                    user, password = user_pass.split(":", 1)
+                    from urllib.parse import quote_plus
+                    encoded_user = quote_plus(user)
+                    encoded_pass = quote_plus(password)
+                    raw_url = f"{scheme}{encoded_user}:{encoded_pass}{rest_part}"
+                    if query_str:
+                        raw_url = f"{raw_url}?{query_str}"
+    except Exception as e:
+        logger.warning("Failed to auto-encode credentials in database URL: %s", e)
+
     parsed = urlparse(raw_url)
     params = parse_qs(parsed.query, keep_blank_values=True)
 
@@ -41,13 +73,31 @@ _db_url = _sanitise_db_url(settings.DATABASE_URL)
 
 # ── Engine & session factory ──────────────────────────────────────────────────
 
-engine = create_async_engine(
-    _db_url,
-    echo=False,
-    pool_size=10,
-    max_overflow=20,
-    pool_pre_ping=True,
-)
+try:
+    engine = create_async_engine(
+        _db_url,
+        echo=False,
+        pool_size=10,
+        max_overflow=20,
+        pool_pre_ping=True,
+    )
+except Exception as e:
+    masked_url = _db_url
+    try:
+        if "@" in _db_url:
+            parts = _db_url.split("@", 1)
+            creds = parts[0]
+            scheme_idx = creds.find("://")
+            if scheme_idx != -1:
+                scheme = creds[:scheme_idx + 3]
+                user_pass = creds[scheme_idx + 3:]
+                if ":" in user_pass:
+                    user = user_pass.split(":", 1)[0]
+                    masked_url = f"{scheme}{user}:***@{parts[1]}"
+    except Exception:
+        pass
+    logger.error("✗ Failed to create async database engine with URL: %s", masked_url)
+    raise e
 
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
@@ -450,6 +500,9 @@ END $$""",
     "ALTER TABLE tenants ALTER COLUMN escalation_phone TYPE VARCHAR(25)",
     "ALTER TABLE tenants ALTER COLUMN escalation_transfer_number TYPE VARCHAR(25)",
     "ALTER TABLE tenants ALTER COLUMN sip_phone_number TYPE VARCHAR(25)",
+    "ALTER TABLE calls ADD COLUMN IF NOT EXISTS attended BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS test_student_name VARCHAR(100) DEFAULT 'Alex Johnson'",
+    "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS test_student_names JSONB NOT NULL DEFAULT '[\"Alex Johnson\"]'::jsonb",
 ]
 
 

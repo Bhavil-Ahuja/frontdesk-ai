@@ -2145,6 +2145,17 @@ async def _execute_tool(
                 caller_number=caller_num,
                 tenant_ctx=tenant_ctx,
             )
+            if tenant_ctx and tenant_ctx.owner_email:
+                from backend.services.email_service import send_escalation_email
+                import asyncio
+                asyncio.create_task(
+                    send_escalation_email(
+                        to_email=tenant_ctx.owner_email,
+                        caller_phone=caller_num,
+                        reason=args.get("reason", "Caller requested human assistance"),
+                        tenant_name=tenant_ctx.business_name or "Coaching Institute",
+                    )
+                )
             # Resolve and normalise destination phone number (prioritize business_phone)
             raw_dest = ""
             if tenant_ctx:
