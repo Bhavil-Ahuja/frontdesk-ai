@@ -32,8 +32,8 @@ from collections.abc import AsyncIterable
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any
 
-from livekit import agents
-from livekit.agents import Agent, AgentSession, JobContext, RoomInputOptions, WorkerOptions, cli
+from livekit import agents, rtc
+from livekit.agents import Agent, AgentSession, JobContext, RoomInputOptions, WorkerOptions, cli, get_job_context
 from livekit.plugins import deepgram
 from livekit.plugins import cartesia
 from livekit.plugins import openai as lk_openai
@@ -591,14 +591,16 @@ class FrontDeskAgent(Agent):
 
         logger.info("[VoiceAgent] Initiating SIP transfer to: %s", destination)
 
-        # Find the SIP participant in the room
-        sip_participant = None
-        for p in self._room.remote_participants.values():
-            if p.identity.startswith("sip_") or (
-                p.attributes and any(k.startswith("sip.") for k in p.attributes)
-            ):
-                sip_participant = p
-                break
+        job_ctx = get_job_context()
+
+        # Find the active SIP caller in the room using official ParticipantKind check
+        sip_participant = next(
+            (
+                p for p in job_ctx.room.remote_participants.values()
+                if p.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP
+            ),
+            None,
+        )
 
         if not sip_participant:
             logger.warning(
@@ -628,26 +630,16 @@ class FrontDeskAgent(Agent):
         else:
             transfer_uri = f"tel:{destination}"
 
-
-
         logger.info(
             "[VoiceAgent] Initiating SIP REFER: %s -> %s",
             sip_participant.identity, transfer_uri,
         )
 
-        lk_client = None
         try:
             from livekit import api as lk_api
-            from livekit.protocol import sip as proto_sip
-
-            lk_client = lk_api.LiveKitAPI(
-                url=settings.LIVEKIT_URL,
-                api_key=settings.LIVEKIT_API_KEY,
-                api_secret=settings.LIVEKIT_API_SECRET,
-            )
-            await lk_client.sip.transfer_sip_participant(
-                proto_sip.TransferSIPParticipantRequest(
-                    room_name=self._room.name,
+            await job_ctx.api.sip.transfer_sip_participant(
+                lk_api.TransferSIPParticipantRequest(
+                    room_name=job_ctx.room.name,
                     participant_identity=sip_participant.identity,
                     transfer_to=transfer_uri,
                     play_dialtone=False,
