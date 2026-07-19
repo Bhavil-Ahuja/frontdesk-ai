@@ -30,7 +30,7 @@ import re
 import time
 from collections.abc import AsyncIterable
 from datetime import datetime, timedelta, timezone
-from typing import Annotated
+from typing import Annotated, Any
 
 from livekit import agents
 from livekit.agents import Agent, AgentSession, JobContext, RoomInputOptions, WorkerOptions, cli
