@@ -346,10 +346,12 @@ class FrontDeskAgent(Agent):
     """
 
     def __init__(self, *, tenant_ctx: TenantContext | None, caller_phone: str, room: Any, sip_call_id: str = ""):
+        from backend.models.call import CallOutcome
         self._tenant = tenant_ctx
         self._caller_phone = caller_phone
         self._room = room
         self._sip_call_id = sip_call_id  # Exotel SCL_xxx — used for mid-call REST redirect
+        self.outcome = CallOutcome.INQUIRY
 
         # Build full system prompt from existing prompt builder
         instructions = build_system_prompt(
@@ -362,12 +364,21 @@ class FrontDeskAgent(Agent):
 
     async def _tool(self, _tool_name: str, **args) -> str:
         """Dispatch to the shared _execute_tool and return summary string."""
+        from backend.models.call import CallOutcome
         result = await _execute_tool(
             name=_tool_name,
             args=args,
             tenant_ctx=self._tenant,
             caller_phone=self._caller_phone,
         )
+        # Check result to update outcome
+        if isinstance(result, dict) and result.get("success") is not False:
+            if _tool_name == "book_appointment":
+                self.outcome = CallOutcome.BOOKED
+            elif _tool_name == "cancel_appointment":
+                self.outcome = CallOutcome.CANCELLED
+            elif _tool_name == "send_callback_request":
+                self.outcome = CallOutcome.ESCALATED
         # Return the summary string — the LLM uses this to form its response
         return result.get("summary_for_assistant") or str(result)
 
@@ -546,6 +557,8 @@ class FrontDeskAgent(Agent):
         phone: Annotated[str, "Caller's phone number"] = "",
     ) -> str:
         """Transfer the caller to a human staff member or schedule a callback."""
+        from backend.models.call import CallOutcome
+        self.outcome = CallOutcome.ESCALATED
         result = await _execute_tool(
             name="escalate_to_human",
             args={
@@ -787,6 +800,7 @@ async def _save_call_record(
     tenant_ctx: "TenantContext | None",
     caller_phone: str,
     duration_seconds: int,
+    outcome: str = None,
 ) -> None:
     """
     Persist a Call row and increment billing usage when a call ends.
@@ -794,12 +808,20 @@ async def _save_call_record(
     abrupt disconnects.
     """
     from backend.database import async_session
-    from backend.models.call import Call
+    from backend.models.call import Call, CallOutcome
     from backend.services.usage_service import record_call_minutes
 
     duration_minutes = max(0.0, duration_seconds / 60.0)
     ended_at = datetime.now(timezone.utc)
     started_at = ended_at - timedelta(seconds=duration_seconds)
+
+    # Convert string outcome to CallOutcome enum if needed
+    db_outcome = None
+    if outcome:
+        try:
+            db_outcome = CallOutcome(outcome)
+        except ValueError:
+            db_outcome = CallOutcome.INQUIRY
 
     try:
         async with async_session() as session:
@@ -810,6 +832,7 @@ async def _save_call_record(
                 started_at=started_at,
                 ended_at=ended_at,
                 duration_seconds=duration_seconds,
+                outcome=db_outcome,
             )
             session.add(call)
             await session.commit()
@@ -840,14 +863,22 @@ async def entrypoint(ctx: JobContext):
     if sip_call_id:
         logger.info("[VoiceAgent] Exotel callSID captured: %s", sip_call_id)
 
+    agent = None
+
     # Register call-end callback to record duration + billing usage
     async def _on_call_end() -> None:
         duration_seconds = max(0, int(time.monotonic() - call_start))
+        outcome = "INQUIRY"
+        if agent is not None:
+            outcome = getattr(agent, "outcome", "INQUIRY")
+            if hasattr(outcome, "value"):
+                outcome = outcome.value
         await _save_call_record(
             room_name=ctx.room.name,
             tenant_ctx=tenant_ctx,
             caller_phone=caller_phone,
             duration_seconds=duration_seconds,
+            outcome=outcome,
         )
 
     ctx.add_shutdown_callback(_on_call_end)
